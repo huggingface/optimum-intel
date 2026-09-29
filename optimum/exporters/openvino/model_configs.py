@@ -133,7 +133,6 @@ from optimum.exporters.openvino.model_patcher import (
     FalconModelPatcher,
     FluxTransformerModelPatcher,
     FunASRModelPatcher,
-    SenseVoiceModelPatcher,
     Gemma2ModelPatcher,
     Gemma3LMModelPatcher,
     Gemma3nImageEmbeddingsModelPatcher,
@@ -4935,26 +4934,30 @@ class FunASROpenVINOConfig(AudioToTextOpenVINOConfig):
 class SenseVoiceOpenVINOConfig(AudioOpenVINOConfig):
     """OpenVINO export config for SenseVoiceSmall.
 
-    SenseVoiceSmall is encoder-only: fbank features (batch, num_frames, feature_size) plus two integer
-    prefix-query selectors (`language`, `textnorm`) are consumed by a SANM encoder + CTC head, producing
-    per-frame token logits.
+    SenseVoiceSmall is encoder-only: fbank features (batch, num_frames, feature_size), the per-sample valid
+    frame counts (`speech_lengths`) and two integer prefix-query selectors (`language`, `textnorm`) are
+    consumed by a SANM encoder + CTC head, producing per-frame token logits and the per-sample encoder
+    output lengths. `speech_lengths` drives the SANM padding mask, so a padded batch decodes correctly.
     """
 
     DUMMY_INPUT_GENERATOR_CLASSES = (SenseVoiceDummyInputGenerator,)
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(feature_size="num_mel_bins", allow_new=True)
-    _MODEL_PATCHER = SenseVoiceModelPatcher
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         return {
             "input_features": {0: "batch_size", 1: "encoder_sequence_length"},
+            "speech_lengths": {0: "batch_size"},
             "language": {0: "batch_size"},
             "textnorm": {0: "batch_size"},
         }
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
-        return {"logits": {0: "batch_size", 1: "logits_sequence_length"}}
+        return {
+            "logits": {0: "batch_size", 1: "logits_sequence_length"},
+            "encoder_out_lens": {0: "batch_size"},
+        }
 
 
 @register_in_tasks_manager(

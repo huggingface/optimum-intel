@@ -50,7 +50,8 @@ class _SenseVoiceForCTC(torch.nn.Module):
     SenseVoiceSmall is not an encoder-decoder model: a SANM encoder produces frame-level features and a
     single CTC head projects them to the token vocabulary. This wrapper exposes a single ``forward`` that
     runs the encoder and the CTC head together, so the whole model is exported as one graph
-    (``openvino_model.xml``) returning raw CTC logits.
+    (``openvino_model.xml``) returning raw CTC logits and the per-sample encoder output lengths (so a
+    padded batch can be decoded sample-by-sample).
     """
 
     def __init__(self, funasr_model: torch.nn.Module, config: "PretrainedConfig"):
@@ -61,8 +62,15 @@ class _SenseVoiceForCTC(torch.nn.Module):
         self.config = config
         self._funasr_model = True
 
-    def forward(self, input_features: "torch.Tensor", language: "torch.Tensor", textnorm: "torch.Tensor"):
-        # input_features: [B, T, 560]; language/textnorm: [B] integer ids into self.embed.
+    def forward(
+        self,
+        input_features: "torch.Tensor",
+        speech_lengths: "torch.Tensor",
+        language: "torch.Tensor",
+        textnorm: "torch.Tensor",
+    ):
+        # input_features: [B, T, 560]; speech_lengths: [B] valid frame counts (padding-aware);
+        # language/textnorm: [B] integer ids into self.embed.
         language_query = self.embed(language).unsqueeze(1)  # [B, 1, 560]
         textnorm_query = self.embed(textnorm).unsqueeze(1)  # [B, 1, 560]
 
@@ -73,13 +81,13 @@ class _SenseVoiceForCTC(torch.nn.Module):
         input_query = torch.cat((language_query, event_emo_query), dim=1)  # [B, 3, 560]
         speech = torch.cat((input_query, speech), dim=1)  # order: [language, event, emo, textnorm, speech...]
 
-        speech_lengths = torch.full(
-            (speech.shape[0],), speech.shape[1], dtype=torch.int32, device=speech.device
-        )
-        encoder_out, _ = self.encoder(speech, speech_lengths)
+        # Four prefix queries were prepended, so every sequence grows by 4 valid frames.
+        speech_lengths_new = speech_lengths + 4
+        encoder_out, encoder_out_lens = self.encoder(speech, speech_lengths_new)
         if isinstance(encoder_out, tuple):
             encoder_out = encoder_out[0]
-        return self.ctc.ctc_lo(encoder_out)
+        ctc_logits = self.ctc.ctc_lo(encoder_out)
+        return ctc_logits, encoder_out_lens
 
     @classmethod
     def from_pretrained(
@@ -442,17 +450,25 @@ class _OVModelForSenseVoice(OVModel):
                 if src.is_file() and src.resolve() != (save_directory / name).resolve():
                     shutil.copyfile(src, save_directory / name)
 
-    def forward(self, input_features=None, language=None, textnorm=None, **kwargs):
+    def forward(self, input_features=None, speech_lengths=None, language=None, textnorm=None, **kwargs):
         np_inputs = isinstance(input_features, np.ndarray)
+        if speech_lengths is None:
+            n_frames = input_features.shape[1]
+            batch = input_features.shape[0]
+            speech_lengths = np.full((batch,), n_frames, dtype=np.int32)
         inputs = {
             "input_features": input_features if np_inputs else np.asarray(input_features, dtype=np.float32),
+            "speech_lengths": np.asarray(speech_lengths, dtype=np.int32),
             "language": np.asarray(language, dtype=np.int64),
             "textnorm": np.asarray(textnorm, dtype=np.int64),
         }
-        logits = self.request(inputs)[self.request.output(0)]
+        outputs = self.request(inputs)
+        logits = outputs[self.request.output(0)]
+        encoder_out_lens = outputs[self.request.output(1)]
         if not np_inputs:
             logits = torch.from_numpy(logits)
-        return CausalLMOutput(logits=logits)
+            encoder_out_lens = torch.from_numpy(encoder_out_lens)
+        return CausalLMOutput(logits=logits), encoder_out_lens
 
     # ----------------------------- pre/post-processing -----------------------------
 
@@ -484,12 +500,17 @@ class _OVModelForSenseVoice(OVModel):
 
     def preprocess_input(
         self,
-        waveform: Union[np.ndarray, torch.Tensor, List],
+        waveforms: Union[np.ndarray, torch.Tensor, List],
         sampling_rate: int = 16000,
         language: str = "auto",
         use_itn: bool = False,
     ) -> Dict[str, torch.Tensor]:
-        """Standalone SenseVoice preprocessing (fbank -> LFR -> CMVN) for a single waveform (batch of 1)."""
+        """SenseVoice preprocessing (fbank -> LFR -> CMVN) for one or more waveforms.
+
+        Multiple variable-length waveforms are zero-padded to a common frame count and stacked into a single
+        batch; ``speech_lengths`` records each sample's real (pre-padding) frame count so the exported model
+        masks the padding correctly.
+        """
         import torchaudio
         import torchaudio.compliance.kaldi as kaldi
 
@@ -518,38 +539,55 @@ class _OVModelForSenseVoice(OVModel):
             variances = self.cmvn[1:2, :dim].to(device)
             return (inputs + means) * variances
 
-        arr = waveform if isinstance(waveform, torch.Tensor) else torch.as_tensor(np.asarray(waveform))
-        arr = arr.float()
-        if arr.ndim > 1:
-            arr = arr.mean(0)
-        if sampling_rate != target_fs:
-            arr = torchaudio.transforms.Resample(sampling_rate, target_fs)(arr[None, :])[0, :]
+        if isinstance(waveforms, (list, tuple)):
+            wav_list = [torch.as_tensor(np.asarray(w)) for w in waveforms]
+        else:
+            arr = waveforms if isinstance(waveforms, torch.Tensor) else torch.as_tensor(np.asarray(waveforms))
+            wav_list = [arr] if arr.ndim == 1 else list(arr)
 
-        wav = arr * (1 << 15)
-        wav = wav.unsqueeze(0)
-        mat = kaldi.fbank(
-            wav,
-            num_mel_bins=n_mels,
-            frame_length=min(frame_length, wav.shape[1] / target_fs * 1000),
-            frame_shift=frame_shift,
-            dither=0.0,
-            energy_floor=0.0,
-            window_type="hamming",
-            sample_frequency=target_fs,
-            snip_edges=True,
-        )
-        mat = _apply_lfr(mat)
-        mat = _apply_cmvn(mat)
+        feats: List[torch.Tensor] = []
+        for arr in wav_list:
+            arr = arr.float()
+            if arr.ndim > 1:
+                arr = arr.mean(0)
+            if sampling_rate != target_fs:
+                arr = torchaudio.transforms.Resample(sampling_rate, target_fs)(arr[None, :])[0, :]
+
+            wav = arr * (1 << 15)
+            wav = wav.unsqueeze(0)
+            mat = kaldi.fbank(
+                wav,
+                num_mel_bins=n_mels,
+                frame_length=min(frame_length, wav.shape[1] / target_fs * 1000),
+                frame_shift=frame_shift,
+                dither=0.0,
+                energy_floor=0.0,
+                window_type="hamming",
+                sample_frequency=target_fs,
+                snip_edges=True,
+            )
+            mat = _apply_lfr(mat)
+            mat = _apply_cmvn(mat)
+            feats.append(mat)
 
         lid_dict = getattr(self.config, "lid_dict", {"auto": 0})
         textnorm_dict = getattr(self.config, "textnorm_dict", {"withitn": 14, "woitn": 15})
         language_id = lid_dict.get(language, 0)
         textnorm_id = textnorm_dict["withitn"] if use_itn else textnorm_dict["woitn"]
 
+        lengths = torch.tensor([f.shape[0] for f in feats], dtype=torch.int32)
+        max_frames = int(lengths.max())
+        feat_dim = feats[0].shape[1]
+        batch = torch.zeros(len(feats), max_frames, feat_dim, dtype=torch.float32)
+        for i, f in enumerate(feats):
+            batch[i, : f.shape[0]] = f
+
+        n = len(feats)
         return {
-            "input_features": mat.unsqueeze(0),
-            "language": torch.tensor([language_id], dtype=torch.long),
-            "textnorm": torch.tensor([textnorm_id], dtype=torch.long),
+            "input_features": batch,
+            "speech_lengths": lengths,
+            "language": torch.full((n,), language_id, dtype=torch.long),
+            "textnorm": torch.full((n,), textnorm_id, dtype=torch.long),
         }
 
     def _ctc_greedy_ids(self, logits: "torch.Tensor") -> List[int]:
@@ -577,16 +615,18 @@ class _OVModelForSenseVoice(OVModel):
         language: str = "auto",
         use_itn: bool = False,
     ) -> List[str]:
-        """Transcribe one or more waveforms. Each waveform is processed individually (batch of 1)."""
-        if isinstance(waveforms, (list, tuple)):
-            batch = [torch.as_tensor(np.asarray(w)) for w in waveforms]
-        else:
-            arr = waveforms if isinstance(waveforms, torch.Tensor) else torch.as_tensor(np.asarray(waveforms))
-            batch = [arr] if arr.ndim == 1 else list(arr)
+        """Transcribe one or more waveforms.
+
+        Multiple waveforms are zero-padded into a single batch and run through the model in one forward; each
+        sample is then CTC-decoded using its own valid encoder-output length so the padding is ignored.
+        """
+        inputs = self.preprocess_input(waveforms, sampling_rate, language=language, use_itn=use_itn)
+        outputs, encoder_out_lens = self.forward(**inputs)
+        logits = outputs.logits
 
         results = []
-        for wav in batch:
-            inputs = self.preprocess_input(wav, sampling_rate, language=language, use_itn=use_itn)
-            logits = self.forward(**inputs).logits
-            results.append(self._detokenize(self._ctc_greedy_ids(logits[0])))
+        for i in range(logits.shape[0]):
+            valid = int(encoder_out_lens[i])
+            sample_logits = logits[i, :valid]
+            results.append(self._detokenize(self._ctc_greedy_ids(sample_logits)))
         return results
