@@ -394,6 +394,9 @@ def _get_config_attr_for_layer_type(config, layer_types, layer_type, attr_name, 
     # (sliding vs full attention)
     if hasattr(config, "per_layer_config") and layer_type in layer_types:
         return getattr(config.per_layer_config[layer_types.index(layer_type)], attr_name, default)
+    # heterogeneous config raise a non-AttributeError when accessing a per-layer attribute
+    # on the global config that getattr default does not catch
+    # https://github.com/huggingface/transformers/blob/a73a2ba70af1d0c4998555ac4e9a79a6210f1ccf/src/transformers/integrations/heterogeneity/configuration_utils.py#L298
     try:
         return getattr(config, attr_name, default)
     except Exception:
