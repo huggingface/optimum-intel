@@ -129,33 +129,47 @@ class _FunASRForSpeechSeq2Seq(torch.nn.Module):
         return model
 
 
-def _is_funasr_model(
+def _read_funasr_config(
+    config_name: str,
     model_name_or_path: Union[str, Path],
     all_files: list,
     cache_dir: str = HUGGINGFACE_HUB_CACHE,
     token: Optional[Union[bool, str]] = None,
-) -> bool:
+) -> Union[dict, None]:
     """Detect FunASR models (e.g. Fun-ASR-Nano) by checking for funasr-specific artifacts.
 
     FunASR models are loaded via the `funasr` library (not transformers): they ship a
     `config.yaml` describing the model and a `configuration.json` declaring `model.type == "funasr"`,
     and there is no root `config.json`.
     """
-    if "configuration.json" not in all_files or "config.yaml" not in all_files:
-        return False
+    if config_name not in all_files:
+        return None
     try:
         config_path = Path(model_name_or_path)
         if config_path.is_dir():
-            config_file = config_path / "configuration.json"
+            config_file = config_path / config_name
         else:
             config_file = hf_hub_download(
-                repo_id=str(model_name_or_path), filename="configuration.json", cache_dir=cache_dir, token=token
+                repo_id=str(model_name_or_path), filename=config_name, cache_dir=cache_dir, token=token
             )
         with open(config_file, "r", encoding="utf-8") as f:
-            config = json.load(f)
-        return config.get("model", {}).get("type", None) == "funasr"
+            if config_name.endswith(".json"):
+                return json.load(f)
+            return f.readlines()
     except Exception:
-        return False
+        return None
+
+    return None
+
+
+def _is_funasr_model(
+    model_name_or_path: Union[str, Path],
+    all_files: list,
+    cache_dir: str = HUGGINGFACE_HUB_CACHE,
+    token: Optional[Union[bool, str]] = None,
+) -> bool:
+    config = _read_funasr_config(model_name_or_path, all_files, cache_dir, token)
+    return config is not None and config.get("model", {}).get("type", None) == "funasr"
 
 
 def _is_funasr_source(model_id, **kwargs) -> bool:

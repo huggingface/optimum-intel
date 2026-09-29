@@ -11457,6 +11457,43 @@ class FunASRModelPatcher(OVSeq2SeqModelPatcher):
                     del attn._orig_forward
 
 
+class SenseVoiceModelPatcher(ModelPatcher):
+    """
+    Model patcher for the SenseVoiceSmall export.
+
+    SenseVoiceSmall is encoder-only: a SANM encoder (encoders0 + encoders + tp_encoders) feeds a CTC head,
+    and the whole model is exported as one graph. The SANM self-attention layers are patched to skip
+    masking during trace because funasr's native mask ops bake trace-time constants (via
+    `lengths.tolist()`), which would make the graph incompatible with different sequence lengths at
+    inference. Since inference is run per-sample (no padding), dropping the mask does not change the result.
+    """
+
+    def __enter__(self):
+        super().__enter__()
+
+        encoder = self._model.encoder
+        self._sanm_layers = (
+            list(encoder.encoders0) + list(encoder.encoders) + list(encoder.tp_encoders)
+        )
+
+        def _sanm_forward_no_mask(self, x, mask=None, mask_shfit_chunk=None, mask_att_chunk_encoder=None):
+            return self._orig_forward(x, mask=None, mask_shfit_chunk=None, mask_att_chunk_encoder=None)
+
+        for layer in self._sanm_layers:
+            attn = layer.self_attn
+            attn._orig_forward = attn.forward
+            attn.forward = types.MethodType(_sanm_forward_no_mask, attn)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+
+        for layer in getattr(self, "_sanm_layers", []):
+            attn = layer.self_attn
+            if hasattr(attn, "_orig_forward"):
+                attn.forward = attn._orig_forward
+                del attn._orig_forward
+
+
 class KokoroModelPatcher(ModelPatcher):
     """
     Patches the Kokoro TTS model for OpenVINO export by redirecting forward

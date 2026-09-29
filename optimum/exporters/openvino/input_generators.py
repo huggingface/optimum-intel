@@ -1550,6 +1550,24 @@ class FunASRDummyAudioInputGenerator(DummyAudioInputGenerator):
         return super().generate(input_name, framework=framework, int_dtype=int_dtype, float_dtype=float_dtype)
 
 
+class SenseVoiceDummyInputGenerator(FunASRDummyAudioInputGenerator):
+    """Dummy input generator for SenseVoiceSmall (CTC).
+
+    SenseVoiceSmall consumes fbank features laid out as (batch, num_frames, feature_size) plus two integer
+    prefix-query selectors (`language`, `textnorm`) that index a small learned embedding table.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("input_features", "language", "textnorm")
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name in ("language", "textnorm"):
+            # Any valid embedding index works for tracing; use 0 (== "auto" language).
+            return self.random_int_tensor(
+                shape=[self.batch_size], max_value=1, min_value=0, framework=framework, dtype=int_dtype
+            )
+        return super().generate(input_name, framework=framework, int_dtype=int_dtype, float_dtype=float_dtype)
+
+
 class DummyGemma4VisionInputGenerator(DummyVisionInputGenerator):
     SUPPORTED_INPUT_NAMES = ("pixel_values", "image_position_ids")
 

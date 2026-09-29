@@ -94,6 +94,7 @@ from optimum.exporters.openvino.input_generators import (
     FunASRDummyAudioInputGenerator,
     Gemma4DummyPastKeyValuesGenerator,
     GPTBigCodeDummyPastKeyValuesGenerator,
+    SenseVoiceDummyInputGenerator,
     Lfm2DummyPastKeyValuesGenerator,
     LTX2AudioVaeDecoderDummyInputGenerator,
     LTX2ConnectorsDummyInputGenerator,
@@ -132,6 +133,7 @@ from optimum.exporters.openvino.model_patcher import (
     FalconModelPatcher,
     FluxTransformerModelPatcher,
     FunASRModelPatcher,
+    SenseVoiceModelPatcher,
     Gemma2ModelPatcher,
     Gemma3LMModelPatcher,
     Gemma3nImageEmbeddingsModelPatcher,
@@ -4923,6 +4925,36 @@ class FunASROpenVINOConfig(AudioToTextOpenVINOConfig):
         for i in range(self._normalized_config.decoder_num_layers):
             inputs_or_outputs[f"{name}.{i}.decoder.key"] = {0: "batch_size", 2: decoder_sequence_name}
             inputs_or_outputs[f"{name}.{i}.decoder.value"] = {0: "batch_size", 2: decoder_sequence_name}
+
+
+@register_in_tasks_manager(
+    "sense_voice",
+    *["automatic-speech-recognition"],
+    library_name="funasr",
+)
+class SenseVoiceOpenVINOConfig(AudioOpenVINOConfig):
+    """OpenVINO export config for SenseVoiceSmall.
+
+    SenseVoiceSmall is encoder-only: fbank features (batch, num_frames, feature_size) plus two integer
+    prefix-query selectors (`language`, `textnorm`) are consumed by a SANM encoder + CTC head, producing
+    per-frame token logits.
+    """
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (SenseVoiceDummyInputGenerator,)
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(feature_size="num_mel_bins", allow_new=True)
+    _MODEL_PATCHER = SenseVoiceModelPatcher
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "input_features": {0: "batch_size", 1: "encoder_sequence_length"},
+            "language": {0: "batch_size"},
+            "textnorm": {0: "batch_size"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {"logits": {0: "batch_size", 1: "logits_sequence_length"}}
 
 
 @register_in_tasks_manager(
