@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 import functools
+import importlib.metadata as importlib_metadata
 import importlib.util
 import logging
 import operator as op
@@ -20,12 +21,6 @@ from collections import OrderedDict
 from typing import Union
 
 from packaging.version import Version, parse
-
-
-if sys.version_info < (3, 8):
-    import importlib_metadata
-else:
-    import importlib.metadata as importlib_metadata
 
 
 logger = logging.getLogger(__name__)
