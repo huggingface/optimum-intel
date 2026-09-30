@@ -790,7 +790,6 @@ ARCH_TO_MODEL_CLASS = {
     "qwen3_omni_moe": "OVModelForMultimodalLM",
     "stable-diffusion": "OVDiffusionPipeline",
     "whisper": "OVModelForSpeechSeq2Seq",
-    "bart": "OVModelForSeq2SeqLM",
     "bert": "OVModelForFeatureExtraction",
     "electra": "OVModelForFeatureExtraction",
     "clip": "OVModelForZeroShotImageClassification",
