@@ -75,5 +75,5 @@ jobs:
       - name: Qwen-Image-2.1 Validation
         if: ${{ matrix.test-pattern == '*export*' }}
         run: |
-          uv pip install "transformers>=5.10,<5.11" "diffusers @ git+https://github.com/huggingface/diffusers.git@main"
+          uv pip install "diffusers @ git+https://github.com/huggingface/diffusers.git@main"
           pytest tests/openvino/test_diffusion.py tests/openvino/test_export.py tests/openvino/test_transformations.py -k "qwenimage21" --durations=0
