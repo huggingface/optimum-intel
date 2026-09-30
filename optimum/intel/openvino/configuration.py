@@ -470,12 +470,40 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "group_size_fallback": "adjust",
     },
     "google/gemma-4-E4B-it": {
-        "bits": 4,
-        "sym": False,
-        "group_size": 64,
-        "dataset": "textvqa",
-        "quant_method": OVQuantizationMethod.AWQ,
-        "scale_estimation": True,
+        "quantization_configs": {
+            "lm_model": {
+                "bits": 4,
+                "sym": False,
+                "group_size": 64,
+                "dataset": "textvqa",
+                "quant_method": OVQuantizationMethod.AWQ,
+                "scale_estimation": True,
+            },
+            "audio_embeddings_model": {
+                "bits": 4,
+                "sym": False,
+                "group_size": 64,
+            },
+        },
+        "default_config": {"bits": 8, "sym": True, "weight_only": True},
+    },
+    "google/gemma-4-E2B-it": {
+        "quantization_configs": {
+            "lm_model": {
+                "bits": 4,
+                "sym": False,
+                "group_size": 64,
+                "dataset": "textvqa",
+                "quant_method": OVQuantizationMethod.AWQ,
+                "scale_estimation": True,
+            },
+            "audio_embeddings_model": {
+                "bits": 4,
+                "sym": False,
+                "group_size": 64,
+            },
+        },
+        "default_config": {"bits": 8, "sym": True, "weight_only": True},
     },
     "Qwen/Qwen3.5-35B-A3B": {
         "quantization_configs": {
@@ -534,10 +562,30 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
             "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
         },
     },
+    "openbmb/MiniCPM5-2B": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 1.0,
+        "dataset": "gsm8k",
+        "scale_estimation": True,
+    },
+    "BAAI/bge-reranker-v2-m3": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 32,
+        "ratio": 0.9,
+    },
 }
 
 _DEFAULT_8BIT_WQ_CONFIGS = {
     "Qwen/Qwen2.5-Coder-3B-Instruct": {"bits": 8, "sym": False, "dq_group_size": 128},
+    "diffusers/LTX-2.3-Diffusers": {
+        "quantization_configs": {
+            "transformer": {"bits": 8, "sym": False, "weight_only": True},
+            "text_encoder": {"bits": 8, "sym": False, "weight_only": True},
+        },
+    },
 }
 
 # Add configs for model id aliases
@@ -555,6 +603,7 @@ _DEFAULT_4BIT_WQ_CONFIG = {
     "sym": False,
     "group_size": 128,
     "all_layers": None,
+    "group_size_fallback": "ignore",
 }
 
 
@@ -1019,8 +1068,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             the statistics path to avoid confusion.
         group_size_fallback (`str`, *optional*):
             Defines the behavior when the specified group size is not compatible with the weight shape. Possible values:
-            - "error": raises an error if the group size is not compatible with the weight shape (default);
-            - "ignore": skips quantization for the layers where the group size is not compatible with the weight shape;
+            - "error": raises an error if the group size is not compatible with the weight shape;
+            - "ignore": skips quantization for the layers where the group size is not compatible with the weight shape (default);
             - "adjust": automatically adjusts the group size to the maximum compatible value for each weight tensor,
                 if there is no valid value greater than or equal to 32, then the node is quantized to the backup precision
                 which is int8_asym by default.
