@@ -470,12 +470,40 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "group_size_fallback": "adjust",
     },
     "google/gemma-4-E4B-it": {
-        "bits": 4,
-        "sym": False,
-        "group_size": 64,
-        "dataset": "textvqa",
-        "quant_method": OVQuantizationMethod.AWQ,
-        "scale_estimation": True,
+        "quantization_configs": {
+            "lm_model": {
+                "bits": 4,
+                "sym": False,
+                "group_size": 64,
+                "dataset": "textvqa",
+                "quant_method": OVQuantizationMethod.AWQ,
+                "scale_estimation": True,
+            },
+            "audio_embeddings_model": {
+                "bits": 4,
+                "sym": False,
+                "group_size": 64,
+            },
+        },
+        "default_config": {"bits": 8, "sym": True, "weight_only": True},
+    },
+    "google/gemma-4-E2B-it": {
+        "quantization_configs": {
+            "lm_model": {
+                "bits": 4,
+                "sym": False,
+                "group_size": 64,
+                "dataset": "textvqa",
+                "quant_method": OVQuantizationMethod.AWQ,
+                "scale_estimation": True,
+            },
+            "audio_embeddings_model": {
+                "bits": 4,
+                "sym": False,
+                "group_size": 64,
+            },
+        },
+        "default_config": {"bits": 8, "sym": True, "weight_only": True},
     },
     "Qwen/Qwen3.5-35B-A3B": {
         "quantization_configs": {

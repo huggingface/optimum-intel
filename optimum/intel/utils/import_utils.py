@@ -177,6 +177,9 @@ if _accelerate_available:
     except importlib_metadata.PackageNotFoundError:
         _accelerate_available = False
 
+
+_compressed_tensors_available = importlib.util.find_spec("compressed_tensors") is not None
+
 _numa_available = importlib.util.find_spec("numa") is not None
 
 if _numa_available:
@@ -344,6 +347,10 @@ def is_pillow_available():
 
 def is_accelerate_available():
     return _accelerate_available
+
+
+def is_compressed_tensors_available():
+    return _compressed_tensors_available
 
 
 def is_sentence_transformers_available():
