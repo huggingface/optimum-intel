@@ -490,6 +490,7 @@ class VLMPipelineTestCase(unittest.TestCase):
                 apply_chat_template=apply_chat_template,
                 **self.GEN_KWARGS,
             ).texts[0]
+            genai_output = genai_output.strip()
         finally:
             # Release on failure too: a failing test's traceback keeps its frame locals alive for the
             # rest of the session, which would leave OpenVINO objects (and their file handles) around.
