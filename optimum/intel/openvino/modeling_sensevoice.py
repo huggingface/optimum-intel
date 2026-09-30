@@ -598,6 +598,7 @@ class _OVModelForSenseVoice(OVModel):
         sampling_rate: int = 16000,
         language: str = "auto",
         use_itn: bool = False,
+        **kwargs,
     ) -> List[str]:
         """Transcribe one or more waveforms.
 
