@@ -435,7 +435,11 @@ class VLMPipelineTestCase(unittest.TestCase):
                 output=self.temp_dir,
                 ov_config=export_ov_config,
             )
-            genai_model = VLMPipeline(self.temp_dir, device=OPENVINO_DEVICE, **TEST_CONFIG)
+            genai_config = dict(TEST_CONFIG)
+            if model_arch == "muse_glimmer":
+                genai_config["ATTENTION_BACKEND"] = "SDPA"
+                genai_config["KV_CACHE_PRECISION"] = "f32"
+            genai_model = VLMPipeline(self.temp_dir, device=OPENVINO_DEVICE, **genai_config)
 
             image = self.IMAGE
             prompt = "A photo of a cat sitting on a"
