@@ -201,6 +201,23 @@ def _is_funasr_source(model_id, **kwargs) -> bool:
     return False
 
 
+def _apply_lfr(inputs: torch.Tensor, lfr_n, lfr_m) -> torch.Tensor:
+    T = inputs.shape[0]
+    T_lfr = int(np.ceil(T / lfr_n))
+    left_padding = inputs[0].repeat((lfr_m - 1) // 2, 1)
+    inputs = torch.vstack((left_padding, inputs))
+    T = T + (lfr_m - 1) // 2
+    feat_dim = inputs.shape[-1]
+    strides = (lfr_n * feat_dim, 1)
+    sizes = (T_lfr, lfr_m * feat_dim)
+    last_idx = (T - lfr_m) // lfr_n + 1
+    num_padding = lfr_m - (T - last_idx * lfr_n)
+    if num_padding > 0:
+        num_padding = (2 * lfr_m - 2 * T + (T_lfr - 1 + last_idx) * lfr_n) / 2 * (T_lfr - last_idx)
+        inputs = torch.vstack([inputs] + [inputs[-1:]] * int(num_padding))
+    return inputs.as_strided(sizes, strides).clone().type(torch.float32)
+
+
 class _OVModelForFunAsr(OVModelForSpeechSeq2Seq):
     @classmethod
     def _from_pretrained_funasr(cls, model_id, export: bool = False, **kwargs):
@@ -265,22 +282,6 @@ class _OVModelForFunAsr(OVModelForSpeechSeq2Seq):
         target_fs, n_mels, frame_length, frame_shift, lfr_m, lfr_n = 16000, 80, 25, 10, 7, 6
         audio_token_id = getattr(self.config, "audio_token_id", 0)
 
-        def _apply_lfr(inputs: torch.Tensor) -> torch.Tensor:
-            T = inputs.shape[0]
-            T_lfr = int(np.ceil(T / lfr_n))
-            left_padding = inputs[0].repeat((lfr_m - 1) // 2, 1)
-            inputs = torch.vstack((left_padding, inputs))
-            T = T + (lfr_m - 1) // 2
-            feat_dim = inputs.shape[-1]
-            strides = (lfr_n * feat_dim, 1)
-            sizes = (T_lfr, lfr_m * feat_dim)
-            last_idx = (T - lfr_m) // lfr_n + 1
-            num_padding = lfr_m - (T - last_idx * lfr_n)
-            if num_padding > 0:
-                num_padding = (2 * lfr_m - 2 * T + (T_lfr - 1 + last_idx) * lfr_n) / 2 * (T_lfr - last_idx)
-                inputs = torch.vstack([inputs] + [inputs[-1:]] * int(num_padding))
-            return inputs.as_strided(sizes, strides).clone().type(torch.float32)
-
         def _extract_features(waveform: torch.Tensor) -> torch.Tensor:
             if waveform.ndim > 1:
                 waveform = waveform.mean(0)
@@ -299,7 +300,7 @@ class _OVModelForFunAsr(OVModelForSpeechSeq2Seq):
                 sample_frequency=target_fs,
                 snip_edges=True,
             )
-            return _apply_lfr(mat)
+            return _apply_lfr(mat, lfr_n, lfr_m)
 
         def _num_audio_tokens(num_frames: int) -> int:
             olens = 1 + (num_frames - 3 + 2 * 1) // 2

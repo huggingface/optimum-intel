@@ -30,7 +30,7 @@ from transformers.modeling_outputs import CausalLMOutput
 from ..utils.import_utils import is_funasr_available
 from .modeling import OVModel
 from .utils import OV_DETOKENIZER_NAME, OV_TOKENIZER_NAME, OV_XML_FILE_NAME
-from .modeling_funasr import _read_funasr_config
+from .modeling_funasr import _read_funasr_config, _apply_lfr
 
 
 logger = logging.getLogger(__name__)
@@ -516,22 +516,6 @@ class _OVModelForSenseVoice(OVModel):
 
         target_fs, n_mels, frame_length, frame_shift, lfr_m, lfr_n = 16000, 80, 25, 10, 7, 6
 
-        def _apply_lfr(inputs: torch.Tensor) -> torch.Tensor:
-            T = inputs.shape[0]
-            T_lfr = int(np.ceil(T / lfr_n))
-            left_padding = inputs[0].repeat((lfr_m - 1) // 2, 1)
-            inputs = torch.vstack((left_padding, inputs))
-            T = T + (lfr_m - 1) // 2
-            feat_dim = inputs.shape[-1]
-            strides = (lfr_n * feat_dim, 1)
-            sizes = (T_lfr, lfr_m * feat_dim)
-            last_idx = (T - lfr_m) // lfr_n + 1
-            num_padding = lfr_m - (T - last_idx * lfr_n)
-            if num_padding > 0:
-                num_padding = (2 * lfr_m - 2 * T + (T_lfr - 1 + last_idx) * lfr_n) / 2 * (T_lfr - last_idx)
-                inputs = torch.vstack([inputs] + [inputs[-1:]] * int(num_padding))
-            return inputs.as_strided(sizes, strides).clone().type(torch.float32)
-
         def _apply_cmvn(inputs: torch.Tensor) -> torch.Tensor:
             device = inputs.device
             dim = inputs.shape[-1]
@@ -566,7 +550,7 @@ class _OVModelForSenseVoice(OVModel):
                 sample_frequency=target_fs,
                 snip_edges=True,
             )
-            mat = _apply_lfr(mat)
+            mat = _apply_lfr(mat, lfr_n, lfr_m)
             mat = _apply_cmvn(mat)
             feats.append(mat)
 
