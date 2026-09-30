@@ -1005,18 +1005,22 @@ class OVCLIExportTestCase(unittest.TestCase):
             if task.startswith("text-generation") and compare_versions("openvino-tokenizers", ">=", "2024.3.0.0"):
                 self.assertIn("Set tokenizer padding side to left", output)
 
-    def test_slow_t5_tokenizer_is_converted_to_fast(self):
-        slow_tokenizer = Mock(spec=T5Tokenizer)
+    def test_t5_tokenizer_is_converted_to_fast_if_needed(self):
+        t5_tokenizer = Mock(spec=T5Tokenizer)
         fast_tokenizer = Mock(spec=PreTrainedTokenizerFast)
         tokenizer_path = Path("tokenizer")
 
         with patch(
             "optimum.intel.openvino.utils.AutoTokenizer.from_pretrained", return_value=fast_tokenizer
         ) as from_pretrained:
-            converted_tokenizer = maybe_convert_tokenizer_to_fast(slow_tokenizer, tokenizer_path)
+            converted_tokenizer = maybe_convert_tokenizer_to_fast(t5_tokenizer, tokenizer_path)
 
-        self.assertIs(converted_tokenizer, fast_tokenizer)
-        from_pretrained.assert_called_once_with(tokenizer_path)
+        if issubclass(T5Tokenizer, PreTrainedTokenizerFast):
+            self.assertIs(converted_tokenizer, t5_tokenizer)
+            from_pretrained.assert_not_called()
+        else:
+            self.assertIs(converted_tokenizer, fast_tokenizer)
+            from_pretrained.assert_called_once_with(tokenizer_path)
 
     @parameterized.expand(TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS)
     @unittest.skipIf(not is_openvino_tokenizers_available(), reason="test required openvino tokenizers")
