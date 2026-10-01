@@ -183,19 +183,57 @@ If not specified, `load_in_8bit` will be set to `True` by default when models la
 
 It's also possible to apply quantization on both weights and activations using the [`OVQuantizer`](optimization#static-quantization).
 
-## Guarded text generation
+## Content moderation
 
-`OVModelForCausalLM.generate` accepts a `guard_model` argument to moderate the prompt and the generated tokens with a streaming guard model, such as [`Qwen/Qwen3Guard-Stream-0.6B`](https://huggingface.co/Qwen/Qwen3Guard-Stream-0.6B). The guard model must be loaded as an [`OVModelForTokenClassification`](reference#ovmodelfortokenclassification) and share the tokenizer of the guarded model.
+[`OVGuard`](reference#ovguard) runs a guard model to decide whether content is safe. Two families of guard models are supported through the same interface:
+
+* **generative guards**, ordinary language models prompted to describe the risk of a conversation in plain text, such as [`meta-llama/Llama-Guard-3-1B`](https://huggingface.co/meta-llama/Llama-Guard-3-1B) or [`Qwen/Qwen3Guard-Gen-0.6B`](https://huggingface.co/Qwen/Qwen3Guard-Gen-0.6B);
+* **token classifiers**, which replace the language modeling head with classification heads and score every token as it is generated, such as [`Qwen/Qwen3Guard-Stream-0.6B`](https://huggingface.co/Qwen/Qwen3Guard-Stream-0.6B).
+
+The family is detected from the model itself, so loading is the same for both:
+
+```python
+from optimum.intel import OVGuard
+
+guard = OVGuard.from_pretrained("Qwen/Qwen3Guard-Gen-0.6B", export=True)
+```
+
+### Input and output rails
+
+A guard can be used on its own, before a prompt reaches a model and after a model answered:
+
+```python
+report = guard.moderate_prompt("How do I pick a lock?")
+print(report.flagged)          # True
+print(report.first_violation)  # flagged (scope=prompt, label='Unsafe', categories=['Non-violent Illegal Acts'])
+
+report = guard.moderate_response("How do I pick a lock?", "I can't help with that.")
+print(report.flagged)          # False
+```
+
+Both are shortcuts for [`moderate`](reference#ovguard), which takes a full chat conversation and infers the rail from the role of its last message. Verdicts are returned as an [`OVGuardReport`](reference#ovguardreport) of [`OVGuardVerdict`](reference#ovguardverdict) objects, each carrying a risk `label`, the violated `categories`, and a `score` when the guard model exposes one.
+
+A generative guard whose chat template accepts a custom taxonomy, such as Llama Guard, can be given one:
+
+```python
+guard = OVGuard.from_pretrained(
+    "meta-llama/Llama-Guard-3-1B",
+    export=True,
+    categories={"S1": "Violent Crimes.", "S9": "Indiscriminate Weapons."},
+)
+```
+
+### Guarded text generation
+
+`OVModelForCausalLM.generate` accepts a `guard` argument to moderate the prompt and the generated tokens as they are produced. The guard model is loaded separately from the guarded model, so it can run on another device:
 
 ```python
 from transformers import AutoTokenizer
-from optimum.intel import OVModelForCausalLM, OVModelForTokenClassification, OVGuardConfig, OVGuardViolationError
+from optimum.intel import OVGuard, OVGuardConfig, OVGuardViolationError, OVModelForCausalLM
 
 tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-0.6B")
-model = OVModelForCausalLM.from_pretrained("Qwen/Qwen3-0.6B", export=True)
-guard = OVModelForTokenClassification.from_pretrained(
-    "Qwen/Qwen3Guard-Stream-0.6B", export=True, trust_remote_code=True, task="token-classification-with-past"
-)
+model = OVModelForCausalLM.from_pretrained("Qwen/Qwen3-0.6B", export=True, device="GPU")
+guard = OVGuard.from_pretrained("Qwen/Qwen3Guard-Stream-0.6B", export=True, trust_remote_code=True, device="CPU")
 
 inputs = tokenizer.apply_chat_template(
     [{"role": "user", "content": "Write a short poem about the sea."}],
@@ -207,7 +245,8 @@ try:
     output = model.generate(
         inputs,
         max_new_tokens=128,
-        guard_model=guard,
+        tokenizer=tokenizer,
+        guard=guard,
         guard_config=OVGuardConfig(chunk_size=4),
         return_dict_in_generate=True,
     )
@@ -218,12 +257,20 @@ else:
     print(output.guard)  # an `OVGuardReport` with the prompt and response verdicts
 ```
 
-Generation stops as soon as the guard model flags the prompt or a generated chunk, unless `OVGuardConfig.on_violation` says otherwise:
+Generation stops as soon as the guard flags the prompt or a generated chunk, unless `OVGuardConfig.on_violation` says otherwise:
 
 * `"stop"` (default) ends generation at the flagged chunk.
 * `"raise"` raises `OVGuardViolationError` instead.
 * `"continue"` only records the verdict and lets generation run to completion.
 
-`OVGuardConfig.prompt_mode` controls when the prompt is moderated: `"async"` (default) moderates it on a background thread while the first forward pass of the guarded model runs, so time to first token is not penalized; `"sync"` moderates it before generation starts; `"off"` skips prompt moderation entirely. `OVGuardConfig.chunk_size` batches that many newly generated tokens into a single guard forward pass, trading detection latency for throughput.
+`OVGuardConfig.prompt_mode` controls when the prompt is moderated: `"async"` (default) moderates it on a background thread while the first forward pass of the guarded model runs, so time to first token is not penalized, which pairs well with a guard placed on another device; `"sync"` moderates it before generation starts; `"off"` skips the input rail entirely.
 
-See the [reference documentation](reference#ovguardconfig) for the full list of `OVGuardConfig` options, and [`generate`](reference#ovmodelforcausallm) for how the verdicts are reported through `OVGuardConfig.on_verdict`, `OVGuardViolationError`, and the `guard` field of the output.
+`OVGuardConfig.chunk_size` controls how often the response is moderated. It defaults to every token for a token classifier, and to the completed response only for a generative guard, for which re-reading a partial response costs a full extra inference. Setting it explicitly trades detection latency for throughput in the first case, and enables intermediate checks in the second.
+
+<Tip warning={true}>
+
+A token classifier guard reads the token ids of the guarded model directly and must therefore share its tokenizer. A generative guard has its own tokenizer, but needs the one of the guarded model to read back the generated text, which is why `tokenizer` is passed to `generate` above. When a generative guard answers something that does not follow its own output format, the content is reported as flagged rather than cleared.
+
+</Tip>
+
+See the [reference documentation](reference#guarded-generation) for the full list of `OVGuardConfig` options and for how the verdicts are reported through `OVGuardConfig.on_verdict`, `OVGuardViolationError`, and the `guard` field of the output. A runnable end-to-end example is available in the [content moderation notebook](https://github.com/huggingface/optimum-intel/blob/main/notebooks/openvino/content_moderation.ipynb).

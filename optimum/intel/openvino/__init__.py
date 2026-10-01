@@ -67,6 +67,7 @@ if is_nncf_available():
 
 
 from .generation_guard import (
+    OVGuard,
     OVGuardConfig,
     OVGuardReport,
     OVGuardVerdict,

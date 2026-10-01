@@ -15,7 +15,7 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional, Sequence, Union
+from typing import Dict, Optional, Union
 
 import numpy as np
 import openvino
@@ -57,14 +57,6 @@ from optimum.exporters.openvino.utils import get_multi_head_token_classification
 
 from ..utils.import_utils import is_timm_available, is_timm_version
 from .configuration import OVQuantizationConfigBase
-from .generation_guard import (
-    GUARD_ARCHITECTURES,
-    decode_guard_logits,
-    get_guard_architecture_spec,
-    resolve_blocking_labels,
-    resolve_label_maps,
-    to_long_tensor,
-)
 from .modeling_base import OVBaseModel
 from .modeling_sam import OVSamModel
 from .utils import (
@@ -441,76 +433,6 @@ class OVModelForTokenClassification(OVModel):
         if self.stateful:
             self._past_length += sequence_length
         return OVMultiHeadTokenClassifierOutput(logits=logits)
-
-    def moderate(
-        self,
-        input_ids,
-        attention_mask=None,
-        role: str = "user",
-        blocking_labels: Optional[Sequence[str]] = None,
-        token_offset: int = 0,
-    ):
-        """Classifies the risk of every token of `input_ids` with a guard model.
-
-        This does not reset the guard state, so calling it repeatedly on a stateful guard model
-        moderates a conversation incrementally: pass the full prompt first, then only the new tokens.
-        Use [`~OVModelForTokenClassification.reset_stream`] to start over.
-
-        Args:
-            input_ids (`torch.Tensor` or `np.ndarray` or `List[int]`):
-                Token ids to moderate, of shape `(batch_size, sequence_length)` or `(sequence_length,)`.
-            attention_mask (`torch.Tensor` or `np.ndarray`, *optional*):
-                Attention mask spanning the tokens already moderated plus `input_ids`. Defaults to
-                attending to everything.
-            role (`str`, defaults to `"user"`):
-                Conversation role of `input_ids`, either `"user"` or `"assistant"`. Guard models use
-                different heads for the two.
-            blocking_labels (`Sequence[str]`, *optional*):
-                Risk levels that count as a violation. Defaults to those declared for the architecture.
-            token_offset (`int`, defaults to 0):
-                Value added to the reported token positions, to keep them absolute when moderating
-                incrementally.
-
-        Returns:
-            `List[List[OVGuardVerdict]]`: Per-token verdicts, for every sequence in the batch.
-        """
-        spec = get_guard_architecture_spec(self.config)
-        if spec is None:
-            raise ValueError(
-                f"{self.__class__.__name__} was loaded from an architecture that does not support moderation. "
-                f"Supported guard architectures are {sorted(GUARD_ARCHITECTURES)}."
-            )
-
-        input_ids = to_long_tensor(input_ids)
-        outputs = self._multi_head_forward(input_ids, attention_mask)
-        return decode_guard_logits(
-            outputs.logits,
-            role=role,
-            spec=spec,
-            label_maps=resolve_label_maps(self.config, spec),
-            blocking_labels=resolve_blocking_labels(self.config, spec, blocking_labels),
-            token_offset=token_offset,
-        )
-
-    def moderate_stream(
-        self,
-        token_ids,
-        role: str = "assistant",
-        blocking_labels: Optional[Sequence[str]] = None,
-        token_offset: int = 0,
-    ):
-        """Moderates the next tokens of a conversation already started with `moderate`.
-
-        Equivalent to [`~OVModelForTokenClassification.moderate`], and only meaningful for a guard
-        model exported with the `token-classification-with-past` task, whose KV cache holds the
-        tokens moderated so far.
-        """
-        if not self.stateful:
-            raise ValueError(
-                "`moderate_stream` requires a guard model with a KV cache. Export the model with the "
-                "`token-classification-with-past` task, or use `moderate` to re-scan the whole sequence."
-            )
-        return self.moderate(token_ids, role=role, blocking_labels=blocking_labels, token_offset=token_offset)
 
 
 FEATURE_EXTRACTION_EXAMPLE = r"""

@@ -56,14 +56,17 @@ The following classes are available for the following natural language processin
 
 [[autodoc]] openvino.modeling.OVModelForTokenClassification
     - forward
-    - moderate
-    - moderate_stream
     - reset_stream
 
 
 ## Guarded generation
 
-Classes used by the `guard_model=`/`guard_config=` arguments of [`OVModelForCausalLM.generate`](#ovmodelforcausallm), see [Guarded text generation](inference#guarded-text-generation).
+Content moderation, see [Content moderation](inference#content-moderation).
+
+### OVGuard
+
+[[autodoc]] openvino.generation_guard.OVGuard
+    - all
 
 ### OVGuardConfig
 

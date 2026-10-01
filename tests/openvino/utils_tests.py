@@ -200,7 +200,7 @@ def _create_tiny_qwen3_guard_model():
     Config and remote code are fetched from the Hub with `trust_remote_code=True`, only the weights
     are randomly re-initialized. Result is cached on disk under the system temp dir, so subsequent
     calls are cheap. Kept at the real `vocab_size` (151936), matching `MODEL_NAMES["qwen3"]`, so the
-    two can be paired in `generate(guard_model=...)` tests.
+    two can be paired in `generate(guard=...)` tests.
     """
     output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_qwen3_guard"
     config_file = output_dir / "config.json"
@@ -208,7 +208,7 @@ def _create_tiny_qwen3_guard_model():
     if config_file.exists() and weights_file.exists():
         return str(output_dir)
 
-    from transformers import AutoConfig, AutoModel
+    from transformers import AutoConfig, AutoModel, AutoTokenizer
 
     model_id = "Qwen/Qwen3Guard-Stream-0.6B"
 
@@ -234,6 +234,68 @@ def _create_tiny_qwen3_guard_model():
 
     output_dir.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(output_dir, safe_serialization=True)
+    AutoTokenizer.from_pretrained(model_id).save_pretrained(output_dir)
+
+    return str(output_dir)
+
+
+# Reproduces the structure a `GenerativeGuardSpec` relies on: the safety taxonomy is a chat template
+# variable, message contents are lists of typed parts, and the last line pins the output grammar.
+# The final line is the `template_marker` of the Llama Guard spec, which is what makes this model
+# detected as one.
+TINY_GENERATIVE_GUARD_CHAT_TEMPLATE = (
+    "{%- if categories is not defined -%}"
+    '{%- set categories = {"S1": "Violent Crimes.", "S2": "Non-Violent Crimes."} -%}'
+    "{%- endif -%}"
+    '{{- "Task: check for unsafe content.\\n<BEGIN UNSAFE CONTENT CATEGORIES>\\n" -}}'
+    "{%- for key in categories -%}"
+    '{{- key + ": " + categories[key] + "\\n" -}}'
+    "{%- endfor -%}"
+    '{{- "<END UNSAFE CONTENT CATEGORIES>\\n<BEGIN CONVERSATION>\\n" -}}'
+    "{%- for message in messages -%}"
+    "{%- for content in message['content'] | selectattr('type', 'equalto', 'text') -%}"
+    "{{- message['role'] + ': ' + content['text'] + '\\n' -}}"
+    "{%- endfor -%}"
+    "{%- endfor -%}"
+    '{{- "<END CONVERSATION>\\nProvide your safety assessment:\\n'
+    " - First line must read 'safe' or 'unsafe'.\" -}}"
+)
+
+
+def _create_tiny_generative_guard_model():
+    """Generate a tiny random generative guard model for testing and return its local path.
+
+    Weights come from a tiny random Llama, and the tokenizer carries a minimal Llama Guard shaped
+    chat template so that the model is recognized as a generative guard. The random weights answer
+    with text that does not follow the guard output format, which is exactly how the fail-closed
+    path is exercised; tests that need a cleared verdict pass their own `GenerativeGuardSpec`.
+    """
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_generative_guard"
+    config_file = output_dir / "config.json"
+    weights_file = output_dir / "model.safetensors"
+    if config_file.exists() and weights_file.exists():
+        return str(output_dir)
+
+    from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+
+    # Not `MODEL_NAMES["llama"]`: this runs while `HUB_MODEL_NAMES` is still being built.
+    model_id = "optimum-intel-internal-testing/tiny-random-LlamaForCausalLM"
+
+    torch.manual_seed(SEED)
+
+    config = AutoConfig.from_pretrained(model_id)
+    config.torch_dtype = "float32"
+    config.dtype = "float32"
+    model = AutoModelForCausalLM.from_config(config).float().eval()
+    # The upstream tiny model declares `pad_token_id=-1`, which `save_pretrained` rejects.
+    model.generation_config.pad_token_id = None
+
+    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    tokenizer.chat_template = TINY_GENERATIVE_GUARD_CHAT_TEMPLATE
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    model.save_pretrained(output_dir, safe_serialization=True)
+    tokenizer.save_pretrained(output_dir)
 
     return str(output_dir)
 
@@ -415,6 +477,7 @@ HUB_MODEL_NAMES = {
     "qwen3_dflash": "optimum-intel-internal-testing/tiny-random-qwen3-dflash",
     "qwen3_deepspec_dflash": "optimum-intel-internal-testing/tiny-random-qwen3-deepspec-dflash",
     "qwen3_guard": _create_tiny_qwen3_guard_model(),
+    "generative_guard": _create_tiny_generative_guard_model(),
     "fun_asr": "optimum-intel-internal-testing/tiny-random-fun-asr",
     "rembert": "optimum-intel-internal-testing/tiny-random-rembert",
     "resnet": "optimum-intel-internal-testing/tiny-random-resnet",

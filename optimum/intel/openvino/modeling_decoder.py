@@ -53,11 +53,10 @@ from .configuration import (
     OVWeightQuantizationConfig,
 )
 from .generation_guard import (
+    OVGuard,
     OVGuardConfig,
     OVGuardedStreamer,
-    OVGuardSession,
     OVGuardStoppingCriteria,
-    check_guard_compatibility,
 )
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import (
@@ -775,7 +774,7 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         streamer: Optional["BaseStreamer"] = None,
         negative_prompt_ids: Optional[torch.Tensor] = None,
         negative_prompt_attention_mask: Optional[torch.Tensor] = None,
-        guard_model: Optional["PreTrainedModel"] = None,
+        guard: Optional[Union["OVGuard", "PreTrainedModel"]] = None,
         guard_config: Optional[OVGuardConfig] = None,
         **kwargs,
     ) -> Union[GenerateOutput, torch.LongTensor]:
@@ -784,18 +783,18 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         Accepts the same arguments as `transformers.GenerationMixin.generate`, plus:
 
         Args:
-            guard_model (`PreTrainedModel`, *optional*):
-                A guard model classifying the risk of the prompt and of the generated tokens, for
-                example an `OVModelForTokenClassification` loaded from `Qwen/Qwen3Guard-Stream-0.6B`.
-                It must share the tokenizer of this model. Generation stops as soon as content is
-                flagged, unless `guard_config` says otherwise.
+            guard (`OVGuard` or `PreTrainedModel`, *optional*):
+                A guard moderating the prompt and the generated tokens, either an [`OVGuard`] or an
+                OpenVINO guard model to wrap in one. Generation stops as soon as content is flagged,
+                unless `guard_config` says otherwise. A generative guard reads back the generated
+                text, so it also needs the `tokenizer` argument of `generate`.
             guard_config (`OVGuardConfig`, *optional*):
                 Moderation settings, such as how many tokens are moderated at once and what happens
                 on a violation. Defaults to `OVGuardConfig()`.
 
-        The verdicts of the guard model are reported through `OVGuardConfig.on_verdict`, raised
-        inside `OVGuardViolationError` when `on_violation="raise"`, and returned as the `guard`
-        field of the output when `return_dict_in_generate=True`.
+        The verdicts of the guard are reported through `OVGuardConfig.on_verdict`, raised inside
+        `OVGuardViolationError` when `on_violation="raise"`, and returned as the `guard` field of
+        the output when `return_dict_in_generate=True`.
         """
         _generation_config, _ = self._prepare_generation_config(generation_config, **kwargs)
         generation_mode = _generation_config.get_generation_mode(assistant_model)
@@ -810,21 +809,25 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             self._first_iter_beam_search = True
 
         guard_session = None
-        if guard_model is not None:
-            check_guard_compatibility(self.config, guard_model.config)
+        if guard is not None:
+            guard = OVGuard.from_model(guard) if not isinstance(guard, OVGuard) else guard
+            guard.backend.validate_target(self.config)
             # Beam search reorders the running sequences, which invalidates an incrementally built
             # guard KV cache, so the guard re-scans the whole sequence on every chunk instead.
-            guard_session = OVGuardSession(guard_model, guard_config, incremental=not is_beam_search)
+            guard_session = guard.open_session(
+                guard_config, tokenizer=kwargs.get("tokenizer"), incremental=not is_beam_search
+            )
             input_ids = inputs if inputs is not None else kwargs.get("input_ids")
             if input_ids is None:
-                raise ValueError("`guard_model` requires `input_ids` to be passed to `generate`.")
-            guard_session.start(input_ids, kwargs.get("attention_mask"))
+                raise ValueError("`guard` requires `input_ids` to be passed to `generate`.")
             stopping_criteria = StoppingCriteriaList(stopping_criteria or [])
             stopping_criteria.append(OVGuardStoppingCriteria(guard_session))
-            if not guard_session.config.emit_before_check:
-                streamer = OVGuardedStreamer(streamer, guard_session) if streamer is not None else streamer
+            if not guard_session.config.emit_before_check and streamer is not None:
+                streamer = OVGuardedStreamer(streamer, guard_session)
 
         try:
+            if guard_session is not None:
+                guard_session.start(input_ids, kwargs.get("attention_mask"))
             result = super().generate(
                 inputs,
                 generation_config,
