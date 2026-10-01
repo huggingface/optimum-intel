@@ -59,7 +59,18 @@ from optimum.intel.utils.import_utils import is_transformers_version
 
 
 if is_transformers_version(">=", "4.57"):
-    from transformers.models.qwen3_omni_moe.processing_qwen3_omni_moe import _get_feat_extract_output_lengths
+    # A transformers build ships either the MoE or the dense omni module, never both, so an unguarded
+    # import of one would break this whole module on builds that only have the other.
+    try:
+        from transformers.models.qwen3_omni_moe.modeling_qwen3_omni_moe import (
+            Qwen3OmniMoeThinkerForConditionalGeneration as _Qwen3OmniThinkerModel,
+        )
+        from transformers.models.qwen3_omni_moe.processing_qwen3_omni_moe import _get_feat_extract_output_lengths
+    except ImportError:
+        from transformers.models.qwen3_omni.modeling_qwen3_omni import (
+            Qwen3OmniThinkerForConditionalGeneration as _Qwen3OmniThinkerModel,
+        )
+        from transformers.models.qwen3_omni.processing_qwen3_omni import _get_feat_extract_output_lengths
     from transformers.models.qwen3_vl.modeling_qwen3_vl import (
         Qwen3VLModel,
         Qwen3VLVisionModel,
@@ -4268,6 +4279,21 @@ if is_transformers_version(">=", "4.57"):
     _OVQwen3VLForCausalLM.get_vision_position_ids = getattr(Qwen3VLModel, "get_vision_position_ids", None)
 
 
+class _Qwen3OmniThinkerRopeIndex:
+    """Runs the HF thinker's mRoPE index, which reads token ids and spatial_merge_size off the thinker
+    config. The OpenVINO wrapper holds the top-level Omni config instead, so it cannot borrow the method."""
+
+    def __init__(self, thinker_config: PretrainedConfig):
+        self.config = thinker_config
+        self.spatial_merge_size = thinker_config.vision_config.spatial_merge_size
+
+    def get_llm_pos_ids_for_vision(self, *args, **kwargs):
+        return _Qwen3OmniThinkerModel.get_llm_pos_ids_for_vision(self, *args, **kwargs)
+
+    def get_rope_index(self, *args, **kwargs):
+        return _Qwen3OmniThinkerModel.get_rope_index(self, *args, **kwargs)
+
+
 class _OVQwen3OmniBase(OVModelForVisualCausalLM):
     # Shared Qwen3-Omni OpenVINO wrapper for both the dense and MoE variants. Subclasses set
     # _MIN_TRANSFORMERS_VERSION / _ARCH_LABEL and override only the handful of methods that
@@ -4472,6 +4498,29 @@ class _OVQwen3OmniBase(OVModelForVisualCausalLM):
         res = self.vision_embeddings(pixel_values, pos_embeds, causal_mask, rotary_pos_emb)
         return np.array(res[0]), np.array(res[1])
 
+    def _get_position_ids(self, input_ids, attention_mask, image_grid_thw, audio_seqlens, cache_position):
+        """Thinker position ids as [4, batch, seq]: one text row, then the three mRoPE rows."""
+        if self.rope_deltas is None or (cache_position is not None and cache_position[0] == 0):
+            mrope_position_ids, rope_deltas = _Qwen3OmniThinkerRopeIndex(self.config.thinker_config).get_rope_index(
+                input_ids,
+                image_grid_thw,
+                None,
+                attention_mask,
+                audio_seqlens=audio_seqlens,
+            )
+            # Left padding shifts every row, so the decode-time delta must not count the pad tokens.
+            pad_tokens = 0 if attention_mask is None else (1 - attention_mask).sum(dim=-1).unsqueeze(1)
+            self.rope_deltas = rope_deltas - pad_tokens
+        else:
+            batch_size, seq_length = input_ids.shape
+            delta = cache_position[0] + self.rope_deltas if cache_position is not None else 0
+            if cache_position is not None:
+                delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=0)
+            text_positions = torch.arange(seq_length).view(1, -1).expand(batch_size, -1).add(delta)
+            mrope_position_ids = text_positions.unsqueeze(0).expand(3, -1, -1)
+        # As in the HF text model, the temporal row doubles as the text position row.
+        return torch.cat([mrope_position_ids[:1], mrope_position_ids], dim=0)
+
     def prepare_inputs_for_generation(
         self,
         input_ids,
@@ -4485,6 +4534,7 @@ class _OVQwen3OmniBase(OVModelForVisualCausalLM):
         image_grid_thw=None,
         audio_features=None,
         audio_feature_lens=None,
+        audio_seqlens=None,
         **kwargs,
     ):
         if past_key_values is not None and cache_position is not None:
@@ -4499,6 +4549,7 @@ class _OVQwen3OmniBase(OVModelForVisualCausalLM):
             pixel_values = None
             audio_features = None
             audio_feature_lens = None
+            audio_seqlens = None
 
         if cache_position is not None and inputs_embeds is not None and len(cache_position) == inputs_embeds.shape[1]:
             model_inputs = {"inputs_embeds": inputs_embeds, "input_ids": None}
@@ -4515,6 +4566,7 @@ class _OVQwen3OmniBase(OVModelForVisualCausalLM):
                 "image_grid_thw": image_grid_thw,
                 "audio_features": audio_features,
                 "audio_feature_lens": audio_feature_lens,
+                "audio_seqlens": audio_seqlens,
                 "cache_position": cache_position,
             }
         )
@@ -4940,6 +4992,8 @@ class _OVQwen3OmniBase(OVModelForVisualCausalLM):
             audio_features, audio_feature_lens = self._process_audio_inputs(input_features, feature_attention_mask)
             kwargs["audio_features"] = audio_features
             kwargs["audio_feature_lens"] = audio_feature_lens
+            # mRoPE sizes each audio span from the raw mel frame count, not the encoder output length.
+            kwargs["audio_seqlens"] = feature_attention_mask.sum(-1)
 
         if not return_audio:
             return super().generate(*args, **kwargs)
@@ -5114,6 +5168,7 @@ class _OVQwen3OmniMoeForCausalLM(_OVQwen3OmniBase):
         audio_features=None,
         audio_feature_lens=None,
         cache_position=None,
+        audio_seqlens=None,
         **kwargs,
     ):
         inputs_embeds = torch.from_numpy(self.get_text_embeddings(input_ids))
@@ -5142,25 +5197,9 @@ class _OVQwen3OmniMoeForCausalLM(_OVQwen3OmniBase):
                 inputs_embeds = inputs_embeds.masked_scatter(audio_mask, audio_embeds)
 
         if position_ids is None:
-            batch_size, seq_length, _ = inputs_embeds.shape
-            if (cache_position is not None and cache_position[0] == 0) or self.rope_deltas is None:
-                position_ids = torch.arange(seq_length, device=inputs_embeds.device)
-                position_ids = position_ids.view(1, -1).expand(batch_size, -1)
-                position_ids = position_ids.unsqueeze(0).expand(4, -1, -1)
-                max_position_ids = position_ids.max(0, keepdim=False)[0].max(-1, keepdim=True)[0]
-                self.rope_deltas = max_position_ids + 1 - seq_length
-            else:
-                delta = (
-                    (cache_position[0] + self.rope_deltas).to(inputs_embeds.device)
-                    if cache_position is not None
-                    else 0
-                )
-                position_ids = torch.arange(seq_length, device=inputs_embeds.device)
-                position_ids = position_ids.view(1, -1).expand(batch_size, -1)
-                if cache_position is not None:
-                    delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=0)
-                position_ids = position_ids.add(delta)
-                position_ids = position_ids.unsqueeze(0).expand(4, -1, -1)
+            position_ids = self._get_position_ids(
+                input_ids, attention_mask, image_grid_thw, audio_seqlens, cache_position
+            )
 
         return inputs_embeds, attention_mask, position_ids, visual_pos_masks, deepstack_visual_embeds
 
@@ -5325,6 +5364,7 @@ class _OVQwen3OmniForCausalLM(_OVQwen3OmniBase):
         audio_features=None,
         audio_feature_lens=None,
         cache_position=None,
+        audio_seqlens=None,
         **kwargs,
     ):
         inputs_embeds = torch.from_numpy(self.get_text_embeddings(input_ids))
@@ -5353,23 +5393,9 @@ class _OVQwen3OmniForCausalLM(_OVQwen3OmniBase):
                 inputs_embeds = inputs_embeds.masked_scatter(audio_mask, audio_embeds)
 
         if position_ids is None:
-            batch_size, seq_length, _ = inputs_embeds.shape
-            if self.rope_deltas is None:
-                position_ids = torch.arange(seq_length, device=inputs_embeds.device)
-                position_ids = position_ids.view(1, -1).expand(batch_size, -1)
-                position_ids = position_ids.unsqueeze(0).expand(4, -1, -1)
-            else:
-                delta = (
-                    (cache_position[0] + self.rope_deltas).to(inputs_embeds.device)
-                    if cache_position is not None
-                    else 0
-                )
-                position_ids = torch.arange(seq_length, device=inputs_embeds.device)
-                position_ids = position_ids.view(1, -1).expand(batch_size, -1)
-                if cache_position is not None:
-                    delta = delta.repeat_interleave(batch_size // delta.shape[0], dim=0)
-                position_ids = position_ids.add(delta)
-                position_ids = position_ids.unsqueeze(0).expand(4, -1, -1)
+            position_ids = self._get_position_ids(
+                input_ids, attention_mask, image_grid_thw, audio_seqlens, cache_position
+            )
 
         return inputs_embeds, attention_mask, position_ids, visual_pos_masks, deepstack_visual_embeds
 
