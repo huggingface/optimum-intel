@@ -402,6 +402,7 @@ class _OVModelForSenseVoice(OVModel):
         compile_only=False,
         **kwargs,
     ):
+        import openvino_tokenizers  # noqa: F401  — registers the SentencePiece ops extension
         model_dir = cls._resolve_model_dir(
             model_id,
             token=token,
@@ -473,8 +474,9 @@ class _OVModelForSenseVoice(OVModel):
         return Path(downloaded) / subfolder if subfolder else Path(downloaded)
 
     def _save_pretrained(self, save_directory: Union[str, Path]):
+        super()._save_pretrained(save_directory)
         save_directory = Path(save_directory)
-        openvino.save_model(self.model, save_directory / OV_XML_FILE_NAME, compress_to_fp16=False)
+        # Copy the SenseVoice-specific assets
         if self.model_save_dir is not None:
             src_dir = Path(self.model_save_dir)
             assets = [
