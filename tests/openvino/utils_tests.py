@@ -496,7 +496,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_encoder": 394,
     },
     "z-image": {
-        "transformer": 104,
+        "transformer": 116,
         "vae_decoder": 60,
         "vae_encoder": 44,
         "text_encoder": 16,
