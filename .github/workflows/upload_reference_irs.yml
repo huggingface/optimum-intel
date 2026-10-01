@@ -11,10 +11,6 @@ on:
         description: "Only handle models that have no `ov` revision yet"
         type: boolean
         default: false
-      commit_directly:
-        description: "Commit to `ov` instead of opening a pull request"
-        type: boolean
-        default: false
       openvino_nightly:
         description: "Generate the references with the OpenVINO nightly build instead of the release"
         type: boolean
@@ -72,7 +68,6 @@ jobs:
           python tests/scripts/batch_upload_irs.py \
             ${{ inputs.models != '' && format('--models {0}', inputs.models) || '' }} \
             ${{ inputs.missing_only && '--missing-only' || '' }} \
-            ${{ inputs.commit_directly && '--commit-directly' || '' }} \
             --log-dir "${{ runner.temp }}/reference-ir-logs"
 
       - name: Upload run log
