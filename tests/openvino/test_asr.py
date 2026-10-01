@@ -69,10 +69,10 @@ class OVASRTest(unittest.TestCase):
             "input_features": ref["input_features"],
             **ref["gen_kwargs"],
         }
-        if "decoder_input_ids" in ov_gen_kwargs:
+        if ref.get("decoder_input_ids") is not None:
             ov_gen_kwargs["decoder_input_ids"] = ref["decoder_input_ids"]
 
-        if "speech_lengths" in ov_gen_kwargs:
+        if ref.get("speech_lengths") is not None:
             ov_gen_kwargs["speech_lengths"] = ref["speech_lengths"]
 
         if ref["attention_mask"] is not None:
@@ -82,7 +82,7 @@ class OVASRTest(unittest.TestCase):
         if hasattr(ov_generated_ids, "sequences"):
             ov_generated_ids = ov_generated_ids.sequences
 
-        if "decoder_input_ids" in ov_gen_kwargs:
+        if ref.get("decoder_input_ids") is not None:
             prompt_len = ref["decoder_input_ids"].shape[1]
         else:
             prompt_len = None

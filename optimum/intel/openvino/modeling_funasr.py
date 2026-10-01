@@ -168,7 +168,7 @@ def _is_funasr_model(
     cache_dir: str = HUGGINGFACE_HUB_CACHE,
     token: Optional[Union[bool, str]] = None,
 ) -> bool:
-    config = _read_funasr_config(model_name_or_path, all_files, cache_dir, token)
+    config = _read_funasr_config("configuration.json", model_name_or_path, all_files, cache_dir, token)
     return config is not None and config.get("model", {}).get("type", None) == "funasr"
 
 

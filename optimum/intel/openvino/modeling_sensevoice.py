@@ -174,12 +174,11 @@ def _is_sensevoice_source(model_id, **kwargs) -> bool:
 
     if "config.json" in all_files:
         try:
-            cfg = SenseVoicePretrainedConfig.from_pretrained(
+            config_dict, _ = PretrainedConfig.get_config_dict(
                 model_id, subfolder=subfolder, cache_dir=cache_dir, revision=revision, token=token
             )
             return (
-                getattr(cfg, "export_model_type", None) == "sense_voice"
-                or getattr(cfg, "model_type", None) == "sense_voice"
+                config_dict.get("export_model_type") == "sense_voice" or config_dict.get("model_type") == "sense_voice"
             )
         except Exception:
             return False
