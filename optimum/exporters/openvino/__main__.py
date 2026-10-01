@@ -883,21 +883,20 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
             and getattr(model.config, "export_model_type", None) == "sense_voice"
         ):
             # SenseVoiceSmall ships a SentencePiece BPE model rather than a transformers tokenizer, so it
-            # is not among ``preprocessors``. Build the OV tokenizer/detokenizer IRs from that BPE model.
+            # is not among ``preprocessors``. It has no text input, so build only the OV detokenizer IR from
+            # that BPE model.
             from optimum.intel.openvino.modeling_sensevoice import export_sensevoice_tokenizers
 
             source = getattr(model, "_sensevoice_source", None)
             if source is None:
-                logger.warning(
-                    "SenseVoice source path unknown; OpenVINO tokenizer/detokenizer models won't be generated."
-                )
+                logger.warning("SenseVoice source path unknown; OpenVINO detokenizer model won't be generated.")
             else:
                 try:
                     export_sensevoice_tokenizers(source, output)
                 except Exception as exception:
                     logger.warning(
-                        "Could not convert the SenseVoice tokenizer. OpenVINO tokenizer/detokenizer "
-                        f"models won't be generated. Exception: {exception}"
+                        "Could not convert the SenseVoice tokenizer. OpenVINO detokenizer "
+                        f"model won't be generated. Exception: {exception}"
                     )
         elif library_name != "diffusers" and preprocessors:
             processor_chat_template = None

@@ -30,7 +30,7 @@ from ..utils.import_utils import is_funasr_available
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling import OVModel
 from .modeling_funasr import _apply_lfr, _read_funasr_config
-from .utils import OV_DETOKENIZER_NAME, OV_TOKENIZER_NAME, OV_XML_FILE_NAME
+from .utils import OV_DETOKENIZER_NAME, OV_XML_FILE_NAME
 
 
 logger = logging.getLogger(__name__)
@@ -199,23 +199,29 @@ def _resolve_sensevoice_asset(source_model_id, asset, cache_dir=HUGGINGFACE_HUB_
 
 
 def export_sensevoice_tokenizers(source_model_id, output, cache_dir=HUGGINGFACE_HUB_CACHE, token=None):
-    """Convert the SenseVoice SentencePiece model to OpenVINO tokenizer/detokenizer IRs under ``output``.
+    """Convert the SenseVoice SentencePiece model to an OpenVINO detokenizer IR under ``output``.
 
-    SenseVoice ships a raw SentencePiece model rather than a transformers tokenizer, so it is wrapped in a
-    `T5Tokenizer` (which is SentencePiece-backed) before conversion. The resulting OpenVINO detokenizer maps
-    token ids to text identically to `SentencePieceProcessor.DecodeIds` for SenseVoice ids (including the
-    `<|lang|>`/`<|emo|>` special tokens), so CTC greedy output can be detokenized entirely with the exported
-    IR, without a runtime SentencePiece dependency.
+    SenseVoiceSmall does not accept text input, so only the detokenizer (token ids -> text) is needed; the
+    tokenizer IR is intentionally not generated. SenseVoice ships a raw SentencePiece model rather than a
+    transformers tokenizer, so it is wrapped in a `T5Tokenizer` (which is SentencePiece-backed) before
+    conversion. The resulting OpenVINO detokenizer maps token ids to text identically to
+    `SentencePieceProcessor.DecodeIds` for SenseVoice ids (including the `<|lang|>`/`<|emo|>` special tokens),
+    so CTC greedy output can be detokenized entirely with the exported IR, without a runtime SentencePiece
+    dependency.
     """
     from transformers import T5Tokenizer
 
-    from optimum.exporters.openvino.convert import export_tokenizer
+    try:
+        from openvino_tokenizers import convert_tokenizer
+    except ModuleNotFoundError:
+        return
 
     bpe_path = _resolve_sensevoice_asset(source_model_id, SENSEVOICE_BPE_FILE, cache_dir=cache_dir, token=token)
     if bpe_path is None:
         return
     tokenizer = T5Tokenizer(vocab_file=str(bpe_path), extra_ids=0, legacy=True)
-    export_tokenizer(tokenizer, output)
+    _, detokenizer = convert_tokenizer(tokenizer, with_detokenizer=True)
+    openvino.save_model(detokenizer, Path(output) / OV_DETOKENIZER_NAME.format(""))
 
 
 def copy_sensevoice_cmvn(source_model_id, output, cache_dir=HUGGINGFACE_HUB_CACHE, token=None):
@@ -232,8 +238,8 @@ class _OVModelForSenseVoice(OVModel):
     """OpenVINO inference for SenseVoiceSmall (CTC), mirroring the FunASR asset layout.
 
     A single OpenVINO graph (``openvino_model.xml``) runs the SANM encoder and the CTC head together and
-    returns raw CTC logits; token ids are turned into text with the exported OpenVINO tokenizer/detokenizer
-    pair. Inference has no dependency on the funasr runtime.
+    returns raw CTC logits; token ids are turned into text with the exported OpenVINO detokenizer. Inference
+    has no dependency on the funasr runtime.
     """
 
     export_feature = "automatic-speech-recognition"
@@ -368,8 +374,8 @@ class _OVModelForSenseVoice(OVModel):
             ov_config=ov_config,
             library_name=cls._library_name,
             variant=variant,
-            # SenseVoiceSmall ships a SentencePiece BPE model instead of a transformers tokenizer, so its
-            # tokenizer/detokenizer IRs must be generated at export time (they are needed to decode CTC ids).
+            # SenseVoiceSmall ships a SentencePiece BPE model instead of a transformers tokenizer. It has no
+            # text input, so only the detokenizer IR (needed to decode CTC ids) is generated at export time.
             convert_tokenizer=True,
         )
 
@@ -473,8 +479,6 @@ class _OVModelForSenseVoice(OVModel):
             src_dir = Path(self.model_save_dir)
             assets = [
                 SENSEVOICE_CMVN_FILE,
-                OV_TOKENIZER_NAME.format(""),
-                OV_TOKENIZER_NAME.format("").replace(".xml", ".bin"),
                 OV_DETOKENIZER_NAME.format(""),
                 OV_DETOKENIZER_NAME.format("").replace(".xml", ".bin"),
             ]
