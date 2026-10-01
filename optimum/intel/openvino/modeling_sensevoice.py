@@ -510,8 +510,6 @@ class _OVModelForSenseVoice(OVModel):
             encoder_out_lens = torch.from_numpy(encoder_out_lens)
         return CausalLMOutput(logits=logits), encoder_out_lens
 
-    # ----------------------------- pre/post-processing -----------------------------
-
     @property
     def cmvn(self):
         if self._cmvn is None:
