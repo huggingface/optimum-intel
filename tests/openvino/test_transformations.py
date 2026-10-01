@@ -370,6 +370,28 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "ConvertToSwishCPU",
         ],
     },
+    "hunyuan_v1_dense": {
+        # Dense HunYuan decoder (HY-MT1.5 / Hy-MT2): its dynamic-NTK RoPE still matches the GPT-NeoX
+        # rotate-half matcher, so the dedicated RoPE op is produced despite the scaling.
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+            "DecompressionHandling",
+        ],
+        "compile": [
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "CommonDecompositions",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "ConvertBroadcast3",
+            "ConvertMatMulToFC",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+        ],
+    },
 }
 
 if is_transformers_version(">=", "5.0.0"):

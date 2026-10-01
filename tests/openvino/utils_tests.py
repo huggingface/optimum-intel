@@ -810,6 +810,7 @@ ARCH_TO_MODEL_CLASS = {
     "lfm2_moe": "OVModelForCausalLM",
     "qwen3_moe": "OVModelForCausalLM",
     "llama4": "OVModelForCausalLM",
+    "hunyuan_v1_dense": "OVModelForCausalLM",
     "llava": "OVModelForVisualCausalLM",
     "qwen3_5_moe": "OVModelForVisualCausalLM",
     "gemma4_moe": "OVModelForVisualCausalLM",
