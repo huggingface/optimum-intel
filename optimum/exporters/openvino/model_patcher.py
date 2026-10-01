@@ -12739,7 +12739,7 @@ class ZImageTransformerModelPatcher(ModelPatcher):
         super().__exit__(exc_type, exc_value, traceback)
 
         rope_embedder = self._model.rope_embedder
-        rope_embedder._ov_freqs_cos = rope_embedder._ov_freqs_sin = None
+        del rope_embedder._ov_freqs_cos, rope_embedder._ov_freqs_sin
 
         # Restore ZSingleStreamAttnProcessor class-level patch
         try:
