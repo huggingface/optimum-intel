@@ -4249,11 +4249,33 @@ class _Qwen3OmniThinkerRopeIndex:
         self.config = thinker_config
         self.spatial_merge_size = thinker_config.vision_config.spatial_merge_size
 
-    def get_llm_pos_ids_for_vision(self, *args, **kwargs):
-        return Qwen3OmniMoeThinkerForConditionalGeneration.get_llm_pos_ids_for_vision(self, *args, **kwargs)
+    def get_llm_pos_ids_for_vision(
+        self,
+        start_idx: int,
+        vision_idx: int,
+        spatial_merge_size: int,
+        t_index: List[torch.Tensor],
+        grid_hs: List[torch.Tensor],
+        grid_ws: List[torch.Tensor],
+    ) -> torch.Tensor:
+        return Qwen3OmniMoeThinkerForConditionalGeneration.get_llm_pos_ids_for_vision(
+            self, start_idx, vision_idx, spatial_merge_size, t_index, grid_hs, grid_ws
+        )
 
-    def get_rope_index(self, *args, **kwargs):
-        return Qwen3OmniMoeThinkerForConditionalGeneration.get_rope_index(self, *args, **kwargs)
+    def get_rope_index(
+        self,
+        input_ids: torch.LongTensor,
+        image_grid_thw: Optional[torch.LongTensor],
+        attention_mask: Optional[torch.Tensor],
+        audio_seqlens: Optional[torch.LongTensor],
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        return Qwen3OmniMoeThinkerForConditionalGeneration.get_rope_index(
+            self,
+            input_ids=input_ids,
+            image_grid_thw=image_grid_thw,
+            attention_mask=attention_mask,
+            audio_seqlens=audio_seqlens,
+        )
 
 
 class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
@@ -4526,11 +4548,7 @@ class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
         """Thinker position ids as [4, batch, seq]: one text row, then the three mRoPE rows."""
         if self.rope_deltas is None or (cache_position is not None and cache_position[0] == 0):
             mrope_position_ids, rope_deltas = _Qwen3OmniThinkerRopeIndex(self.config.thinker_config).get_rope_index(
-                input_ids,
-                image_grid_thw,
-                None,
-                attention_mask,
-                audio_seqlens=audio_seqlens,
+                input_ids, image_grid_thw, attention_mask, audio_seqlens
             )
             # Left padding shifts every row, so the decode-time delta must not count the pad tokens.
             pad_tokens = 0 if attention_mask is None else (1 - attention_mask).sum(dim=-1).unsqueeze(1)
