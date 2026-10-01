@@ -46,7 +46,6 @@ from optimum.intel.utils.modeling_utils import (
 
 from .utils import (
     _MAX_UNCOMPRESSED_SIZE,
-    _MODEL_TYPES_WITH_DEFAULT_TEXT_GENERATION_TASK,
     MULTI_MODAL_TEXT_GENERATION_MODELS,
     clear_class_registry,
     deduce_diffusers_dtype,
@@ -171,21 +170,33 @@ def infer_task(
         else:
             model_type = config.model_type
 
-        if original_task == "auto" and model_type in _MODEL_TYPES_WITH_DEFAULT_TEXT_GENERATION_TASK:
-            return "text-generation-with-past"
-
         custom_architecture = model_type not in TasksManager._SUPPORTED_MODEL_TYPE
-        if not custom_architecture and task + "-with-past" in TasksManager.get_supported_tasks_for_model_type(
-            model_type, exporter="openvino", library_name=library_name
-        ):
-            # Make -with-past the default if --task was not explicitly specified
-            if original_task == "auto":
-                task = task + "-with-past"
-            else:
-                logger.info(
-                    f"The task `{task}` was manually specified, and past key values will not be reused in the decoding."
-                    f" if needed, please pass `--task {task}-with-past` to export using the past key values."
-                )
+        if not custom_architecture:
+            supported_tasks = TasksManager.get_supported_tasks_for_model_type(
+                model_type, exporter="openvino", library_name=library_name
+            )
+
+            if original_task == "auto" and task not in supported_tasks:
+                # The Hub pipeline tag may advertise a task the architecture is not registered for (e.g.
+                # `translation` for Hy-MT2 decoders), so fall back to the task it is registered with.
+                base_tasks = {supported_task.replace("-with-past", "") for supported_task in supported_tasks}
+                if len(base_tasks) == 1:
+                    inferred_task = base_tasks.pop()
+                    logger.info(
+                        f"The task `{task}` inferred from the model metadata is not supported for model type"
+                        f" `{model_type}`, using `{inferred_task}` instead."
+                    )
+                    task = inferred_task
+
+            if task + "-with-past" in supported_tasks:
+                # Make -with-past the default if --task was not explicitly specified
+                if original_task == "auto":
+                    task = task + "-with-past"
+                else:
+                    logger.info(
+                        f"The task `{task}` was manually specified, and past key values will not be reused in the decoding."
+                        f" if needed, please pass `--task {task}-with-past` to export using the past key values."
+                    )
     return task
 
 
