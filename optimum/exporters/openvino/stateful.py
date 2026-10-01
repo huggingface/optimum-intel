@@ -185,7 +185,7 @@ _ENCODER_DECODER_TASKS_WITH_PAST = (
     "text2text-generation",
 )
 
-# `token-classification` is a decoder task here only for architectures that stream per-token
+# `token-classification` is here only for architectures that stream per-token
 # predictions and therefore carry a KV cache across calls.
 _DECODER_TASKS_WITH_PAST = ("text-generation", "token-classification")
 

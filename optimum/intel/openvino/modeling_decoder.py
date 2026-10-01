@@ -778,24 +778,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         guard_config: Optional[OVGuardConfig] = None,
         **kwargs,
     ) -> Union[GenerateOutput, torch.LongTensor]:
-        """Generates sequences, optionally moderated by a guard model.
-
-        Accepts the same arguments as `transformers.GenerationMixin.generate`, plus:
-
-        Args:
-            guard (`OVGuard` or `PreTrainedModel`, *optional*):
-                A guard moderating the prompt and the generated tokens, either an [`OVGuard`] or an
-                OpenVINO guard model to wrap in one. Generation stops as soon as content is flagged,
-                unless `guard_config` says otherwise. A generative guard reads back the generated
-                text, so it also needs the `tokenizer` argument of `generate`.
-            guard_config (`OVGuardConfig`, *optional*):
-                Moderation settings, such as how many tokens are moderated at once and what happens
-                on a violation. Defaults to `OVGuardConfig()`.
-
-        The verdicts of the guard are reported through `OVGuardConfig.on_verdict`, raised inside
-        `OVGuardViolationError` when `on_violation="raise"`, and returned as the `guard` field of
-        the output when `return_dict_in_generate=True`.
-        """
         _generation_config, _ = self._prepare_generation_config(generation_config, **kwargs)
         generation_mode = _generation_config.get_generation_mode(assistant_model)
 
@@ -812,8 +794,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         if guard is not None:
             guard = OVGuard.from_model(guard) if not isinstance(guard, OVGuard) else guard
             guard.backend.validate_target(self.config)
-            # Beam search reorders the running sequences, which invalidates an incrementally built
-            # guard KV cache, so the guard re-scans the whole sequence on every chunk instead.
             guard_session = guard.open_session(
                 guard_config, tokenizer=kwargs.get("tokenizer"), incremental=not is_beam_search
             )
@@ -847,8 +827,6 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         if guard_session is not None:
             sequences = result.sequences if isinstance(result, ModelOutput) else result
-            # The stopping criteria only runs on whole chunks, so a generation that ends for another
-            # reason can leave a partial chunk unmoderated.
             guard_session.flush(sequences)
             if isinstance(result, ModelOutput):
                 result.guard = guard_session.report

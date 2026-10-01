@@ -345,8 +345,6 @@ class ModelPatcher:
             outputs = self.orig_forward(*args, **kwargs)
 
             if dataclasses.is_dataclass(outputs) and not isinstance(outputs, dict):
-                # Some remote-code models return a plain dataclass rather than a ModelOutput, which
-                # torch.jit cannot trace through.
                 outputs = {field.name: getattr(outputs, field.name) for field in dataclasses.fields(outputs)}
 
             # This code block handles different cases of the filtered_outputs input to align it with the expected

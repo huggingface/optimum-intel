@@ -497,9 +497,6 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
         if self.task.startswith("token-classification"):
             self.multi_head_spec = get_multi_head_token_classification_spec(config)
             if self.multi_head_spec is not None and use_past:
-                # The per-token heads are only useful in a streaming setup, which needs a KV cache
-                # carried across calls. `_set_runtime_options` reads this flag before `export_pytorch`
-                # recomputes it, and is what enables the KV-cache runtime options on the exported IR.
                 self.use_past_in_inputs = True
                 self.stateful = True
         archs = getattr(config, "architectures", None)

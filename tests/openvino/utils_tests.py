@@ -195,13 +195,7 @@ def _create_tiny_mistral3_model():
 
 
 def _create_tiny_qwen3_guard_model():
-    """Generate a tiny random Qwen3Guard-Stream model for testing and return its local path.
-
-    Config and remote code are fetched from the Hub with `trust_remote_code=True`, only the weights
-    are randomly re-initialized. Result is cached on disk under the system temp dir, so subsequent
-    calls are cheap. Kept at the real `vocab_size` (151936), matching `MODEL_NAMES["qwen3"]`, so the
-    two can be paired in `generate(guard=...)` tests.
-    """
+    """Generate a tiny random Qwen3Guard-Stream model for testing and return its local path."""
     output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_qwen3_guard"
     config_file = output_dir / "config.json"
     weights_file = output_dir / "model.safetensors"
@@ -228,8 +222,6 @@ def _create_tiny_qwen3_guard_model():
     config.dtype = "float32"
 
     model = AutoModel.from_config(config, trust_remote_code=True).float().eval()
-    # `save_pretrained` only copies the remote-code file(s) into `output_dir` when the model class
-    # is registered for the auto class it was loaded from.
     model.__class__.register_for_auto_class("AutoModel")
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -278,7 +270,6 @@ def _create_tiny_generative_guard_model():
 
     from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
-    # Not `MODEL_NAMES["llama"]`: this runs while `HUB_MODEL_NAMES` is still being built.
     model_id = "optimum-intel-internal-testing/tiny-random-LlamaForCausalLM"
 
     torch.manual_seed(SEED)
@@ -287,7 +278,6 @@ def _create_tiny_generative_guard_model():
     config.torch_dtype = "float32"
     config.dtype = "float32"
     model = AutoModelForCausalLM.from_config(config).float().eval()
-    # The upstream tiny model declares `pad_token_id=-1`, which `save_pretrained` rejects.
     model.generation_config.pad_token_id = None
 
     tokenizer = AutoTokenizer.from_pretrained(model_id)
