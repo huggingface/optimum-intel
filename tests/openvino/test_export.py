@@ -36,7 +36,7 @@ from optimum.exporters.openvino.model_configs import (
     LTX2TextEncoderOpenVINOConfig,
     Qwen3OmniMoeConfigBehavior,
 )
-from optimum.exporters.openvino.model_patcher import LTX2PackedTextEncoderPatcher, LTX2TextEncoderPatcher
+from optimum.exporters.openvino.model_patcher import LTX2TextEncoderPatcher
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import (
     OVFlux2KleinPipeline,
@@ -60,6 +60,7 @@ from optimum.intel import (
     OVModelForTokenClassification,
     OVModelForVisualCausalLM,
     OVModelForZeroShotImageClassification,
+    OVQwenImage21Pipeline,
     OVQwenImagePipeline,
     OVSamModel,
     OVStableDiffusion3Pipeline,
@@ -71,7 +72,12 @@ from optimum.intel import (
 from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.intel.openvino.modeling_visual_language import MODEL_TYPE_TO_CLS_MAPPING
 from optimum.intel.openvino.utils import TemporaryDirectory
-from optimum.intel.utils.import_utils import _transformers_version, is_diffusers_version, is_transformers_version
+from optimum.intel.utils.import_utils import (
+    _transformers_version,
+    is_diffusers_version,
+    is_qwen_tts_available,
+    is_transformers_version,
+)
 from optimum.utils import logging
 from optimum.utils.save_utils import maybe_load_preprocessors
 from optimum.utils.testing_utils import require_diffusers
@@ -109,6 +115,7 @@ class ExportModelTest(unittest.TestCase):
         "ltx2": OVLTX2Pipeline,
         "ltx2.3": OVLTX2Pipeline,
         "kokoro": OVModelForTextToSpeechSeq2Seq,
+        "qwen3_tts": OVModelForTextToSpeechSeq2Seq,
         "cohere2": OVModelForCausalLM,
         "granitemoehybrid": OVModelForCausalLM,
         "smollm3": OVModelForCausalLM,
@@ -135,12 +142,16 @@ class ExportModelTest(unittest.TestCase):
         "gemma4_unified": OVModelForVisualCausalLM,
         "gemma3n": OVModelForVisualCausalLM,
         "mistral3": OVModelForVisualCausalLM,
+        "ministral3": OVModelForVisualCausalLM,
         "flux.2-klein": OVFlux2KleinPipeline,
         "z-image": OVZImagePipeline,
         "qwen3_omni_moe": OVModelForMultimodalLM,
         "muse_glimmer": OVModelForVisualCausalLM,
         "deepseek_ocr2": OVModelForVisualCausalLM,
     }
+
+    if is_diffusers_version(">=", "0.41.0.dev0"):
+        SUPPORTED_ARCHITECTURES["qwenimage21"] = OVQwenImage21Pipeline
 
     # filter architectures depending on min/max transformers supported versions
     SUPPORTED_ARCHITECTURES = {
@@ -152,6 +163,9 @@ class ExportModelTest(unittest.TestCase):
             | get_supported_model_for_library("diffusers")
             | get_supported_model_for_library("funasr")
         )
+        # Qwen3-TTS is exported component by component through custom export configs rather than a
+        # task registry entry, so the registry lookup above cannot see it; it needs `qwen_tts`.
+        or (model_type == "qwen3_tts" and is_qwen_tts_available())
     }
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
@@ -160,6 +174,7 @@ class ExportModelTest(unittest.TestCase):
         "flux": {"text_encoder_2": "8.0", "transformer": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
         "flux.2-klein": {"transformer": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
         "z-image": {"text_encoder": "8.0", "transformer": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
+        "qwenimage21": {"text_encoder": "8.0", "transformer": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
         "stable-diffusion-xl-refiner": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
         "ltx-video": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
         "ltx2": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
@@ -214,6 +229,13 @@ class ExportModelTest(unittest.TestCase):
                 framework="pt",
                 library_name="kokoro",
             )
+        elif model_type == "qwen3_tts":
+            from optimum.intel.utils.modeling_utils import _Qwen3TTSForTextToSpeech
+
+            model = _Qwen3TTSForTextToSpeech.from_pretrained(model_name)
+            # The checkpoint is bfloat16 and the loader keeps that precision, so tracing needs the
+            # 16-bit patch that ``main_export`` would otherwise derive from the loaded model.
+            patch_16bit_model = True
         elif model_type == "qwen3_omni_moe":
             from transformers import AutoConfig, Qwen3OmniMoeForConditionalGeneration
 
@@ -241,6 +263,7 @@ class ExportModelTest(unittest.TestCase):
                     preprocessors=preprocessors,
                     stateful=stateful,
                     model_kwargs=model_kwargs,
+                    patch_16bit_model=patch_16bit_model,
                 )
 
                 # Models with a Multi-Token Prediction head export it as a separate submodel;
@@ -464,12 +487,10 @@ class LTX2ExportContractTest(unittest.TestCase):
             MODEL_NAMES[model_arch], export=True, compile=False, device=OPENVINO_DEVICE
         )
 
+        # Both versions pack in the graph: the per-layer layout drops the text tower's final norm on
+        # transformers >= 5, which corrupts the last of the stacked slots.
         text_encoder_outputs = {name for output in pipeline.text_encoder.model.outputs for name in output.names}
-        if is_ltx2_3:
-            self.assertEqual(text_encoder_outputs, {"prompt_embeds"})
-        else:
-            self.assertNotIn("prompt_embeds", text_encoder_outputs)
-            self.assertIn("hidden_states.0", text_encoder_outputs)
+        self.assertEqual(text_encoder_outputs, {"prompt_embeds"})
 
         # Read the transformer back from disk rather than taking it off the pipeline, so what is
         # pinned is what the export writes rather than whatever loading made of it.
@@ -481,25 +502,15 @@ class LTX2ExportContractTest(unittest.TestCase):
             ov.Type.f32 if is_ltx2_3 else ov.Type.i64,
         )
 
-    def test_text_encoder_pack_hidden_states(self):
-        # The 2.0 and 2.3 text encoder configs are identical, so this flag is the only thing keeping
-        # the two contracts apart. Its default has to stay the LTX-2.0 one.
+    def test_text_encoder_packs_hidden_states(self):
+        # One contract for both LTX-2 versions: nothing in the text encoder config tells them apart,
+        # and the per-layer layout the config used to offer loses the text tower's final norm on
+        # transformers >= 5.
         from transformers import Gemma3Config
 
-        config = Gemma3Config()
-
-        for export_config in [
-            LTX2TextEncoderOpenVINOConfig(config),
-            LTX2TextEncoderOpenVINOConfig(config, pack_hidden_states=False),
-        ]:
-            self.assertFalse(export_config.pack_hidden_states)
-            self.assertNotIn("prompt_embeds", export_config.outputs)
-            self.assertIn("hidden_states.0", export_config.outputs)
-            self.assertIs(export_config._select_text_encoder_patcher(), LTX2TextEncoderPatcher)
-
-        export_config = LTX2TextEncoderOpenVINOConfig(config, pack_hidden_states=True)
+        export_config = LTX2TextEncoderOpenVINOConfig(Gemma3Config())
         self.assertEqual(set(export_config.outputs), {"prompt_embeds"})
-        self.assertIs(export_config._select_text_encoder_patcher(), LTX2PackedTextEncoderPatcher)
+        self.assertIs(export_config._MODEL_PATCHER, LTX2TextEncoderPatcher)
 
 
 class CustomExportModelTest(unittest.TestCase):

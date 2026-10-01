@@ -519,7 +519,9 @@ def prepare_wc_config(args, default_configs):
         "dtype": args.weight_format,
         "backup_precision": args.backup_precision,
         "statistics_path": args.quantization_statistics_path,
-        "group_size_fallback": args.group_size_fallback,
+        "group_size_fallback": args.group_size_fallback
+        if args.group_size_fallback
+        else default_configs["group_size_fallback"],
     }
 
 
