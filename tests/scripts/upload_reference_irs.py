@@ -22,81 +22,9 @@ from tempfile import TemporaryDirectory
 
 import openvino
 import transformers
-from huggingface_hub import HfApi
+from huggingface_hub import CommitOperationAdd, CommitOperationDelete, HfApi
 
-from optimum.intel import (
-    OVDiffusionPipeline,
-    OVFlux2KleinPipeline,
-    OVFluxFillPipeline,
-    OVFluxPipeline,
-    OVLatentConsistencyModelPipeline,
-    OVLTX2Pipeline,
-    OVLTXPipeline,
-    OVModelForAudioClassification,
-    OVModelForCausalLM,
-    OVModelForFeatureExtraction,
-    OVModelForImageClassification,
-    OVModelForMaskedLM,
-    OVModelForMultimodalLM,
-    OVModelForPix2Struct,
-    OVModelForQuestionAnswering,
-    OVModelForSeq2SeqLM,
-    OVModelForSequenceClassification,
-    OVModelForSpeechSeq2Seq,
-    OVModelForTextToSpeechSeq2Seq,
-    OVModelForTokenClassification,
-    OVModelForVision2Seq,
-    OVModelForVisualCausalLM,
-    OVModelForZeroShotImageClassification,
-    OVModelOpenCLIPForZeroShotImageClassification,
-    OVQwenImage21Pipeline,
-    OVQwenImagePipeline,
-    OVSamModel,
-    OVSanaPipeline,
-    OVStableDiffusion3Pipeline,
-    OVStableDiffusionPipeline,
-    OVStableDiffusionXLImg2ImgPipeline,
-    OVStableDiffusionXLPipeline,
-    OVZImagePipeline,
-)
-
-
-# Exists only to give argparse a `choices` list; test_irs.py resolves class names via getattr.
-MODEL_CLASSES = {
-    "OVDiffusionPipeline": OVDiffusionPipeline,
-    "OVFlux2KleinPipeline": OVFlux2KleinPipeline,
-    "OVFluxFillPipeline": OVFluxFillPipeline,
-    "OVFluxPipeline": OVFluxPipeline,
-    "OVLatentConsistencyModelPipeline": OVLatentConsistencyModelPipeline,
-    "OVLTX2Pipeline": OVLTX2Pipeline,
-    "OVLTXPipeline": OVLTXPipeline,
-    "OVModelForAudioClassification": OVModelForAudioClassification,
-    "OVModelForCausalLM": OVModelForCausalLM,
-    "OVModelForFeatureExtraction": OVModelForFeatureExtraction,
-    "OVModelForImageClassification": OVModelForImageClassification,
-    "OVModelForMaskedLM": OVModelForMaskedLM,
-    "OVModelForMultimodalLM": OVModelForMultimodalLM,
-    "OVModelForPix2Struct": OVModelForPix2Struct,
-    "OVModelForQuestionAnswering": OVModelForQuestionAnswering,
-    "OVModelForSeq2SeqLM": OVModelForSeq2SeqLM,
-    "OVModelForSequenceClassification": OVModelForSequenceClassification,
-    "OVModelForSpeechSeq2Seq": OVModelForSpeechSeq2Seq,
-    "OVModelForTextToSpeechSeq2Seq": OVModelForTextToSpeechSeq2Seq,
-    "OVModelForTokenClassification": OVModelForTokenClassification,
-    "OVModelForVision2Seq": OVModelForVision2Seq,
-    "OVModelForVisualCausalLM": OVModelForVisualCausalLM,
-    "OVModelForZeroShotImageClassification": OVModelForZeroShotImageClassification,
-    "OVModelOpenCLIPForZeroShotImageClassification": OVModelOpenCLIPForZeroShotImageClassification,
-    "OVQwenImage21Pipeline": OVQwenImage21Pipeline,
-    "OVQwenImagePipeline": OVQwenImagePipeline,
-    "OVSamModel": OVSamModel,
-    "OVSanaPipeline": OVSanaPipeline,
-    "OVStableDiffusion3Pipeline": OVStableDiffusion3Pipeline,
-    "OVStableDiffusionPipeline": OVStableDiffusionPipeline,
-    "OVStableDiffusionXLImg2ImgPipeline": OVStableDiffusionXLImg2ImgPipeline,
-    "OVStableDiffusionXLPipeline": OVStableDiffusionXLPipeline,
-    "OVZImagePipeline": OVZImagePipeline,
-}
+import optimum.intel
 
 
 # Extra `from_pretrained` arguments some models need at export time. Must stay in sync with
@@ -106,6 +34,24 @@ EXPORT_KWARGS = {
     "optimum-intel-internal-testing/tiny-random-SpeechT5ForTextToSpeech": {"vocoder": "fxmarty/speecht5-hifigan-tiny"},
     "optimum-intel-internal-testing/tiny-stable-diffusion-torch-custom-variant": {"variant": "custom"},
 }
+
+
+def resolve_model_class(class_name):
+    """
+    The `optimum.intel` class called `class_name`.
+
+    Resolved by name, the way `resolve_model_class` in tests/openvino/test_irs.py does it, so the
+    set of exportable classes is whatever the installed optimum-intel provides. Listing them here
+    instead would be a second copy of `ARCH_TO_MODEL_CLASS` to keep in step, and importing them
+    eagerly would make one name this build does not ship break the script for every model.
+    """
+    model_class = getattr(optimum.intel, class_name, None)
+    if model_class is None:
+        raise SystemExit(
+            f"optimum.intel has no class named {class_name!r}. Pass the class the suite uses for "
+            f"this model (see ARCH_TO_MODEL_CLASS in tests/openvino/utils_tests.py)."
+        )
+    return model_class
 
 
 def get_version_info():
@@ -181,10 +127,15 @@ def upload_to_hub(model_id, export_dir, commit_message=None, create_pr=True):
     """
     Upload the cleaned export directory to the `ov` branch of `model_id`.
 
-    Opens a pull request by default. A reference IR is the thing the test trusts, so replacing one
-    is a reviewable decision: pushing straight to `ov` from an automated run would let the suite
-    rewrite its own expectations and go green on a genuine regression. Pass `create_pr=False` to
-    commit directly.
+    Opens a pull request based on `ov` by default. A reference IR is the thing the test trusts, so
+    replacing one is a reviewable decision: pushing straight to `ov` from an automated run would
+    let the suite rewrite its own expectations and go green on a genuine regression. Pass
+    `create_pr=False` to commit directly.
+
+    Built from explicit operations rather than `upload_folder`, which refuses `create_pr` together
+    with a non-default `revision`. That is a client-side restriction: the commit endpoint takes the
+    base revision in its path and `create_pr` as a query parameter, so `create_commit` can open a
+    pull request against `ov`.
     """
     api = HfApi()
 
@@ -206,27 +157,36 @@ def upload_to_hub(model_id, export_dir, commit_message=None, create_pr=True):
     except Exception:
         print("  'ov' branch already exists")
 
-    commit = api.upload_folder(
-        folder_path=str(export_dir),
+    new_files = sorted(p.relative_to(export_dir).as_posix() for p in export_dir.rglob("*") if p.is_file())
+    operations = [CommitOperationAdd(path_in_repo=name, path_or_fileobj=str(export_dir / name)) for name in new_files]
+
+    # Stand in for `upload_folder`'s `delete_patterns="*"`, which commits cannot express: a freshly
+    # created `ov` branch forks from `main` and carries its source weights, and a model whose
+    # component set shrank would otherwise keep orphan IRs that nothing compares against.
+    stale = set(api.list_repo_files(repo_id=model_id, revision="ov", repo_type="model"))
+    stale -= set(new_files) | {".gitattributes"}
+    operations += [CommitOperationDelete(path_in_repo=name) for name in sorted(stale)]
+
+    commit = api.create_commit(
         repo_id=model_id,
-        path_in_repo="",
-        commit_message=commit_message,
         repo_type="model",
         revision="ov",
+        operations=operations,
+        commit_message=commit_message,
         create_pr=create_pr,
-        delete_patterns="*",
     )
 
+    print(f"  {len(new_files)} files uploaded, {len(stale)} stale files removed")
     if create_pr:
-        print(f"✓ Opened PR against {model_id} (revision 'ov'): {commit.pr_url}")
+        print(f"✓ Opened PR against {model_id} (base 'ov'): {commit.pr_url}")
     else:
-        print(f"✓ Uploaded to {model_id} (revision 'ov')")
+        print(f"✓ Uploaded to {model_id} (revision 'ov'): {commit.commit_url}")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Export a model to OpenVINO IR and upload it as a test reference.")
     parser.add_argument("model_id", help="Hub model id, e.g. optimum-intel-internal-testing/tiny-random-gpt2")
-    parser.add_argument("model_class", choices=list(MODEL_CLASSES.keys()), help="optimum-intel class to export with")
+    parser.add_argument("model_class", help="optimum-intel class to export with, e.g. OVModelForCausalLM")
     parser.add_argument("--commit-message", help="Override the generated commit message")
     parser.add_argument("--no-upload", action="store_true", help="Export only, do not touch the Hub")
     parser.add_argument("--output-dir", type=Path, help="Where to write the export (requires --no-upload)")
@@ -240,7 +200,7 @@ def main():
     if args.output_dir and not args.no_upload:
         parser.error("--output-dir requires --no-upload")
 
-    model_class = MODEL_CLASSES[args.model_class]
+    model_class = resolve_model_class(args.model_class)
 
     if args.output_dir:
         export_dir = args.output_dir
