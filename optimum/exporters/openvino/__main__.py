@@ -594,7 +594,7 @@ def main_export(
             model = _KokoroForTextToSpeech.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
         elif library_name == "funasr":
             from optimum.intel.openvino.modeling_funasr import _FunASRForSpeechSeq2Seq
-            from optimum.intel.openvino.modeling_sensevoice import _SenseVoiceForCTC, _is_sensevoice_source
+            from optimum.intel.openvino.modeling_sensevoice import _is_sensevoice_source, _SenseVoiceForCTC
 
             if _is_sensevoice_source(
                 model_name_or_path, cache_dir=cache_dir, token=token, subfolder=subfolder, revision=revision

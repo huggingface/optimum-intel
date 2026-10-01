@@ -224,6 +224,7 @@ class ExportModelTest(unittest.TestCase):
             model = _FunASRForSpeechSeq2Seq.from_pretrained(model_name, **loading_kwargs)
         elif model_type == "sense_voice":
             from optimum.intel.openvino.modeling_sensevoice import _SenseVoiceForCTC
+
             model = _SenseVoiceForCTC.from_pretrained(model_name)
         elif model_type == "kokoro":
             model = TasksManager.get_model_from_task(

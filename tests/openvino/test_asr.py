@@ -69,10 +69,10 @@ class OVASRTest(unittest.TestCase):
             "input_features": ref["input_features"],
             **ref["gen_kwargs"],
         }
-        if 'decoder_input_ids' in ov_gen_kwargs:
+        if "decoder_input_ids" in ov_gen_kwargs:
             ov_gen_kwargs["decoder_input_ids"] = ref["decoder_input_ids"]
 
-        if 'speech_lengths' in ov_gen_kwargs:
+        if "speech_lengths" in ov_gen_kwargs:
             ov_gen_kwargs["speech_lengths"] = ref["speech_lengths"]
 
         if ref["attention_mask"] is not None:
@@ -82,7 +82,7 @@ class OVASRTest(unittest.TestCase):
         if hasattr(ov_generated_ids, "sequences"):
             ov_generated_ids = ov_generated_ids.sequences
 
-        if 'decoder_input_ids' in ov_gen_kwargs:
+        if "decoder_input_ids" in ov_gen_kwargs:
             prompt_len = ref["decoder_input_ids"].shape[1]
         else:
             prompt_len = None
@@ -219,15 +219,14 @@ class OVASRTest(unittest.TestCase):
     def _get_pt_reference_sense_voice(self):
         import io
         from contextlib import redirect_stderr, redirect_stdout
-        from funasr.utils.load_utils import extract_fbank
+
         from funasr import AutoModel
+        from funasr.utils.load_utils import extract_fbank
 
         model_id = MODEL_NAMES["sense_voice"]
         buf = io.StringIO()
         with redirect_stdout(buf), redirect_stderr(buf):
-            pt_model = AutoModel(
-                model=model_id, hub="hf", trust_remote_code=True, device="cpu", disable_update=True
-            )
+            pt_model = AutoModel(model=model_id, hub="hf", trust_remote_code=True, device="cpu", disable_update=True)
 
         audio_data, sample_rate = self._generate_audio_data()
         audio_tensor = torch.from_numpy(audio_data)
@@ -237,11 +236,7 @@ class OVASRTest(unittest.TestCase):
         with redirect_stdout(buf), redirect_stderr(buf):
             args = pt_model.kwargs
             args["data_type"] = "fbank"
-            pt_result = pt_model.model.inference(
-                speech,
-                speech_lengths,
-                **args
-            )
+            pt_result = pt_model.model.inference(speech, speech_lengths, **args)
         pt_text = pt_result[0][0]["text"]
 
         return {

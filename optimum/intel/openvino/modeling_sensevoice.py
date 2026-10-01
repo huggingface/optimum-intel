@@ -12,7 +12,6 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import json
 import logging
 import shutil
 from pathlib import Path
@@ -28,9 +27,10 @@ from transformers import PretrainedConfig
 from transformers.modeling_outputs import CausalLMOutput
 
 from ..utils.import_utils import is_funasr_available
+from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling import OVModel
+from .modeling_funasr import _apply_lfr, _read_funasr_config
 from .utils import OV_DETOKENIZER_NAME, OV_TOKENIZER_NAME, OV_XML_FILE_NAME
-from .modeling_funasr import _read_funasr_config, _apply_lfr
 
 
 logger = logging.getLogger(__name__)
@@ -75,9 +75,9 @@ class _SenseVoiceForCTC(torch.nn.Module):
         textnorm_query = self.embed(textnorm).unsqueeze(1)  # [B, 1, 560]
 
         speech = torch.cat((textnorm_query, input_features), dim=1)
-        event_emo_query = self.embed(
-            torch.tensor([[1, 2]], dtype=torch.long, device=input_features.device)
-        ).repeat(input_features.shape[0], 1, 1)  # [B, 2, 560]
+        event_emo_query = self.embed(torch.tensor([[1, 2]], dtype=torch.long, device=input_features.device)).repeat(
+            input_features.shape[0], 1, 1
+        )  # [B, 2, 560]
         input_query = torch.cat((language_query, event_emo_query), dim=1)  # [B, 3, 560]
         speech = torch.cat((input_query, speech), dim=1)  # order: [language, event, emo, textnorm, speech...]
 
@@ -128,6 +128,7 @@ class _SenseVoiceForCTC(torch.nn.Module):
         config.encoder_output_size = funasr_model.ctc.ctc_lo.in_features  # 512 (CTC head input dim)
         config.blank_id = int(getattr(funasr_model, "blank_id", 0))
         config.lid_dict = dict(funasr_model.lid_dict)
+        config.textnorm_dict = dict(funasr_model.textnorm_dict)
         config.textnorm_dict = dict(funasr_model.textnorm_dict)
 
         model = cls(funasr_model, config)
@@ -260,6 +261,13 @@ class _OVModelForSenseVoice(OVModel):
         self.detokenizer_request = None
         self._cmvn = None
         self.preprocessors = kwargs.get("preprocessors", [])
+        self._compile_only = kwargs.get("compile_only", False)
+        # Participate in the shared OVBaseModel quantization bookkeeping (set by `_apply_quantization`).
+        self._openvino_config = None
+        quantization_config = kwargs.get("quantization_config")
+        if quantization_config:
+            self._openvino_config = OVConfig(quantization_config=quantization_config)
+        self._set_ov_config_parameters()
         if compile:
             self.compile()
 
@@ -270,6 +278,10 @@ class _OVModelForSenseVoice(OVModel):
     @property
     def device(self) -> torch.device:
         return torch.device("cpu")
+
+    @property
+    def ov_models(self) -> Dict[str, "openvino.Model"]:
+        return {"model": self.model}
 
     def compile(self):
         core = Core()
@@ -398,15 +410,36 @@ class _OVModelForSenseVoice(OVModel):
         detokenizer_path = model_dir / OV_DETOKENIZER_NAME.format("")
         detokenizer_model = core.read_model(detokenizer_path) if detokenizer_path.is_file() else None
 
-        return cls(
+        load_in_8bit = kwargs.pop("load_in_8bit", None)
+        quantization_config = kwargs.pop("quantization_config", None)
+        quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
+        trust_remote_code = kwargs.pop("trust_remote_code", False)
+        compile_model = kwargs.get("compile", True)
+
+        ov_model = cls(
             model=model,
             config=config,
             model_save_dir=model_dir,
             detokenizer_model=detokenizer_model,
             device=kwargs.get("device", "CPU"),
             ov_config=kwargs.get("ov_config"),
-            compile=kwargs.get("compile", True),
+            compile=compile_model and not quantization_config,
+            compile_only=compile_only,
+            quantization_config=quantization_config,
         )
+
+        # Reuse the shared OVBaseModel weight-only quantization pipeline (NNCF via OVQuantizer).
+        if quantization_config is not None:
+            quantization_config = cls._resolve_default_quantization_config(str(model_id), quantization_config)
+            ov_model._apply_quantization(
+                quantization_config,
+                compile_only,
+                compile_model,
+                str(model_id),
+                trust_remote_code,
+            )
+
+        return ov_model
 
     @staticmethod
     def _resolve_model_dir(
@@ -554,8 +587,8 @@ class _OVModelForSenseVoice(OVModel):
             mat = _apply_cmvn(mat)
             feats.append(mat)
 
-        lid_dict = getattr(self.config, "lid_dict", {"auto": 0})
-        textnorm_dict = getattr(self.config, "textnorm_dict", {"withitn": 14, "woitn": 15})
+        lid_dict = self.config.lid_dict
+        textnorm_dict = self.config.textnorm_dict
         language_id = lid_dict.get(language, 0)
         textnorm_id = textnorm_dict["withitn"] if use_itn else textnorm_dict["woitn"]
 
@@ -594,7 +627,9 @@ class _OVModelForSenseVoice(OVModel):
 
     def generate(
         self,
-        waveforms: Union[np.ndarray, torch.Tensor, List],
+        waveforms: Union[np.ndarray, torch.Tensor, List] = None,
+        input_features: Union[np.ndarray, torch.Tensor, List] = None,
+        speech_lengths: Union[np.ndarray, torch.Tensor, List] = None,
         sampling_rate: int = 16000,
         language: str = "auto",
         use_itn: bool = False,
@@ -605,8 +640,27 @@ class _OVModelForSenseVoice(OVModel):
         Multiple waveforms are zero-padded into a single batch and run through the model in one forward; each
         sample is then CTC-decoded using its own valid encoder-output length so the padding is ignored.
         """
-        inputs = self.preprocess_input(waveforms, sampling_rate, language=language, use_itn=use_itn)
-        outputs, encoder_out_lens = self.forward(**inputs)
+        assert (
+            input_features is not None or waveforms is not None
+        ), "Either input_features or waveform must be specified."
+        if waveforms is not None:
+            inputs = self.preprocess_input(waveforms, sampling_rate, language=language, use_itn=use_itn)
+            outputs, encoder_out_lens = self.forward(**inputs)
+        else:
+            lid_dict = self.config.lid_dict
+            textnorm_dict = self.config.textnorm_dict
+            language_id = lid_dict.get(language, 0)
+            textnorm_id = textnorm_dict["withitn"] if use_itn else textnorm_dict["woitn"]
+
+            if speech_lengths is None:
+                speech_lengths = torch.tensor([f.shape[0] for f in input_features], dtype=torch.int32)
+
+            language = torch.full((input_features.shape[0],), language_id, dtype=torch.long)
+            textnorm = torch.full((input_features.shape[0],), textnorm_id, dtype=torch.long)
+            outputs, encoder_out_lens = self.forward(
+                input_features=input_features, speech_lengths=speech_lengths, language=language, textnorm=textnorm
+            )
+
         logits = outputs.logits
 
         results = []

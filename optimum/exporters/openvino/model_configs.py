@@ -94,7 +94,6 @@ from optimum.exporters.openvino.input_generators import (
     FunASRDummyAudioInputGenerator,
     Gemma4DummyPastKeyValuesGenerator,
     GPTBigCodeDummyPastKeyValuesGenerator,
-    SenseVoiceDummyInputGenerator,
     Lfm2DummyPastKeyValuesGenerator,
     LTX2AudioVaeDecoderDummyInputGenerator,
     LTX2ConnectorsDummyInputGenerator,
@@ -113,6 +112,7 @@ from optimum.exporters.openvino.input_generators import (
     Qwen3NextDummyPastKeyValuesGenerator,
     QwenDummyPastKeyValuesGenerator,
     QwenImage21VaeDummyInputGenerator,
+    SenseVoiceDummyInputGenerator,
     Zamba2DummyPastKeyValuesGenerator,
 )
 from optimum.exporters.openvino.model_patcher import (

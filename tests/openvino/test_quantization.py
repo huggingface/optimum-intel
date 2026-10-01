@@ -1504,13 +1504,6 @@ class OVWeightCompressionTest(unittest.TestCase):
             trust_remote_code=trust_remote_code,
         )
 
-        # SenseVoice is a single-graph funasr CTC model that does not carry the standard OVConfig/OVQuantizer
-        # metadata, so only assert that its weights were actually compressed to int8.
-        # if model_type == "sense_voice":
-        #     _, num_weight_nodes = get_num_quantized_nodes(model.model)
-        #     self.assertGreater(num_weight_nodes["int8"], 0)
-        #     return
-
         ref_config = OVWeightQuantizationConfig(bits=8, sym=isinstance(model, OVModelForVisualCausalLM)).to_dict()
 
         if model_type == "open-clip":

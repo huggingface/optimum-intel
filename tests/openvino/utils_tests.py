@@ -772,6 +772,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "decoder": 30,
         "decoder_with_past": 30,
     },
+    "sense_voice": {"model": 34},
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
