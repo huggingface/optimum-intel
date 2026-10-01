@@ -110,7 +110,6 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
         "compile": [
             "ConvertMatMulToFC",
             "ConvertToCPUSpecificOpset",
-            "ConvertToPowerStatic",
             "ConvertToSwishCPU",
             "Snippets",
             "Tokenization",
@@ -338,6 +337,33 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "CausalMaskPreprocessFusion",
             "ConvertSoftMax8ToSoftMax1",
             "ConvertScatterElementsUpdate12ToScatterElementsUpdate3",
+            "ConvertBroadcast3",
+            "ConvertMatMulToFC",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+        ],
+    },
+    "ministral3": {
+        # ministral3 is the text-decoder config used inside Mistral3ForConditionalGeneration, so it
+        # is loaded through the VLM class even though the checked transformations are all in its
+        # decoder submodel (dense Mistral attention/RoPE/RMSNorm, no MoE routing).
+        "model_class": "OVModelForVisualCausalLM",
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+            "DecompressionHandling",
+        ],
+        "compile": [
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "CommonDecompositions",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "RMSFusion",
+            "MultiplyFusions",
+            "ConvertSoftMax8ToSoftMax1",
             "ConvertBroadcast3",
             "ConvertMatMulToFC",
             "ConvertToPowerStatic",
