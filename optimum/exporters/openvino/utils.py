@@ -467,6 +467,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "internvl_chat",
     "maira2",
     "minicpmv",
+    "minicpmv4_7",
     "phi3_v",
     "qwen2_vl",
     "qwen2_5_vl",
@@ -780,7 +781,32 @@ def load_preprocessors(
             )
         except Exception:
             pass
+    if model_type == "minicpmv4_7":
+        # The checkpoint processor configs point at remote code and transformers has no AutoProcessor mapping for
+        # minicpmv4_7, so the processor is not saved otherwise. Assemble it from the native classes (MiniCPM-V 4.7
+        # reuses the 4.6 image and video processors), so the exported model can be loaded with AutoProcessor.
+        try:
+            preprocessors.append(load_minicpmv4_7_processor(src_name_or_path, subfolder=subfolder))
+        except Exception as ex:
+            logger.warning(f"MiniCPM-V 4.7 processor could not be loaded from {src_name_or_path}: {ex}")
     return preprocessors
+
+
+def load_minicpmv4_7_processor(model_name_or_path: Union[str, Path], subfolder: str = ""):
+    from transformers import (
+        AutoTokenizer,
+        MiniCPMV4_6ImageProcessor,
+        MiniCPMV4_6VideoProcessor,
+        MiniCPMV4_7Processor,
+    )
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, subfolder=subfolder)
+    return MiniCPMV4_7Processor(
+        image_processor=MiniCPMV4_6ImageProcessor.from_pretrained(model_name_or_path, subfolder=subfolder),
+        video_processor=MiniCPMV4_6VideoProcessor.from_pretrained(model_name_or_path, subfolder=subfolder),
+        tokenizer=tokenizer,
+        chat_template=tokenizer.chat_template,
+    )
 
 
 def patch_qwenvl_configs():
