@@ -403,6 +403,7 @@ class _OVModelForSenseVoice(OVModel):
         **kwargs,
     ):
         import openvino_tokenizers  # noqa: F401  — registers the SentencePiece ops extension
+
         model_dir = cls._resolve_model_dir(
             model_id,
             token=token,
