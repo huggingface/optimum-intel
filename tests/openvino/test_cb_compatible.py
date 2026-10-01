@@ -31,6 +31,10 @@ from optimum.intel.utils.import_utils import is_qwen_tts_available
 # are checked: submodels without a key/value cache - encoders, embedding tables, a codec - have no
 # state to page, and the transformation rejects them by design.
 ARCH_TO_CB_COMPATIBLE_SUBMODELS = {
+    "hunyuan_v1_dense": {
+        "task": "text-generation-with-past",
+        "submodels": ("model",),
+    },
     "ministral3": {
         "task": "image-text-to-text",
         "submodels": ("language_model",),
