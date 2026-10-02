@@ -127,11 +127,12 @@ def _set_runtime_options(
             or getattr(sub_export_config, "stateful", False)
         ):
             sub_export_config.runtime_options["KV_CACHE_PRECISION"] = "f16"
-        # The gemma4_unified vision embedder produces activations large enough to overflow in
+        # Gemma vision embedders produce activations large enough to overflow in
         # fp16, so scale them down at runtime the same way the language model does.
         if (
             model_name == "vision_embeddings_model"
-            and getattr(getattr(sub_export_config, "_orig_config", None), "model_type", None) == "gemma4_unified"
+            and getattr(getattr(sub_export_config, "_orig_config", None), "model_type", None)
+            in {"gemma3n", "gemma4_unified"}
         ):
             sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "8.0"
 
