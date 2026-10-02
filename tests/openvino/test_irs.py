@@ -1,0 +1,488 @@
+"""
+Test OpenVINO IR (Intermediate Representation) stability.
+
+Each model is exported fresh and compared op by op against a reference IR on the `ov` branch of
+the same Hub repo. Drift in any part of the stack fails the test — transformers, optimum-intel,
+or OpenVINO itself, since its frontend translates the PyTorch ops.
+
+To add a model: map the arch in `HUB_MODEL_NAMES` and `ARCH_TO_MODEL_CLASS` (both in
+`utils_tests.py`; an unmapped arch is silently skipped, not an error) and add any export kwargs to
+`_EXTRA_EXPORT_KWARGS_BY_ARCH` here. Archs outside their export config's
+MIN/MAX_TRANSFORMERS_VERSION are dropped automatically, and models needing `trust_remote_code` are
+excluded and must not be uploaded.
+
+Reference IRs are generated with `tests/scripts/batch_upload_irs.py --missing-only` after adding a
+model, or `tests/scripts/upload_reference_irs.py <model_id> <model_class>` for a single one after a
+deliberate IR change. Both take the model list from this file, keep only the `.xml`/`.bin` plus a
+`metadata.json` version stamp (printed in the failure message, to date a stale reference), and
+delete anything else already on `ov` — the branch forks from `main`, so otherwise the source
+weights stay alongside the IRs. They open a pull request per model by default, so a reference is
+never replaced without review: the reference IR is the assertion, and rewriting it silently would
+go green over a real regression.
+
+Their `EXPORT_KWARGS` mirrors `_EXTRA_EXPORT_KWARGS_BY_ARCH` keyed by model id and has to be
+updated alongside it; a reference exported with different arguments cannot match what this test
+produces.
+"""
+
+import json
+import os
+
+# Import test utilities to get model mappings
+import sys
+import time
+from pathlib import Path
+from pathlib import Path as PathlibPath
+from typing import Dict, List, Optional
+
+import pytest
+from huggingface_hub import HfApi, snapshot_download
+from huggingface_hub.errors import HFValidationError, RepositoryNotFoundError, RevisionNotFoundError
+from openvino import Core, Model
+
+import optimum.intel
+
+
+# Add tests/openvino to path to import utils_tests
+sys.path.insert(0, str(PathlibPath(__file__).parent))
+from utils_tests import (
+    ARCH_TO_MODEL_CLASS,
+    HUB_MODEL_NAMES,
+    REMOTE_CODE_MODELS,
+    TEST_NAME_TO_MODEL_TYPE,
+    is_model_type_transformers_compatible,
+)
+
+
+def resolve_model_class(class_name):
+    """The `optimum.intel` class called `class_name`, or None if this build does not export it."""
+    return getattr(optimum.intel, class_name, None)
+
+
+def is_version_compatible(arch):
+    """
+    Whether the installed transformers is within the export config's MIN/MAX_TRANSFORMERS_VERSION.
+
+    Reading the bounds off the export config keeps this in step with `model_configs.py`: raising a
+    ceiling there brings the model back into the suite on its own, where a hard-coded skip list
+    would leave it excluded forever.
+
+    Archs with no export config under either library are kept. Many fixtures are named after a
+    pipeline or a task rather than a model type (`stable-diffusion-xl-refiner`, `st-bert`), so an
+    unrecognised name means the bounds are unknown, not that the model is unsupported.
+    """
+    model_type = TEST_NAME_TO_MODEL_TYPE.get(arch, arch)
+    for library in ("transformers", "diffusers"):
+        try:
+            return is_model_type_transformers_compatible(model_type, library)
+        except KeyError:
+            continue
+    return True
+
+
+# Extra `from_pretrained` arguments needed at export time by some models, keyed by architecture.
+# The reference IRs on the `ov` branch are generated with the exact same arguments, so any change
+# here must be mirrored by regenerating the affected references.
+_EXTRA_EXPORT_KWARGS_BY_ARCH = {
+    # SpeechT5 is a text-to-speech model whose export needs an explicit vocoder. For text-to-audio
+    # models the remaining `from_pretrained` kwargs are forwarded to `main_export` as `model_kwargs`.
+    "speecht5": {"vocoder": "fxmarty/speecht5-hifigan-tiny"},
+    # This fixture only ships weights under a non-default variant.
+    "stable-diffusion-with-custom-variant": {"variant": "custom"},
+}
+
+EXPORT_KWARGS = {
+    HUB_MODEL_NAMES[arch]: kwargs for arch, kwargs in _EXTRA_EXPORT_KWARGS_BY_ARCH.items() if arch in HUB_MODEL_NAMES
+}
+
+
+# Generate test parameters: (model_id, model_class) for all models that don't need trust_remote_code
+def _generate_test_params():
+    """Generate test parameters from utils_tests mappings and test_export mappings."""
+    params = []
+    for arch, model_id in HUB_MODEL_NAMES.items():
+        # Skip models that need trust_remote_code
+        if arch in REMOTE_CODE_MODELS:
+            continue
+
+        if arch in {  # seq2seq models' IRs differ for every run
+            "bigbird_pegasus",
+            "blenderbot-small",
+            "longt5",
+            "m2m_100",
+            "mbart",
+            "t5",
+        }:
+            continue
+
+        if not is_version_compatible(arch):
+            continue
+
+        # Skip if no mapping found or class not available
+        class_name = ARCH_TO_MODEL_CLASS.get(arch)
+        model_class = resolve_model_class(class_name) if class_name else None
+        if model_class is None:
+            continue
+
+        params.append((model_id, model_class))
+    return params
+
+
+TEST_MODELS = _generate_test_params()
+
+
+# OpenVINO model comparison functions
+# Adapted from: https://github.com/openvinotoolkit/openvino/blob/master/src/bindings/python/tests/utils/helpers.py
+def _compare_models(model_one: Model, model_two: Model, compare_names: bool = True) -> tuple[bool, str]:
+    """Function to compare OpenVINO model (ops names, types and shapes).
+
+    Note that the functions uses get_ordered_ops, so the topological order of ops should be also preserved.
+
+    :param model_one: The first model to compare.
+    :param model_two: The second model to compare.
+    :param compare_names: Flag to control friendly names checking. Default: True
+    :return: tuple which consists of bool value (True if models are equal, otherwise False)
+             and string with the message to reuse for debug/testing purposes. The string value
+             is empty when models are equal.
+    """
+    result = True
+    msg = ""
+
+    # Check friendly names of models
+    if compare_names and model_one.get_friendly_name() != model_two.get_friendly_name():
+        result = False
+        msg += "Friendly names of models are not equal "
+        msg += f"model_one: {model_one.get_friendly_name()}, model_two: {model_two.get_friendly_name()}.\n"
+
+    model_one_ops = model_one.get_ordered_ops()
+    model_two_ops = model_two.get_ordered_ops()
+
+    # Check overall number of operators
+    if len(model_one_ops) != len(model_two_ops):
+        result = False
+        msg += "Not equal number of ops "
+        msg += f"model_one: {len(model_one_ops)}, model_two: {len(model_two_ops)}.\n"
+
+    # Only compare ops that exist in both models
+    for i in range(min(len(model_one_ops), len(model_two_ops))):
+        op_one_name = model_one_ops[i].get_friendly_name()  # op from model_one
+        op_two_name = model_two_ops[i].get_friendly_name()  # op from model_two
+        # Check friendly names
+        if compare_names and op_one_name != op_two_name and model_one_ops[i].get_type_name() != "Constant":
+            result = False
+            msg += "Not equal op names "
+            msg += f"model_one: {op_one_name}, "
+            msg += f"model_two: {op_two_name}.\n"
+        # Check output sizes
+        if model_one_ops[i].get_output_size() != model_two_ops[i].get_output_size():
+            result = False
+            msg += f"Not equal output sizes of {op_one_name} and {op_two_name}.\n"
+        # Only compare outputs that exist in both ops
+        for idx in range(min(model_one_ops[i].get_output_size(), model_two_ops[i].get_output_size())):
+            # Check partial shapes of outputs
+            op_one_partial_shape = model_one_ops[i].get_output_partial_shape(idx)
+            op_two_partial_shape = model_two_ops[i].get_output_partial_shape(idx)
+            if op_one_partial_shape != op_two_partial_shape:
+                result = False
+                msg += f"Not equal op partial shapes of {op_one_name} and {op_two_name} on {idx} index "
+                msg += f"model_one: {op_one_partial_shape}, "
+                msg += f"model_two: {op_two_partial_shape}.\n"
+            # Check element types of outputs
+            op_one_element_type = model_one_ops[i].get_output_element_type(idx)
+            op_two_element_type = model_two_ops[i].get_output_element_type(idx)
+            if op_one_element_type != op_two_element_type:
+                result = False
+                msg += f"Not equal output element types of {op_one_name} and {op_two_name} on {idx} index "
+                msg += f"model_one: {op_one_element_type}, "
+                msg += f"model_two: {op_two_element_type}.\n"
+
+    return result, msg
+
+
+def compare_models(model_one: Model, model_two: Model, compare_names: bool = True):
+    """Function to compare OpenVINO model (ops names, types and shapes).
+
+    :param model_one: The first model to compare.
+    :param model_two: The second model to compare.
+    :param compare_names: Flag to control friendly names checking. Default: True
+    :return: True if models are equal, otherwise raise an error with a report of mismatches.
+    """
+    result, msg = _compare_models(model_one, model_two, compare_names=compare_names)
+
+    if not result:
+        raise RuntimeError(msg)
+
+    return result
+
+
+DOWNLOAD_ATTEMPTS = 4
+DOWNLOAD_BACKOFF = 5  # seconds, doubled after every failed attempt
+
+
+def download_reference_ir(model_id: str) -> Optional[Path]:
+    """
+    Fetch the reference IRs from a model's `ov` branch.
+
+    Returns None when the model is not on the Hub at all, which is the only legitimate reason to
+    skip it. Everything else (429, 5xx, timeouts) is retried and then raised: a flaky Hub must not
+    silently turn this suite into a green no-op.
+    """
+    # Some fixtures are generated on the fly into a local directory (see `_create_tiny_kokoro_model`
+    # in utils_tests.py), so their "model id" is a filesystem path with no Hub reference behind it.
+    if os.path.isdir(model_id):
+        return None
+
+    delay = DOWNLOAD_BACKOFF
+    last_error = None
+
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        try:
+            return Path(snapshot_download(repo_id=model_id, revision="ov", repo_type="model"))
+        except (RepositoryNotFoundError, RevisionNotFoundError, HFValidationError):
+            return None
+        except Exception as error:
+            last_error = error
+            if attempt < DOWNLOAD_ATTEMPTS:
+                print(
+                    f"[IR-DEBUG] {model_id}: reference download attempt {attempt}/{DOWNLOAD_ATTEMPTS} "
+                    f"failed ({type(error).__name__}: {error}), retrying in {delay}s"
+                )
+                time.sleep(delay)
+                delay *= 2
+
+    raise RuntimeError(
+        f"Failed to download reference IRs from {model_id} (ov branch) after {DOWNLOAD_ATTEMPTS} "
+        f"attempts. The revision exists, so this is a transport/rate-limit problem rather than a "
+        f"missing reference: {type(last_error).__name__}: {last_error}"
+    ) from last_error
+
+
+# Models actually compared against their reference, and models whose reference does not exist at
+# all. `enforce_ir_coverage` uses both to make sure the suite cannot pass while silently skipping.
+COMPARED_MODELS = set()
+MODELS_WITHOUT_REFERENCE = set()
+MIN_COVERAGE_RATIO = 0.9
+
+
+@pytest.fixture(scope="session", autouse=True)
+def verify_hub_access():
+    """
+    Fail the session up front if the Hub is unreachable or the token is rejected.
+
+    Without this the suite degrades silently: `huggingface_hub` raises `RepositoryNotFoundError`
+    for 401 as well as for a genuinely absent repo, so a revoked or expired token would send every
+    model down the "no reference" path and report a fully green run that compared nothing.
+    """
+    probe = HUB_MODEL_NAMES.get("bert")
+    if probe is None or os.path.isdir(probe):
+        return
+
+    try:
+        HfApi().repo_info(repo_id=probe, repo_type="model")
+    except Exception as error:
+        raise AssertionError(
+            f"Cannot read {probe} from the Hub ({type(error).__name__}: {error}). Every model would "
+            f"be reported as having no reference, so the suite is aborted instead of passing "
+            f"vacuously. Check network access and the HF token."
+        ) from error
+
+
+@pytest.fixture(scope="session", autouse=True)
+def enforce_ir_coverage(request):
+    """Fail the session if too few of the selected models were really compared."""
+    yield
+
+    selected = {
+        item.callspec.params["model_id"]
+        for item in request.session.items
+        if "test_ir_stability" in item.nodeid and hasattr(item, "callspec")
+    }
+    comparable = selected - MODELS_WITHOUT_REFERENCE
+    compared = selected & COMPARED_MODELS
+
+    # Not "nothing to check": every selected model lost its reference at once, which points at the
+    # suite's plumbing rather than at the models.
+    if selected and not comparable:
+        raise AssertionError(
+            f"None of the {len(selected)} selected models had a reference IR. That is a suite-wide "
+            f"failure (Hub access, or the `ov` revisions having moved), not {len(selected)} "
+            f"independent skips."
+        )
+
+    if not comparable:
+        return
+
+    print(
+        f"[IR-DEBUG] coverage: compared {len(compared)}/{len(comparable)} models that have an `ov` "
+        f"reference ({len(selected & MODELS_WITHOUT_REFERENCE)} of {len(selected)} selected models "
+        f"have none)"
+    )
+
+    if len(compared) < MIN_COVERAGE_RATIO * len(comparable):
+        missing = sorted(comparable - compared)
+        raise AssertionError(
+            f"Only {len(compared)}/{len(comparable)} models with an `ov` reference were compared, "
+            f"below the {MIN_COVERAGE_RATIO:.0%} floor. IR drift in the models below went "
+            f"unchecked, so this run proves nothing:\n  " + "\n  ".join(missing)
+        )
+
+
+def load_reference_metadata(ref_dir: Path) -> Optional[Dict]:
+    """Load metadata about reference IR generation."""
+    metadata_path = ref_dir / "metadata.json"
+    if metadata_path.exists():
+        with open(metadata_path) as f:
+            return json.load(f)
+    return None
+
+
+# Tokenizer IRs are produced by openvino-tokenizers rather than by the model export, so they are
+# not part of what this suite guards and are not present in the references.
+NON_MODEL_IR_STEMS = ("openvino_tokenizer", "openvino_detokenizer")
+
+
+def find_ir_files(directory: Path) -> List[Path]:
+    """
+    Find all OpenVINO IR XML files in directory and subdirectories.
+    Handles standard naming (openvino_model.xml), component naming with a `_model` suffix
+    (openvino_language_model.xml, openvino_vision_embeddings_model.xml, ...) and component naming
+    without one (openvino_vision_encoder.xml for SAM, openvino_model_text.xml for OpenCLIP).
+    Returns list of paths relative to the directory.
+    """
+    ir_files = []
+    for xml_file in directory.rglob("openvino*.xml"):
+        if xml_file.stem not in NON_MODEL_IR_STEMS:
+            # Get relative path from directory
+            rel_path = xml_file.relative_to(directory)
+            ir_files.append(rel_path)
+    return sorted(ir_files)
+
+
+class TestIRStability:
+    """Test suite for IR stability across transformers versions."""
+
+    @pytest.mark.parametrize(
+        "model_id,model_class",
+        TEST_MODELS,
+    )
+    def test_ir_stability(self, model_id: str, model_class, tmp_path: Path):
+        """Test that exported IR matches reference IR."""
+
+        # Download reference IRs from HuggingFace (ov branch)
+        ref_ir_dir = download_reference_ir(model_id)
+
+        if ref_ir_dir is None:
+            MODELS_WITHOUT_REFERENCE.add(model_id)
+            pytest.skip(f"No reference IRs for {model_id}: not on the Hub, or no `ov` revision")
+
+        if not ref_ir_dir.exists():
+            pytest.fail(f"Reference IRs for {model_id} downloaded to {ref_ir_dir}, which does not exist")
+
+        # Load reference metadata
+        ref_metadata = load_reference_metadata(ref_ir_dir)
+
+        if ref_metadata:
+            print(
+                f"[IR-DEBUG] {model_id}: reference IR generated with "
+                f"transformers={ref_metadata.get('transformers_version', 'unknown')}, "
+                f"optimum-intel={ref_metadata.get('optimum_intel_version', 'unknown')}, "
+                f"openvino={ref_metadata.get('openvino_version', 'unknown')}, "
+                f"date={ref_metadata.get('generated_date', 'unknown')}"
+            )
+        else:
+            print(f"[IR-DEBUG] {model_id}: no reference metadata.json found in {ref_ir_dir}")
+
+        # Find all IR files (handles both single models and multi-component pipelines)
+        ref_ir_files = find_ir_files(ref_ir_dir)
+
+        # The download succeeded, so the `ov` revision exists. A revision holding no IR at all is a
+        # broken reference rather than a missing one, and skipping would hide it indefinitely.
+        if not ref_ir_files:
+            pytest.fail(
+                f"The `ov` revision of {model_id} contains no OpenVINO IR. Regenerate its reference "
+                f"with tests/scripts/upload_reference_irs.py."
+            )
+
+        # Export new IR
+        model = model_class.from_pretrained(model_id, export=True, **EXPORT_KWARGS.get(model_id, {}))
+        new_ir_dir = tmp_path / "new_ir"
+        model.save_pretrained(new_ir_dir)
+
+        # Find IR files in new export
+        new_ir_files = find_ir_files(new_ir_dir)
+
+        # Check that same components exist
+        ref_components = {str(f.parent) for f in ref_ir_files}
+        new_components = {str(f.parent) for f in new_ir_files}
+
+        if ref_components != new_components:
+            missing = ref_components - new_components
+            extra = new_components - ref_components
+            pytest.fail(
+                f"Component mismatch for {model_id}:\n"
+                f"  Missing components: {missing or 'none'}\n"
+                f"  Extra components: {extra or 'none'}"
+            )
+
+        # The loop below reads each reference file's counterpart by name, so a renamed or dropped
+        # component has to be reported here rather than surfacing as a read_model error.
+        missing_files = sorted(str(f) for f in set(ref_ir_files) - set(new_ir_files))
+        if missing_files:
+            pytest.fail(
+                f"IR files present in the reference but missing from the new export for {model_id}:\n  "
+                + "\n  ".join(missing_files)
+            )
+
+        COMPARED_MODELS.add(model_id)
+
+        # Initialize OpenVINO Core for loading models
+        core = Core()
+
+        # Compare each component's IR using OpenVINO's compare_models
+        all_differences = {}
+        for ref_ir_file in ref_ir_files:
+            # Keyed by the full relative path: models such as SAM keep several components side by
+            # side at the root, and keying by directory alone would let one overwrite the other.
+            component_name = str(ref_ir_file)
+
+            ref_ir_path = ref_ir_dir / ref_ir_file
+            new_ir_path = new_ir_dir / ref_ir_file
+
+            # Load both models using OpenVINO Core
+            ref_model = core.read_model(str(ref_ir_path))
+            new_model = core.read_model(str(new_ir_path))
+
+            # Compare models (compare_names=False to ignore auto-generated friendly names)
+            try:
+                compare_models(ref_model, new_model, compare_names=False)
+            except RuntimeError as e:
+                # Model comparison failed - store the error message
+                all_differences[component_name] = str(e).strip().split("\n")
+
+        # Report all differences
+        if all_differences:
+            diff_lines = []
+            for component, diffs in all_differences.items():
+                diff_lines.append(f"\n[{component}]")
+                for diff in diffs:
+                    diff_lines.append(f"  {diff}")
+
+            diff_msg = "\n".join(diff_lines)
+
+            # Add metadata info to failure message
+            metadata_info = ""
+            if ref_metadata:
+                metadata_info = (
+                    f"\nReference IR was generated with:\n"
+                    f"  - transformers: {ref_metadata.get('transformers_version', 'unknown')}\n"
+                    f"  - optimum-intel: {ref_metadata.get('optimum_intel_version', 'unknown')}\n"
+                    f"  - openvino: {ref_metadata.get('openvino_version', 'unknown')}\n"
+                    f"  - date: {ref_metadata.get('generated_date', 'unknown')}\n"
+                )
+
+            pytest.fail(
+                f"IR structure has changed for {model_id}:{diff_msg}\n"
+                f"{metadata_info}\n"
+                f"This may indicate a regression or improvement in IR generation. "
+                f"Review the changes and update reference IRs if the change is intentional."
+            )
