@@ -47,8 +47,8 @@ def resolve_model_class(class_name):
     """
     model_class = getattr(optimum.intel, class_name, None)
     if model_class is None:
-        raise SystemExit(
-            f"optimum.intel has no class named {class_name!r}. Pass the class the suite uses for "
+        raise ValueError(
+            f"optimum.intel has no class named {class_name}. Pass the class the suite uses for "
             f"this model (see ARCH_TO_MODEL_CLASS in tests/openvino/utils_tests.py)."
         )
     return model_class
