@@ -435,7 +435,11 @@ class VLMPipelineTestCase(unittest.TestCase):
                 output=self.temp_dir,
                 ov_config=export_ov_config,
             )
-            genai_model = VLMPipeline(self.temp_dir, device=OPENVINO_DEVICE, **TEST_CONFIG)
+            genai_config = dict(TEST_CONFIG)
+            if model_arch == "muse_glimmer":
+                genai_config["ATTENTION_BACKEND"] = "SDPA"
+                genai_config["KV_CACHE_PRECISION"] = "f32"
+            genai_model = VLMPipeline(self.temp_dir, device=OPENVINO_DEVICE, **genai_config)
 
             image = self.IMAGE
             prompt = "A photo of a cat sitting on a"
@@ -490,6 +494,7 @@ class VLMPipelineTestCase(unittest.TestCase):
                 apply_chat_template=apply_chat_template,
                 **self.GEN_KWARGS,
             ).texts[0]
+            genai_output = genai_output.strip()
         finally:
             # Release on failure too: a failing test's traceback keeps its frame locals alive for the
             # rest of the session, which would leave OpenVINO objects (and their file handles) around.

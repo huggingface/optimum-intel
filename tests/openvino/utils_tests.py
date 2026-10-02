@@ -437,9 +437,10 @@ DFLASH_VLM_MODELS = {
 
 # VLM-based Eagle3 draft models (AngelSlim Eagle3LlamaForCausalLM architecture).
 # These use Qwen3-VL MRoPE and target VLM models for speculative decoding.
-EAGLE3_VLM_MODELS = {
-    "qwen3_vl_eagle3": ("qwen3_vl_eagle3", "qwen3_vl_eagle3_target"),
-}
+EAGLE3_VLM_MODELS = {}
+# VLM Eagle3 export is only supported up to transformers 4.57.6
+if is_transformers_version("<=", "4.57.6"):
+    EAGLE3_VLM_MODELS["qwen3_vl_eagle3"] = ("qwen3_vl_eagle3", "qwen3_vl_eagle3_target")
 
 # MTP (Multi-Token Prediction) VLM models: the MTP head is exported inside the model itself
 # (openvino_mtp_model.xml), so the draft and target are the same model directory.
@@ -457,7 +458,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "blenderbot": {"model": 70 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 72},
     "cohere2": {"model": 32},
     "gpt2": {"model": 44},
-    "granitemoehybrid": {"model": 118},
+    "granitemoehybrid": {"model": 70 if is_transformers_version(">=", "5.13") else 118},
     "wav2vec2": {"model": 34},
     "distilbert": {"model": 66},
     "t5": {
