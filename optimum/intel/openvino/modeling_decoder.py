@@ -52,6 +52,12 @@ from .configuration import (
     OVQuantizationConfigBase,
     OVWeightQuantizationConfig,
 )
+from .generation_guard import (
+    OVGuard,
+    OVGuardConfig,
+    OVGuardedStreamer,
+    OVGuardStoppingCriteria,
+)
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import (
     ONNX_WEIGHTS_NAME,
@@ -768,6 +774,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         streamer: Optional["BaseStreamer"] = None,
         negative_prompt_ids: Optional[torch.Tensor] = None,
         negative_prompt_attention_mask: Optional[torch.Tensor] = None,
+        guard: Optional[Union["OVGuard", "PreTrainedModel"]] = None,
+        guard_config: Optional[OVGuardConfig] = None,
         **kwargs,
     ) -> Union[GenerateOutput, torch.LongTensor]:
         _generation_config, _ = self._prepare_generation_config(generation_config, **kwargs)
@@ -781,19 +789,47 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         ]
         if is_beam_search:
             self._first_iter_beam_search = True
-        result = super().generate(
-            inputs,
-            generation_config,
-            logits_processor,
-            stopping_criteria,
-            prefix_allowed_tokens_fn,
-            synced_gpus,
-            assistant_model,
-            streamer,
-            negative_prompt_ids,
-            negative_prompt_attention_mask,
-            **kwargs,
-        )
+
+        guard_session = None
+        if guard is not None:
+            guard = OVGuard.from_model(guard) if not isinstance(guard, OVGuard) else guard
+            guard.backend.validate_target(self.config)
+            guard_session = guard.open_session(
+                guard_config, tokenizer=kwargs.get("tokenizer"), incremental=not is_beam_search
+            )
+            input_ids = inputs if inputs is not None else kwargs.get("input_ids")
+            if input_ids is None:
+                raise ValueError("`guard` requires `input_ids` to be passed to `generate`.")
+            stopping_criteria = StoppingCriteriaList(stopping_criteria or [])
+            stopping_criteria.append(OVGuardStoppingCriteria(guard_session))
+            if not guard_session.config.emit_before_check and streamer is not None:
+                streamer = OVGuardedStreamer(streamer, guard_session)
+
+        try:
+            if guard_session is not None:
+                guard_session.start(input_ids, kwargs.get("attention_mask"))
+            result = super().generate(
+                inputs,
+                generation_config,
+                logits_processor,
+                stopping_criteria,
+                prefix_allowed_tokens_fn,
+                synced_gpus,
+                assistant_model,
+                streamer,
+                negative_prompt_ids,
+                negative_prompt_attention_mask,
+                **kwargs,
+            )
+        finally:
+            if guard_session is not None:
+                guard_session.close()
+
+        if guard_session is not None:
+            sequences = result.sequences if isinstance(result, ModelOutput) else result
+            guard_session.flush(sequences)
+            if isinstance(result, ModelOutput):
+                result.guard = guard_session.report
         return result
 
     def _get_past_length(self, past_key_values=None):
