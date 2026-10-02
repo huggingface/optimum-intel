@@ -218,6 +218,8 @@ def _infer_library_from_model_name_or_path(
         library_name = "open_clip"
     elif _is_kokoro_model(model_name_or_path, all_files, cache_dir=cache_dir, token=token):
         library_name = "kokoro"
+    elif {"am.mvn", "config.yaml", "tokens.json"}.issubset(all_files):
+        library_name = "funasr"
     elif _is_funasr_model(model_name_or_path, all_files, cache_dir=cache_dir, token=token):
         library_name = "funasr"
     elif _is_qwen3_tts_model(model_name_or_path, all_files, cache_dir=cache_dir, token=token):
@@ -240,6 +242,8 @@ def _infer_library_from_model_or_model_class(
         library_name = "open_clip"
     elif model.__module__.startswith("kokoro") or getattr(model, "_kokoro_model", False):
         library_name = "kokoro"
+    elif model.__module__ == "optimum.exporters.openvino.modeling_paraformer":
+        library_name = "funasr"
     elif model.__module__.startswith("funasr") or getattr(model, "_funasr_model", False):
         library_name = "funasr"
     elif getattr(model, "_qwen3_tts_model", False):

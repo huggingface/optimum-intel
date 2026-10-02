@@ -33,6 +33,7 @@ from optimum.intel.openvino import (
     OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
     OVModelForSpeechSeq2Seq,
+    OVParaformerForSpeechSeq2Seq,
     OVModelForTextToSpeechSeq2Seq,
     OVModelForTokenClassification,
     OVModelForVisualCausalLM,
@@ -50,7 +51,7 @@ OV_TASKS_MAPPING = {
     "audio-classification": (OVModelForAudioClassification,),
     "audio-frame-classification": (OVModelForAudioFrameClassification,),
     "audio-xvector": (OVModelForAudioXVector,),
-    "automatic-speech-recognition": (OVModelForCTC, OVModelForSpeechSeq2Seq, OVModelForMultimodalLM),
+    "automatic-speech-recognition": (OVModelForCTC, OVModelForSpeechSeq2Seq, OVModelForMultimodalLM, OVParaformerForSpeechSeq2Seq),
     "feature-extraction": (OVModelForFeatureExtraction,),
     "fill-mask": (OVModelForMaskedLM,),
     "image-classification": (OVModelForImageClassification,),
@@ -87,8 +88,13 @@ def get_openvino_model_class(
                 "token": model_kwargs.pop("token", None),
             }
             config = AutoConfig.from_pretrained(model_id, **hub_kwargs)
-        if any(arch.endswith("ForCTC") for arch in config.architectures):
+        architectures = getattr(config, "architectures", None) or []
+        if any(arch.endswith("ForCTC") for arch in architectures):
             ov_model_class = OV_TASKS_MAPPING[task][0]
+        elif getattr(config, "model_type", "").lower() == "paraformer" or any(
+            "Paraformer" in arch for arch in architectures
+        ):
+            ov_model_class = OVParaformerForSpeechSeq2Seq
         elif getattr(config, "model_type", None) == "qwen3_omni_moe":
             ov_model_class = OV_TASKS_MAPPING[task][2]
         else:
