@@ -1130,6 +1130,8 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = []
     if is_diffusers_version(">=", "0.28.2"):
         SUPPORTED_ARCHITECTURES.extend(["ltx-video"])
+    if is_diffusers_version(">=", "0.33.0"):
+        SUPPORTED_ARCHITECTURES.extend(["ltx-video-0.9.5"])
     if is_diffusers_version(">=", "0.38.0"):
         SUPPORTED_ARCHITECTURES.extend(["ltx2"])
     if is_diffusers_version(">=", "0.40.0"):
@@ -1185,6 +1187,9 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
                         inputs = self.generate_inputs(
                             height=height, width=width, batch_size=batch_size, model_arch=model_arch
                         )
+                        # Diffusers expands the scalar default by prompt batch, not the effective video batch.
+                        if model_arch == "ltx-video-0.9.5":
+                            inputs["decode_timestep"] = [0.0] * batch_size * num_videos_per_prompt
                         outputs = pipeline(**inputs, num_videos_per_prompt=num_videos_per_prompt).frames
                         self.assertEqual(outputs.shape, (batch_size * num_videos_per_prompt, 1, height, width, 3))
 
@@ -1342,6 +1347,8 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = []
     if is_diffusers_version(">=", "0.32"):
         SUPPORTED_ARCHITECTURES.extend(["ltx-video"])
+    if is_diffusers_version(">=", "0.33.0"):
+        SUPPORTED_ARCHITECTURES.extend(["ltx-video-0.9.5"])
     if is_diffusers_version(">=", "0.38.0"):
         SUPPORTED_ARCHITECTURES.extend(["ltx2"])
     # See the note in OVPipelineForText2VideoTest: LTX-2.3 landed in diffusers 0.40.0.dev0.
