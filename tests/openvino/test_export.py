@@ -300,7 +300,7 @@ class ExportModelTest(unittest.TestCase):
                     self.assertTrue(
                         ov_model.language_model.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
                     )
-                    if model_type == "gemma4_unified":
+                    if model_type in {"gemma3n", "gemma4_unified"}:
                         vision_model = ov_model.vision_embeddings.model
                         self.assertTrue(vision_model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"]))
                         self.assertEqual(
