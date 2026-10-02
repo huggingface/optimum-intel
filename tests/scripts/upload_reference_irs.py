@@ -16,15 +16,13 @@ Usage:
 import argparse
 import json
 from datetime import datetime
-from importlib.metadata import version
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-import openvino
-import transformers
 from huggingface_hub import CommitOperationAdd, CommitOperationDelete, HfApi
 
 import optimum.intel
+from optimum.intel.utils.import_utils import _openvino_version, _optimum_intel_version, _transformers_version
 
 
 # Extra `from_pretrained` arguments some models need at export time. Must stay in sync with
@@ -55,11 +53,18 @@ def resolve_model_class(class_name):
 
 
 def get_version_info():
-    """Versions of everything that can influence the generated IR."""
+    """
+    Versions of everything that can influence the generated IR.
+
+    Taken from `optimum.intel.utils.import_utils` rather than read off each package, so the stamp
+    on a reference matches what the rest of optimum-intel reports. `_openvino_version` is already
+    normalised to `<release>-<build>`, dropping the commit hash that makes two builds of the same
+    revision look different.
+    """
     return {
-        "transformers_version": transformers.__version__,
-        "optimum_intel_version": version("optimum-intel") or "unknown",
-        "openvino_version": openvino.__version__,
+        "transformers_version": _transformers_version,
+        "optimum_intel_version": _optimum_intel_version,
+        "openvino_version": _openvino_version,
         "generated_date": datetime.now().strftime("%Y-%m-%d"),
     }
 
