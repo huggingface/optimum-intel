@@ -144,56 +144,6 @@ def _create_tiny_kokoro_model():
     return str(output_dir)
 
 
-def _create_tiny_mistral3_model():
-    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_mistral3"
-    config_file = output_dir / "config.json"
-    weights_file = output_dir / "model.safetensors"
-
-    if config_file.exists() and weights_file.exists():
-        return str(output_dir)
-
-    from transformers import AutoConfig, AutoModelForImageTextToText, AutoProcessor
-
-    model_id = "mistralai/Mistral-Small-3.1-24B-Instruct-2503"
-
-    torch.manual_seed(SEED)
-
-    config = AutoConfig.from_pretrained(model_id)
-
-    config.tie_word_embeddings = False
-    config.text_config.tie_word_embeddings = False
-
-    config.text_config.num_hidden_layers = 2
-    config.text_config.hidden_size = 64
-    config.text_config.intermediate_size = 128
-    config.text_config.num_attention_heads = 4
-    config.text_config.num_key_value_heads = 2
-    config.text_config.head_dim = 16
-    config.text_config.max_position_embeddings = 512
-
-    config.vision_config.num_hidden_layers = 2
-    config.vision_config.hidden_size = 64
-    config.vision_config.intermediate_size = 128
-    config.vision_config.num_attention_heads = 4
-    config.vision_config.head_dim = 16
-    config.vision_config.image_size = 56
-
-    for subconfig in (config, config.text_config, config.vision_config):
-        subconfig.dtype = "float32"
-        subconfig.torch_dtype = "float32"
-
-    model = AutoModelForImageTextToText.from_config(config).float().eval()
-    processor = AutoProcessor.from_pretrained(model_id)
-    processor.image_processor.size = {"longest_edge": 56}
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    model.save_pretrained(output_dir, safe_serialization=True)
-    processor.save_pretrained(output_dir)
-
-    return str(output_dir)
-
-
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -317,9 +267,11 @@ HUB_MODEL_NAMES = {
     "minicpm3": "optimum-intel-internal-testing/tiny-random-minicpm3",
     "minicpmv": "optimum-intel-internal-testing/tiny-random-minicpmv-2_6",
     "minicpmo": "optimum-intel-internal-testing/tiny-random-MiniCPM-o-2_6",
+    "minicpm_v4_5": "optimum-intel-internal-testing/tiny-random-minicpm-v-4_5",
     "mistral": "optimum-intel-internal-testing/tiny-random-mistral",
     "mistral-nemo": "optimum-intel-internal-testing/tiny-random-mistral-nemo",
-    "mistral3": _create_tiny_mistral3_model(),
+    "mistral3": "optimum-intel-internal-testing/tiny-random-mistral3",
+    "ministral3": "optimum-intel-internal-testing/tiny-random-ministral3",
     "mixtral": "optimum-intel-internal-testing/tiny-mixtral",
     "mixtral_awq": "optimum-intel-internal-testing/tiny-mixtral-AWQ-4bit",
     "mobilebert": "optimum-intel-internal-testing/tiny-random-MobileBertModel",
@@ -445,11 +397,24 @@ def _resolve_cached_model_paths(model_names: dict) -> dict:
         if not os.path.exists(constants.HF_HUB_CACHE):
             return model_names
 
-        repo_id_to_local_paths = {
-            repo.repo_id: str(next(iter(repo.revisions)).snapshot_path)
-            for repo in scan_cache_dir().repos
-            if repo.revisions
-        }
+        repo_id_to_local_paths = {}
+        for repo in scan_cache_dir().repos:
+            if not repo.revisions:
+                continue
+            best = None
+            for rev in sorted(repo.revisions, key=lambda r: r.last_modified, reverse=True):
+                file_names = {f.file_name for f in rev.files}
+                if "config.json" not in file_names:
+                    continue
+                # Skip repos with custom Python code — their Hub repos can add new .py
+                # files that a stale local snapshot won't have, causing FileNotFoundError
+                if any(f.endswith(".py") for f in file_names):
+                    break
+                if all(os.path.exists(f.file_path) for f in rev.files):
+                    best = rev
+                    break
+            if best is not None:
+                repo_id_to_local_paths[repo.repo_id] = str(best.snapshot_path)
         return {k: repo_id_to_local_paths.get(v, v) for k, v in model_names.items()}
     except Exception:
         return model_names
@@ -591,6 +556,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_model": 15,
     },
     "mistral3": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 16,
+        "multi_modal_projector_model": 3,
+    },
+    "ministral3": {
         "lm_model": 30,
         "text_embeddings_model": 1,
         "vision_embeddings_model": 16,
@@ -813,6 +784,15 @@ REMOTE_CODE_MODELS = (
     "qwen3_asr",
     "fun_asr",
     "videochat_flash_qwen",
+    "internvl_chat",
+    "minicpmv",
+    "minicpm_v4_5",
+    "minicpmo",
+    "llava-qwen2",
+    "phi3_v",
+    "maira2",
+    "phi4mm",
+    "gemma3n",
 )
 
 if is_transformers_version("<", "5"):
