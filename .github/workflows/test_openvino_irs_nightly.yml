@@ -8,10 +8,12 @@ on:
     branches:
       - main
       - v*-release
-    paths:
-      - tests/openvino/test_irs.py
-      - tests/openvino/utils_tests.py
-      - .github/workflows/test_openvino_irs_nightly.yml
+    types:
+      - opened
+      - labeled
+      - reopened
+      - unlabeled
+      - synchronize
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
@@ -28,6 +30,7 @@ env:
 
 jobs:
   build:
+    if: ${{ (github.event_name == 'workflow_dispatch') || (github.event_name == 'schedule') || contains( github.event.pull_request.labels.*.name, 'openvino-irs') }}
     runs-on: ubuntu-22.04
 
     steps:
