@@ -131,6 +131,7 @@ class ExportModelTest(unittest.TestCase):
         "lfm2_moe": OVModelForCausalLM,
         "qwen3_asr": OVModelForSpeechSeq2Seq,
         "fun_asr": OVModelForSpeechSeq2Seq,
+        "sense_voice": OVModelForSpeechSeq2Seq,
         "mamba": OVModelForCausalLM,
         "falcon_mamba": OVModelForCausalLM,
         "gemma4": OVModelForVisualCausalLM,
@@ -194,7 +195,7 @@ class ExportModelTest(unittest.TestCase):
         auto_model = self.SUPPORTED_ARCHITECTURES[model_type]
         task = auto_model.export_feature
         model_name = MODEL_NAMES[model_type]
-        if model_type == "fun_asr":
+        if model_type in ("fun_asr", "sense_voice"):
             library_name = "funasr"
         else:
             library_name = TasksManager.infer_library_from_model(model_name)
@@ -223,6 +224,10 @@ class ExportModelTest(unittest.TestCase):
             from optimum.intel.openvino.modeling_funasr import _FunASRForSpeechSeq2Seq
 
             model = _FunASRForSpeechSeq2Seq.from_pretrained(model_name, **loading_kwargs)
+        elif model_type == "sense_voice":
+            from optimum.intel.openvino.modeling_sensevoice import _SenseVoiceForCTC
+
+            model = _SenseVoiceForCTC.from_pretrained(model_name)
         elif model_type == "kokoro":
             model = TasksManager.get_model_from_task(
                 task=task,

@@ -129,33 +129,47 @@ class _FunASRForSpeechSeq2Seq(torch.nn.Module):
         return model
 
 
-def _is_funasr_model(
+def _read_funasr_config(
+    config_name: str,
     model_name_or_path: Union[str, Path],
     all_files: list,
     cache_dir: str = HUGGINGFACE_HUB_CACHE,
     token: Optional[Union[bool, str]] = None,
-) -> bool:
+) -> Union[dict, None]:
     """Detect FunASR models (e.g. Fun-ASR-Nano) by checking for funasr-specific artifacts.
 
     FunASR models are loaded via the `funasr` library (not transformers): they ship a
     `config.yaml` describing the model and a `configuration.json` declaring `model.type == "funasr"`,
     and there is no root `config.json`.
     """
-    if "configuration.json" not in all_files or "config.yaml" not in all_files:
-        return False
+    if config_name not in all_files:
+        return None
     try:
         config_path = Path(model_name_or_path)
         if config_path.is_dir():
-            config_file = config_path / "configuration.json"
+            config_file = config_path / config_name
         else:
             config_file = hf_hub_download(
-                repo_id=str(model_name_or_path), filename="configuration.json", cache_dir=cache_dir, token=token
+                repo_id=str(model_name_or_path), filename=config_name, cache_dir=cache_dir, token=token
             )
         with open(config_file, "r", encoding="utf-8") as f:
-            config = json.load(f)
-        return config.get("model", {}).get("type", None) == "funasr"
+            if config_name.endswith(".json"):
+                return json.load(f)
+            return f.readlines()
     except Exception:
-        return False
+        return None
+
+    return None
+
+
+def _is_funasr_model(
+    model_name_or_path: Union[str, Path],
+    all_files: list,
+    cache_dir: str = HUGGINGFACE_HUB_CACHE,
+    token: Optional[Union[bool, str]] = None,
+) -> bool:
+    config = _read_funasr_config("configuration.json", model_name_or_path, all_files, cache_dir, token)
+    return config is not None and config.get("model", {}).get("type", None) == "funasr"
 
 
 def _is_funasr_source(model_id, **kwargs) -> bool:
@@ -185,6 +199,23 @@ def _is_funasr_source(model_id, **kwargs) -> bool:
         except Exception:
             return False
     return False
+
+
+def _apply_lfr(inputs: torch.Tensor, lfr_n, lfr_m) -> torch.Tensor:
+    T = inputs.shape[0]
+    T_lfr = int(np.ceil(T / lfr_n))
+    left_padding = inputs[0].repeat((lfr_m - 1) // 2, 1)
+    inputs = torch.vstack((left_padding, inputs))
+    T = T + (lfr_m - 1) // 2
+    feat_dim = inputs.shape[-1]
+    strides = (lfr_n * feat_dim, 1)
+    sizes = (T_lfr, lfr_m * feat_dim)
+    last_idx = (T - lfr_m) // lfr_n + 1
+    num_padding = lfr_m - (T - last_idx * lfr_n)
+    if num_padding > 0:
+        num_padding = (2 * lfr_m - 2 * T + (T_lfr - 1 + last_idx) * lfr_n) / 2 * (T_lfr - last_idx)
+        inputs = torch.vstack([inputs] + [inputs[-1:]] * int(num_padding))
+    return inputs.as_strided(sizes, strides).clone().type(torch.float32)
 
 
 class _OVModelForFunAsr(OVModelForSpeechSeq2Seq):
@@ -251,22 +282,6 @@ class _OVModelForFunAsr(OVModelForSpeechSeq2Seq):
         target_fs, n_mels, frame_length, frame_shift, lfr_m, lfr_n = 16000, 80, 25, 10, 7, 6
         audio_token_id = getattr(self.config, "audio_token_id", 0)
 
-        def _apply_lfr(inputs: torch.Tensor) -> torch.Tensor:
-            T = inputs.shape[0]
-            T_lfr = int(np.ceil(T / lfr_n))
-            left_padding = inputs[0].repeat((lfr_m - 1) // 2, 1)
-            inputs = torch.vstack((left_padding, inputs))
-            T = T + (lfr_m - 1) // 2
-            feat_dim = inputs.shape[-1]
-            strides = (lfr_n * feat_dim, 1)
-            sizes = (T_lfr, lfr_m * feat_dim)
-            last_idx = (T - lfr_m) // lfr_n + 1
-            num_padding = lfr_m - (T - last_idx * lfr_n)
-            if num_padding > 0:
-                num_padding = (2 * lfr_m - 2 * T + (T_lfr - 1 + last_idx) * lfr_n) / 2 * (T_lfr - last_idx)
-                inputs = torch.vstack([inputs] + [inputs[-1:]] * int(num_padding))
-            return inputs.as_strided(sizes, strides).clone().type(torch.float32)
-
         def _extract_features(waveform: torch.Tensor) -> torch.Tensor:
             if waveform.ndim > 1:
                 waveform = waveform.mean(0)
@@ -285,7 +300,7 @@ class _OVModelForFunAsr(OVModelForSpeechSeq2Seq):
                 sample_frequency=target_fs,
                 snip_edges=True,
             )
-            return _apply_lfr(mat)
+            return _apply_lfr(mat, lfr_n, lfr_m)
 
         def _num_audio_tokens(num_frames: int) -> int:
             olens = 1 + (num_frames - 3 + 2 * 1) // 2
