@@ -995,14 +995,14 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             [
                 {
                     "role": "user",
-                    "content": "\n".join(["(<image>./</image>)"] * 8) + "\nDescribe the video",
+                    "content": "(<image>./</image>)" * 8 + "\nDescribe the video",
                 }
             ],
         )
         self.assertEqual(processor.prompts, "prompt")
         self.assertEqual(
             processor.template_kwargs,
-            {"tokenize": False, "add_generation_prompt": True, "enable_thinking": False},
+            {"tokenize": False, "add_generation_prompt": True},
         )
         self.assertEqual(len(processor.images), 8)
         self.assertTrue(np.array_equal(processor.images[0], image))

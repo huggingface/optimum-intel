@@ -2838,14 +2838,14 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
             messages = [
                 {
                     "role": "user",
-                    "content": "\n".join(["(<image>./</image>)"] * len(visual_inputs)) + "\n" + text,
+                    "content": "(<image>./</image>)" * len(visual_inputs) + "\n" + text,
                 }
             ]
             chat_template_processor = (
                 processor if getattr(processor, "chat_template", None) is not None else processor.tokenizer
             )
             prompt = chat_template_processor.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True, enable_thinking=False
+                messages, tokenize=False, add_generation_prompt=True
             )
             inputs = processor(
                 prompt,
