@@ -236,3 +236,25 @@ Once the model is exported, you can now [load your OpenVINO model](inference) by
 Some models do not work with the latest transformers release. You may see an error message with a maximum supported version. To export these models, install a transformers version that supports the model, for example `pip install transformers==4.53.3`.
 The supported transformers versions compatible with each optimum-intel release are listed on the [Github releases page](https://github.com/huggingface/optimum-intel/releases/).
 
+### `RuntimeError: basic_ios::clear: iostream error`
+
+This error comes from the native OpenVINO serialization and means that the model files could not be written to disk. It is usually caused by:
+
+- not enough free space on the target filesystem (the free space shown by your file manager may not account for the filesystem the model is actually written to, see below);
+- the target directory or filesystem being mounted read-only;
+- a per-file size limit of the target filesystem, for example the 4 GiB limit of FAT32.
+
+Exports that apply an explicit quantization (for example `--weight-format int4`) first write the model to a temporary directory before moving it to the output directory. By default this temporary directory is created next to the output directory, so both must be on a writable filesystem with enough free space. You can override the temporary location with the `OPTIMUM_OPENVINO_TMPDIR` environment variable, for example to use a large local disk:
+
+```bash
+OPTIMUM_OPENVINO_TMPDIR=/path/to/large/disk optimum-cli export openvino --model Qwen/Qwen3-32B --weight-format int4 ov_model/
+```
+
+To diagnose the target filesystem, check its type and mount options:
+
+```bash
+df -hT /path/to/output
+mount | grep /path/to/output
+```
+
+If the filesystem is read-only, remount it read-write. If it is FAT32, use a filesystem without the 4 GiB per-file limit (ext4, NTFS or exFAT) or export to a local disk first. You can also check that the directory is writable with `touch /path/to/output/.write_test && rm /path/to/output/.write_test`.
