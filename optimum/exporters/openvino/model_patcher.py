@@ -9494,11 +9494,6 @@ def get_muse_glimmer_assistant_draft_model_class():
     return MuseGlimmerAssistantDFlashForCausalLM
 
 
-def load_muse_glimmer_assistant_draft_model(model_name_or_path: str, **kwargs):
-    """Load a ``Muse-Glimmer-*-assistant`` checkpoint as its OpenVINO export class."""
-    return get_muse_glimmer_assistant_draft_model_class().from_pretrained(model_name_or_path, **kwargs)
-
-
 # adopted from https://github.com/deepseek-ai/DeepSpec/blob/main/deepspec/modeling/dspark/qwen3/modeling.py#L201
 class Qwen3DSparkForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
     """DeepSpec Qwen3 DSpark draft head exported as embeddings-in / hidden-states-out.

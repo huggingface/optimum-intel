@@ -223,23 +223,26 @@ def _ensure_qwen3_omni_rope_scaling(config):
 _CUSTOM_DRAFT_MODEL_MAP = {
     "LlamaForCausalLMEagle3": ("LlamaEagle3Model", "LlamaEagle3ForCausalLM"),
     "Eagle3LlamaForCausalLM": ("LlamaEagle3Model", "LlamaEagle3ForCausalLM"),
-    "DFlashDraftModel": ("Qwen3DFlashDraftModel", "Qwen3DFlashForCausalLM"),
-    "Qwen3DSparkModel": ("Qwen3DFlashDraftModel", "Qwen3DSparkForCausalLM"),
 }
 
-# Maps config.architectures[0] to a loader for draft models whose architecture is native to
-# transformers. Unlike `_CUSTOM_DRAFT_MODEL_MAP` these need no remote-code re-implementation
-# (and so no `auto_map` indirection); only their KV-cache handling is restructured for export.
-_NATIVE_DRAFT_MODEL_LOADERS = {
-    "MuseGlimmerAssistantModel": "load_muse_glimmer_assistant_draft_model",
+# Maps config.architectures[0] to the model_patcher export class of DFlash draft models, or to a
+# function building that class. They are loaded directly, so unlike `_CUSTOM_DRAFT_MODEL_MAP` they
+# need no `auto_map` indirection (and no `trust_remote_code`).
+_NATIVE_DRAFT_MODEL_CLASSES = {
+    "DFlashDraftModel": "Qwen3DFlashForCausalLM",
+    "Qwen3DSparkModel": "Qwen3DSparkForCausalLM",
+    "MuseGlimmerAssistantModel": "get_muse_glimmer_assistant_draft_model_class",
 }
 
 
 def load_native_draft_model(architecture: str, model_name_or_path: str, **kwargs):
     from optimum.exporters.openvino import model_patcher
 
-    loader = getattr(model_patcher, _NATIVE_DRAFT_MODEL_LOADERS[architecture])
-    return loader(model_name_or_path, **kwargs)
+    model_class = getattr(model_patcher, _NATIVE_DRAFT_MODEL_CLASSES[architecture])
+    # The MuseGlimmer drafter class is built lazily because it needs transformers >= 5.15.
+    if not isinstance(model_class, type):
+        model_class = model_class()
+    return model_class.from_pretrained(model_name_or_path, **kwargs)
 
 
 def update_config_for_custom_draft_model(config, auto_model, auto_model_for_causal_lm):
@@ -650,7 +653,7 @@ def main_export(
             model = _FunASRForSpeechSeq2Seq.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
         elif (
             library_name == "transformers"
-            and (getattr(config, "architectures", None) or [None])[0] in _NATIVE_DRAFT_MODEL_LOADERS
+            and (getattr(config, "architectures", None) or [None])[0] in _NATIVE_DRAFT_MODEL_CLASSES
         ):
             model = load_native_draft_model(
                 config.architectures[0],
