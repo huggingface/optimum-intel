@@ -167,6 +167,8 @@ def infer_task(
                     raise e
             else:
                 raise
+        if original_task == "auto" and (config.architectures or [None])[0] in _NATIVE_DRAFT_MODEL_CLASSES:
+            task = "text-generation-with-past"
         if hasattr(config, "export_model_type"):
             model_type = config.export_model_type
         else:
