@@ -709,6 +709,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "qwen3_eagle3": {"model": 20},
     "qwen3_dflash": {"model": 30},
     "qwen3_deepspec_dflash": {"model": 30},
+    "muse_glimmer_assistant": {"model": 30},
     "qwen3_vl_eagle3": {"model": 18},
     "qwen3_next": {"model": 100},
     "gemma3n": {
