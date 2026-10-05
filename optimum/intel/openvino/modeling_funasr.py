@@ -204,18 +204,18 @@ def _is_funasr_source(model_id, **kwargs) -> bool:
 def _apply_lfr(inputs: torch.Tensor, lfr_n, lfr_m) -> torch.Tensor:
     """Apply Low Frame Rate (LFR) stacking to a sequence of acoustic features.
 
-    Stacks every ``lfr_m`` consecutive frames into a single frame and advances by ``lfr_n`` frames
-    between stacks (``lfr_n`` acts as the downsampling factor), reducing the frame rate while widening
-    the feature dimension. The sequence is left-padded by repeating the first frame ``(lfr_m - 1) // 2``
+    Stacks every lfr_m consecutive frames into a single frame and advances by lfr_n frames
+    between stacks (lfr_n acts as the downsampling factor), reducing the frame rate while widening
+    the feature dimension. The sequence is left-padded by repeating the first frame (lfr_m - 1) // 2
     times and right-padded by repeating the last frame so the final windows are complete.
 
     Args:
-        inputs: Feature tensor of shape ``(T, feat_dim)``.
+        inputs: Feature tensor of shape (T, feat_dim).
         lfr_n: Stride (number of frames to advance between consecutive stacked frames).
         lfr_m: Number of consecutive frames stacked together into one output frame.
 
     Returns:
-        A ``float32`` tensor of shape ``(ceil(T / lfr_n), lfr_m * feat_dim)``.
+        A float32 tensor of shape (ceil(T / lfr_n), lfr_m * feat_dim), where T = inputs.shape[0], feat_dim = inputs.shape[-1]
     """
     T = inputs.shape[0]
     T_lfr = int(np.ceil(T / lfr_n))
