@@ -683,7 +683,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         """
 
         # # If the config is specified as {"bits": N}, use the default N-bit quantization configuration.
-        if quantization_config.keys() == {"bits"} and quantization_config["bits"] in (2, 3, 4, 8):
+        if quantization_config in ({"bits": 2}, {"bits": 3}, {"bits": 4}, {"bits": 8}):
             if quantization_config == {"bits": 4} and model_name_or_path in [
                 "openai/gpt-oss-20b",
                 "openai/gpt-oss-120b",
