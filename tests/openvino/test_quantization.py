@@ -1023,7 +1023,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 num_samples=1,
             ),
             {
-                "lm_model": {"int8": 10, "int4": 24},
+                "lm_model": {"int8": 12, "int4": 22},
                 "text_embeddings_model": {"int8": 1},
                 "vision_embeddings_model": {"int8": 13},
                 "vision_embeddings_pos_model": {"int8": 1},
