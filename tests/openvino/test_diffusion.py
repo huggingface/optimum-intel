@@ -562,6 +562,24 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         image = pipeline(**inputs).images[0]
         self.assertTupleEqual(image.size, (32, 32))
 
+    @require_diffusers
+    @unittest.skipIf(is_diffusers_version("<", "0.37.0"), reason="FLUX.2 requires diffusers>=0.37.0")
+    def test_flux2_klein_reshape_keeps_text_encoder_sequence_dynamic(self):
+        pipeline = self.OVMODEL_CLASS.from_pretrained(
+            MODEL_NAMES["flux.2-klein"], compile=False, device=OPENVINO_DEVICE
+        )
+        # Released FLUX.2-klein tokenizers report 131072; the tiny test model reports 512.
+        pipeline.tokenizer.model_max_length = 131072
+        pipeline.reshape(batch_size=1, height=32, width=32)
+        for model_input in pipeline.text_encoder.model.inputs:
+            self.assertTrue(model_input.get_partial_shape()[1].is_dynamic)
+
+        pipeline.compile()
+        inputs = self.generate_inputs(height=32, width=32, model_type="flux.2-klein")
+        inputs["output_type"] = "pil"
+        image = pipeline(**inputs).images[0]
+        self.assertTupleEqual(image.size, (32, 32))
+
 
 class OVPipelineForImage2ImageTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = [

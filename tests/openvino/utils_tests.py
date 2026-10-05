@@ -271,6 +271,7 @@ HUB_MODEL_NAMES = {
     "mistral": "optimum-intel-internal-testing/tiny-random-mistral",
     "mistral-nemo": "optimum-intel-internal-testing/tiny-random-mistral-nemo",
     "mistral3": "optimum-intel-internal-testing/tiny-random-mistral3",
+    "ministral3": "optimum-intel-internal-testing/tiny-random-ministral3",
     "mixtral": "optimum-intel-internal-testing/tiny-mixtral",
     "mixtral_awq": "optimum-intel-internal-testing/tiny-mixtral-AWQ-4bit",
     "mobilebert": "optimum-intel-internal-testing/tiny-random-MobileBertModel",
@@ -510,7 +511,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_encoder": 394,
     },
     "z-image": {
-        "transformer": 104,
+        "transformer": 116,
         "vae_decoder": 60,
         "vae_encoder": 44,
         "text_encoder": 16,
@@ -556,6 +557,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_model": 15,
     },
     "mistral3": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 16,
+        "multi_modal_projector_model": 3,
+    },
+    "ministral3": {
         "lm_model": 30,
         "text_embeddings_model": 1,
         "vision_embeddings_model": 16,
