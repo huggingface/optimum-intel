@@ -331,8 +331,6 @@ class _OVModelForSenseVoice(OVModel):
 
         from optimum.exporters.openvino.__main__ import main_export
 
-        from .configuration import OVConfig
-
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
         # Keep one reference on the temporary directory so garbage collection does not remove the
