@@ -421,12 +421,8 @@ class VLMPipelineTestCase(unittest.TestCase):
 
         transformers_model = optimum_model = genai_model = None
         try:
-            loading_kwargs = {}
-            if model_arch == "muse_glimmer":
-                # the tiny reference checkpoint is stored in bfloat16, force fp32 to match the OpenVINO model
-                loading_kwargs = {"dtype": torch.float32}
             transformers_model = transformers_class.from_pretrained(
-                model_id, trust_remote_code=trust_remote_code, **loading_kwargs
+                model_id, trust_remote_code=trust_remote_code
             ).eval()
 
             set_seed(42)
@@ -495,7 +491,6 @@ class VLMPipelineTestCase(unittest.TestCase):
                 apply_chat_template=apply_chat_template,
                 **self.GEN_KWARGS,
             ).texts[0]
-            genai_output = genai_output.strip()
         finally:
             # Release on failure too: a failing test's traceback keeps its frame locals alive for the
             # rest of the session, which would leave OpenVINO objects (and their file handles) around.

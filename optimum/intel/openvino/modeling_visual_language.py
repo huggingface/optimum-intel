@@ -8034,12 +8034,10 @@ class _OVMuseGlimmerForCausalLM(OVModelForVisualCausalLM):
         content.append({"type": "text", "text": text})
         messages = [{"role": "user", "content": content}]
         prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        # the chat template already emits the BOS token, don't let the tokenizer add a second one
         inputs = processor(
             text=prompt,
             images=[image] if image is not None else None,
             videos=[video] if video is not None else None,
-            add_special_tokens=False,
             return_tensors="pt",
         )
         return inputs
