@@ -108,13 +108,15 @@ class _SenseVoiceForCTC(torch.nn.Module):
 
         from funasr import AutoModel as FunASRAutoModel
 
+        trust_remote_code = kwargs.pop("trust_remote_code", False)
+
         # funasr is very verbose during loading (per-tensor checkpoint warnings); silence it.
         buf = io.StringIO()
         with redirect_stdout(buf), redirect_stderr(buf):
             auto_model = FunASRAutoModel(
                 model=str(model_name_or_path),
                 hub="hf",
-                trust_remote_code=True,
+                trust_remote_code=trust_remote_code,
                 device="cpu",
                 disable_update=True,
             )
@@ -256,46 +258,36 @@ class _OVModelForSenseVoice(OVModel):
         compile=True,
         **kwargs,
     ):
-        self.config = config
-        self._device = device.upper() if isinstance(device, str) else "CPU"
-        self.ov_config = dict(ov_config) if ov_config else {}
-        self._model_save_dir = Path(model_save_dir) if model_save_dir is not None else None
-        self.model = model
+        # The detokenizer is a second IR that the base class is unaware of; set it up before delegating
+        # so that the base `__init__` (which calls `self.compile()`) also compiles the detokenizer.
         self.detokenizer_model = detokenizer_model
-        self.request = None
         self.detokenizer_request = None
         self._cmvn = None
-        self.preprocessors = kwargs.get("preprocessors", [])
-        self._compile_only = kwargs.get("compile_only", False)
-        # Participate in the shared OVBaseModel quantization bookkeeping (set by `_apply_quantization`).
-        self._openvino_config = None
-        quantization_config = kwargs.get("quantization_config")
-        if quantization_config:
-            self._openvino_config = OVConfig(quantization_config=quantization_config)
-        self._set_ov_config_parameters()
-        if compile:
-            self.compile()
-
-    @property
-    def model_save_dir(self):
-        return self._model_save_dir
-
-    @property
-    def device(self) -> torch.device:
-        return torch.device("cpu")
-
-    @property
-    def ov_models(self) -> Dict[str, "openvino.Model"]:
-        return {"model": self.model}
+        super().__init__(
+            model,
+            config,
+            device=device,
+            ov_config=ov_config,
+            model_save_dir=model_save_dir,
+            compile=compile,
+            **kwargs,
+        )
+        if self._compile_only:
+            # The detokenizer IR is already compiled; reuse it directly as its inference request.
+            self.detokenizer_request = self.detokenizer_model
 
     def compile(self):
-        core = Core()
-        if self.request is None:
-            self.request = core.compile_model(self.model, self._device, self.ov_config)
+        super().compile()
         if self.detokenizer_model is not None and self.detokenizer_request is None:
-            self.detokenizer_request = core.compile_model(self.detokenizer_model, self._device)
+            self.detokenizer_request = self._compile_model(
+                self.detokenizer_model, self._device, {**self.ov_config}, self.model_save_dir
+            )
 
     def clear_requests(self):
+        if self._compile_only:
+            raise ValueError(
+                "`clear_requests()` is not supported with `compile_only` mode, please initialize model without this option"
+            )
         self.request = None
         self.detokenizer_request = None
 
@@ -413,23 +405,40 @@ class _OVModelForSenseVoice(OVModel):
             local_files_only=local_files_only,
         )
         core = Core()
-        model = core.read_model(model_dir / OV_XML_FILE_NAME)
-        detokenizer_path = model_dir / OV_DETOKENIZER_NAME.format("")
-        detokenizer_model = core.read_model(detokenizer_path) if detokenizer_path.is_file() else None
-
         load_in_8bit = kwargs.pop("load_in_8bit", None)
         quantization_config = kwargs.pop("quantization_config", None)
         quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
         trust_remote_code = kwargs.pop("trust_remote_code", False)
         compile_model = kwargs.get("compile", True)
+        device = kwargs.get("device", "CPU")
+        ov_config = kwargs.get("ov_config")
+
+        if compile_only and quantization_config is not None:
+            raise ValueError(
+                "`compile_only` mode is not supported together with quantization, since quantization requires an "
+                "editable model. Please set `compile_only=False` to quantize the model."
+            )
+
+        model_path = model_dir / OV_XML_FILE_NAME
+        detokenizer_path = model_dir / OV_DETOKENIZER_NAME.format("")
+        if compile_only:
+            model = cls._compile_model(model_path, device, ov_config, model_save_dir=model_dir)
+            detokenizer_model = (
+                cls._compile_model(core.read_model(detokenizer_path), device, model_save_dir=model_dir)
+                if detokenizer_path.is_file()
+                else None
+            )
+        else:
+            model = core.read_model(model_path)
+            detokenizer_model = core.read_model(detokenizer_path) if detokenizer_path.is_file() else None
 
         ov_model = cls(
             model=model,
             config=config,
             model_save_dir=model_dir,
             detokenizer_model=detokenizer_model,
-            device=kwargs.get("device", "CPU"),
-            ov_config=kwargs.get("ov_config"),
+            device=device,
+            ov_config=ov_config,
             compile=compile_model and not quantization_config,
             compile_only=compile_only,
             quantization_config=quantization_config,
