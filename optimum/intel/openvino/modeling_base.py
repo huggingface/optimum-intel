@@ -679,6 +679,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             quantization_config (`OVQuantizationConfigBase` or `Dict`):
                 The quantization config to resolve.
         """
+        # TODO
         if quantization_config == {"bits": 4} or quantization_config == {"bits": 8}:
             # If config is given as {"bits": N}, use the default N-bit quantization config
             if quantization_config == {"bits": 4} and model_name_or_path in [
