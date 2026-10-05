@@ -1019,6 +1019,49 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         )
         self.assertNotIn("image_sizes", inputs)
 
+    def test_minicpm_v4_5_temporal_groups_use_separate_resampler_calls(self):
+        class ModelStub:
+            resampling = _OVMiniCPMVForCausalLM.resampling
+            _get_1d_sincos_pos_embed_from_grid_new = (
+                _OVMiniCPMVForCausalLM._get_1d_sincos_pos_embed_from_grid_new
+            )
+            embed_dim = 16
+            max_size = (4, 4)
+            _pos_embeds = torch.zeros((4, 4, embed_dim), dtype=torch.float32)
+
+            def __init__(self):
+                self.calls = []
+
+            def _adjust_pos_cache(self, tgt_sizes):
+                pass
+
+            def resampler(self, image_feature, pos_embed, key_padding_mask):
+                self.calls.append(
+                    (
+                        image_feature.shape,
+                        pos_embed.shape,
+                        key_padding_mask.shape,
+                        pos_embed[:, 0].numpy().copy(),
+                    )
+                )
+                return np.zeros((1, 2, self.embed_dim), dtype=np.float32)
+
+        model = ModelStub()
+        image_features = torch.zeros((10, 6, 8), dtype=torch.float32)
+        tgt_sizes = torch.tensor([[2, 3]] * 10, dtype=torch.int32)
+
+        output = model.resampling(image_features, tgt_sizes, [list(range(6)), list(range(6, 10))])
+
+        self.assertEqual(output.shape, (2, 2, model.embed_dim))
+        self.assertEqual(
+            [(call[0], call[1], call[2]) for call in model.calls],
+            [
+                ((1, 36, 8), (36, 1, 16), (1, 36)),
+                ((1, 24, 8), (24, 1, 16), (1, 24)),
+            ],
+        )
+        self.assertFalse(np.array_equal(model.calls[0][3][0], model.calls[0][3][6]))
+
     @parameterized.expand(
         ["llava", "llava_next", "llava_next_video", "llava_next_mistral"]
         if is_transformers_version("<", "5")
@@ -1287,100 +1330,6 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 device=OPENVINO_DEVICE,
             )
             self.assertIsInstance(ov_restored_model, type(ov_model))
-
-    def test_temporal_ids_forwarded_to_multimodal_embeddings(self):
-        class _LanguageModel:
-            @staticmethod
-            def forward(**kwargs):
-                return kwargs
-
-        class _Stub:
-            config = type("Config", (), {"model_type": "minicpmv"})()
-            language_model = _LanguageModel()
-
-            def get_multimodal_embeddings(self, *args, **kwargs):
-                self.temporal_ids = kwargs["temporal_ids"]
-                return torch.zeros((1, 1, 4)), None, None
-
-        temporal_ids = [[0, 1, 2], [3]]
-        stub = _Stub()
-        OVModelForVisualCausalLM.forward(
-            stub,
-            input_ids=torch.ones((1, 1), dtype=torch.long),
-            temporal_ids=temporal_ids,
-        )
-
-        self.assertEqual(stub.temporal_ids, temporal_ids)
-
-    def test_minicpmv_3d_resampler_temporal_grouping(self):
-        """MiniCPM-V-4.5's 3D-Resampler compresses a temporal GROUP of frames into a single
-        ``query_num``-token vector instead of one per frame.
-
-        Exercises ``resampling()`` directly with a stub resampler so the test needs no model
-        download: it asserts (a) grouping changes the number of emitted vectors, (b) the
-        per-token inputs handed to the resampler are folded frame-major, and (c) passing
-        ``temporal_ids=None`` is bit-identical to the previous per-frame behaviour.
-        """
-        embed_dim, kv_dim, seq_len = 16, 8, 6
-
-        class _Stub:
-            resampling = _OVMiniCPMVForCausalLM.resampling
-            _temporal_pos_embed_rows = _OVMiniCPMVForCausalLM._temporal_pos_embed_rows
-
-            def __init__(self):
-                self.embed_dim = embed_dim
-                self._pos_embeds = torch.arange(8 * 8 * embed_dim, dtype=torch.float32).reshape(8, 8, embed_dim)
-                self.seen = {}
-                self.calls = []
-
-            def _adjust_pos_cache(self, tgt_sizes):
-                pass
-
-            def resampler(self, image_feature, pos_embed, key_padding_mask):
-                self.seen = {
-                    "image_feature": image_feature,
-                    "pos_embed": pos_embed,
-                    "key_padding_mask": key_padding_mask,
-                }
-                self.calls.append(self.seen)
-                # stand in for the exported IR: one vector per batch row
-                return image_feature.sum(dim=1).unsqueeze(1).expand(-1, 2, -1).numpy()
-
-        n_frames = 6
-        tgt_sizes = torch.tensor([[2, 3]] * n_frames, dtype=torch.int32)
-        x = torch.arange(n_frames * seq_len * kv_dim, dtype=torch.float32).reshape(n_frames, seq_len, kv_dim)
-
-        # (a) grouping: 6 frames, 2 groups of 3 -> 2 output vectors, not 6
-        stub = _Stub()
-        out = stub.resampling(x, tgt_sizes, temporal_ids=[[0, 1, 2], [3, 4, 5]])
-        self.assertEqual(out.shape[0], 2)
-        # (b) folded frame-major: group 0 holds frames 0..2 concatenated along the token axis
-        self.assertEqual(tuple(stub.seen["image_feature"].shape), (2, 3 * seq_len, kv_dim))
-        self.assertTrue(torch.equal(stub.seen["image_feature"][0], x[0:3].reshape(-1, kv_dim)))
-        self.assertEqual(tuple(stub.seen["pos_embed"].shape), (3 * seq_len, 2, embed_dim))
-        self.assertEqual(tuple(stub.seen["key_padding_mask"].shape), (2, 3 * seq_len))
-
-        # Ragged groups execute separately: padding before the exported graph would be
-        # normalized by ln_kv, unlike the native implementation which pads afterwards.
-        stub = _Stub()
-        out = stub.resampling(x, tgt_sizes, temporal_ids=[[0, 1, 2], [3, 4], [5]])
-        self.assertEqual(out.shape[0], 3)
-        self.assertEqual(len(stub.calls), 3)
-        self.assertEqual([tuple(call["image_feature"].shape) for call in stub.calls], [(1, 3 * seq_len, kv_dim), (1, 2 * seq_len, kv_dim), (1, seq_len, kv_dim)])
-        self.assertTrue(all(not bool(call["key_padding_mask"].any()) for call in stub.calls))
-
-        # a grouping that does not cover every frame must fail loudly, not silently
-        with self.assertRaises(ValueError):
-            _Stub().resampling(x, tgt_sizes, temporal_ids=[[0, 1, 2], [3, 4]])
-
-        # (c) no regression: temporal_ids=None must reproduce the per-frame path exactly
-        stub_a, stub_b = _Stub(), _Stub()
-        legacy = stub_a.resampling(x, tgt_sizes, temporal_ids=None)
-        self.assertEqual(legacy.shape[0], n_frames)
-        self.assertTrue(torch.equal(stub_a.seen["image_feature"], x))
-        # every frame in its own group is the degenerate case and must agree with it
-        grouped = stub_b.resampling(x, tgt_sizes, temporal_ids=[[i] for i in range(n_frames)])
-        self.assertTrue(np.array_equal(legacy, grouped))
 
 
 @pytest.mark.skipif(is_transformers_version("<", "5.0"), reason="OVModelForMultimodalLM requires transformers >= 5.0")

@@ -16,7 +16,6 @@ import warnings
 from abc import abstractmethod
 from collections import OrderedDict
 from dataclasses import dataclass
-from itertools import chain
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
@@ -2493,7 +2492,6 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         if input_ids is not None and input_ids.shape[1] == 1:
             return None
         tgt_sizes = kwargs["tgt_sizes"]
-        # MiniCPM-V-4.5's image processor emits temporal groupings for video inputs
         temporal_ids = kwargs.get("temporal_ids")
         pixel_values_list = pixel_values
         vision_hidden_states = []
@@ -2530,88 +2528,31 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
                     pixel_values=all_pixel_values, patch_attention_mask=patch_attn_mask, position_ids=position_ids
                 )[0]
             )
-            # flatten per-sample groups the same way frames were flattened above, so that
-            # group order follows frame order
-            all_temporal_ids = None
+            temporal_groups = None
             if temporal_ids is not None:
-                all_temporal_ids = []
-                for t in temporal_ids:
-                    all_temporal_ids.extend(t)
-            vision_embedding = self.resampling(vision_embedding, tgt_sizes, all_temporal_ids)
+                temporal_groups = [group for sample_groups in temporal_ids for group in sample_groups]
+            vision_embedding = self.resampling(vision_embedding, tgt_sizes, temporal_groups)
 
-            # with grouping the resampler emits one row per group rather than per image, so
-            # each sample's slice width has to be counted in groups
             start = 0
-            if all_temporal_ids is not None:
-                grp_start = 0
-                for pixel_value in pixel_values_list:
-                    n_img = len(pixel_value)
-                    if n_img == 0:
-                        vision_hidden_states.append([])
-                        continue
-                    n_grp, seen = 0, 0
-                    while seen < n_img:
-                        if grp_start + n_grp >= len(all_temporal_ids):
-                            raise ValueError(
-                                f"temporal_ids ran out after {seen} of this sample's {n_img} images; "
-                                "the flattened groups must cover every image exactly once."
-                            )
-                        seen += len(all_temporal_ids[grp_start + n_grp])
-                        n_grp += 1
-                    if seen != n_img:
-                        raise ValueError(
-                            f"temporal_ids groups span {seen} frames but this sample has {n_img} "
-                            "images; a temporal group must not straddle two samples."
-                        )
-                    vision_hidden_states.append(vision_embedding[start : start + n_grp])
-                    start += n_grp
-                    grp_start += n_grp
-            else:
-                for pixel_value in pixel_values_list:
-                    n_img = len(pixel_value)
-                    if n_img > 0:
-                        vision_hidden_states.append(vision_embedding[start : start + n_img])
-                        start += n_img
-                    else:
-                        vision_hidden_states.append([])
+            for sample_idx, pixel_value in enumerate(pixel_values_list):
+                output_count = len(temporal_ids[sample_idx]) if temporal_ids is not None else len(pixel_value)
+                if output_count > 0:
+                    vision_hidden_states.append(vision_embedding[start : start + output_count])
+                    start += output_count
+                else:
+                    vision_hidden_states.append([])
         else:  # no image
             dummy_feature = []
             for _ in range(len(pixel_values_list)):
                 vision_hidden_states.append(dummy_feature)
         return vision_hidden_states
 
-    def resampling(self, x, tgt_sizes, temporal_ids=None):
-        """Resample vision features to `query_num` language-space tokens.
-
-        With `temporal_ids`, MiniCPM-V-4.5's 3D-Resampler compresses each temporal GROUP of
-        frames into ONE `query_num`-token vector instead of one per frame. Upstream implements
-        this in `Resampler.batch_attn_forward` via `torch.nn.utils.rnn.pad_sequence`, which the
-        OpenVINO PyTorch frontend cannot convert; the same result is obtained here by folding on
-        the host, so the exported three-input resampler IR is reused unchanged.
-
-        Args:
-            x:            [B_frames, L, D_vis] vision-encoder output.
-            tgt_sizes:    [B_frames, 2] patch grid per frame.
-            temporal_ids: list of groups of temporal ids, e.g. `[[-1], [-1], [2, 6, 9]]`.
-                          Flattened length must equal B_frames. `None` keeps the legacy
-                          per-frame behaviour bit-for-bit.
-
-        Returns:
-            [B_frames, query_num, D] without grouping, or [G, query_num, D] with it.
-        """
+    def resampling(self, x, tgt_sizes, temporal_groups=None):
         bs = x.shape[0]
-        patch_len = tgt_sizes[:, 0] * tgt_sizes[:, 1]
-        self._adjust_pos_cache(tgt_sizes)
 
-        temporal_pos_emb = False
-        temporal_ids_flatten = None
-        if temporal_ids is not None:
-            temporal_ids_flatten = list(chain.from_iterable(temporal_ids))
-            if len(temporal_ids_flatten) != bs:
-                raise ValueError(f"temporal_ids covers {len(temporal_ids_flatten)} frames but {bs} were encoded")
-            # matches the upstream gate; ids of -1 contribute a zero row, so an all -1
-            # grouping stays a no-op
-            temporal_pos_emb = (max(temporal_ids_flatten) + 1) > -1
+        patch_len = tgt_sizes[:, 0] * tgt_sizes[:, 1]
+
+        self._adjust_pos_cache(tgt_sizes)
 
         max_patch_len = torch.max(patch_len)
         key_padding_mask = torch.zeros((bs, max_patch_len), dtype=torch.bool)
@@ -2625,53 +2566,41 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         pos_embed = torch.nn.utils.rnn.pad_sequence(pos_embed, batch_first=True, padding_value=0.0).permute(
             1, 0, 2
         )  # BLD => L * B * D
+        if temporal_groups is not None:
+            group_outputs = []
+            frame_start = 0
+            for group in temporal_groups:
+                group_ids = [int(temporal_id) for temporal_id in group]
+                if not group_ids:
+                    raise ValueError("Temporal groups must not be empty")
+                frame_end = frame_start + len(group_ids)
+                if frame_end > bs:
+                    raise ValueError("Temporal groups contain more frames than were encoded")
 
-        if temporal_pos_emb:
-            # 3D-Resampler: fold frames into temporal groups on the host. The reference
-            # `Resampler.batch_attn_forward` builds, for each group g:
-            #     k_g = concat_{f in g}( x_f + pos2d_f + temporal_f )   (frame-major)
-            #     v_g = concat_{f in g}( x_f )
-            # `kv_proj` and `ln_kv` act per token, so folding the raw features and adding the
-            # temporal vector into the per-token pos_embed is algebraically identical.
-            temporal_per_frame = self._temporal_pos_embed_rows(temporal_ids_flatten, pos_embed.dtype)
-            pos_bld = pos_embed.permute(1, 0, 2) + temporal_per_frame.unsqueeze(1)  # [B, L, D]
+                group_pos_embed = pos_embed[:, frame_start:frame_end].permute(1, 0, 2)
+                temporal_positions = np.asarray(
+                    [max(temporal_id, 0) for temporal_id in group_ids], dtype=np.float32
+                )
+                temporal_embed = self._get_1d_sincos_pos_embed_from_grid_new(
+                    self.embed_dim, temporal_positions[:, None]
+                ).squeeze(1)
+                temporal_embed[np.asarray(group_ids) < 0] = 0
+                group_pos_embed += torch.from_numpy(temporal_embed).to(group_pos_embed.dtype).unsqueeze(1)
 
-            groups = [list(g) for g in temporal_ids]
-            feats, poss, masks = [], [], []
-            start = 0
-            for g in groups:
-                end = start + len(g)
-                # frame-major, matching k[:, start:end, :].permute(1, 0, 2).reshape(-1, D)
-                feats.append(x[start:end].reshape(-1, x.shape[-1]))
-                poss.append(pos_bld[start:end].reshape(-1, pos_bld.shape[-1]))
-                masks.append(key_padding_mask[start:end].reshape(-1))
-                start = end
-
-            if len({feat.shape[0] for feat in feats}) > 1:
-                outputs = []
-                for feat, pos, mask in zip(feats, poss, masks):
-                    output = self.resampler(
-                        image_feature=feat.unsqueeze(0),
-                        pos_embed=pos.unsqueeze(1),
-                        key_padding_mask=mask.unsqueeze(0),
+                group_outputs.append(
+                    torch.from_numpy(
+                        self.resampler(
+                            image_feature=x[frame_start:frame_end].reshape(1, -1, x.shape[-1]),
+                            pos_embed=group_pos_embed.reshape(-1, self.embed_dim).unsqueeze(1),
+                            key_padding_mask=key_padding_mask[frame_start:frame_end].reshape(1, -1),
+                        )
                     )
-                    outputs.append(torch.from_numpy(output))
-                return torch.cat(outputs, dim=0)
+                )
+                frame_start = frame_end
 
-            n_groups = len(groups)
-            max_len = max(t.shape[0] for t in feats)
-            x_f = x.new_zeros((n_groups, max_len, x.shape[-1]))
-            pos_f = pos_bld.new_zeros((n_groups, max_len, pos_bld.shape[-1]))
-            # True marks padding; those slots pick up a non-zero value from ln_kv(kv_proj(0))
-            # but receive exactly zero attention weight, so the output is unchanged
-            mask_f = torch.ones((n_groups, max_len), dtype=torch.bool)
-            for gi in range(n_groups):
-                ln = feats[gi].shape[0]
-                x_f[gi, :ln] = feats[gi]
-                pos_f[gi, :ln] = poss[gi]
-                mask_f[gi, :ln] = masks[gi]
-
-            x, pos_embed, key_padding_mask = x_f, pos_f.permute(1, 0, 2), mask_f
+            if frame_start != bs:
+                raise ValueError(f"Temporal groups cover {frame_start} frames, but {bs} were encoded")
+            return torch.cat(group_outputs, dim=0)
 
         res = torch.from_numpy(self.resampler(image_feature=x, pos_embed=pos_embed, key_padding_mask=key_padding_mask))
         return res
@@ -2686,28 +2615,6 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         if max_h > self.max_size[0] or max_w > self.max_size[1]:
             self.max_size = [max(max_h, self.max_size[0]), max(max_w, self.max_size[1])]
             self._set_2d_pos_cache(self.max_size)
-
-    def _temporal_pos_embed_rows(self, temporal_ids_flatten, dtype=torch.float32):
-        """1-D sincos temporal position embeddings, one row per frame.
-
-        Equivalent to the reference implementation's `temporal_pos_embed[id]` lookup, but
-        computes only the rows requested instead of caching `max_temporal_size` (72000) of
-        them, which would reserve roughly 1.2 GB at a hidden size of 4096. An id of -1 means
-        "no temporal information" and yields a zero row, as upstream does.
-        """
-        embed_dim = self.embed_dim
-        omega = np.arange(embed_dim // 2, dtype=np.float32)
-        omega /= embed_dim / 2.0
-        omega = 1.0 / 10000**omega  # (D/2,)
-
-        ids = np.asarray([max(int(t), 0) for t in temporal_ids_flatten], dtype=np.float32)
-        out = np.einsum("m,d->md", ids, omega)  # (M, D/2)
-        rows = torch.from_numpy(np.concatenate([np.sin(out), np.cos(out)], axis=1)).to(dtype)
-
-        for i, t in enumerate(temporal_ids_flatten):
-            if int(t) == -1:
-                rows[i].zero_()
-        return rows
 
     def _get_2d_sincos_pos_embed(self, embed_dim, image_size):
         """
@@ -2831,10 +2738,11 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
 
             image_inputs = [] if image is None else image if isinstance(image, list) else [image]
             visual_inputs = image_inputs + video_frames
-            temporal_ids = [[-1] for _ in image_inputs] + [
+            temporal_ids = [[-1] for _ in image_inputs]
+            temporal_ids.extend(
                 list(range(group_start, min(group_start + 6, len(video_frames))))
                 for group_start in range(0, len(video_frames), 6)
-            ]
+            )
             messages = [
                 {
                     "role": "user",
