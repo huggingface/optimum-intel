@@ -31,7 +31,7 @@ from openvino import Model, save_model
 from openvino.exceptions import OVTypeError
 from openvino.tools.ovc import convert_model
 from optimum.exporters.openvino.dflash_utils import (
-    DFLASH2_RECOMMENDED_ACTIVATIONS_SCALE_FACTOR,
+    DFLASH2_GPU_MIN_ACTIVATIONS_SCALE_FACTOR,
     DFLASH_ARCHITECTURES,
     parse_and_validate_dflash_config,
 )
@@ -120,18 +120,16 @@ def _set_runtime_options(
         _, sub_export_config = models_and_export_configs[model_name]
         if not hasattr(sub_export_config, "runtime_options"):
             sub_export_config.runtime_options = {}
-        if (
-            "text-generation" in task
+        submodel_task = getattr(sub_export_config, "task", "") or ""
+        uses_decoder_runtime_options = (
+            "text-generation" in submodel_task
             or ("image-text-to-text" in task and model_name == "language_model")
             or getattr(sub_export_config, "stateful", False)
-        ):
-            sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "8.0"
-        if not quantized_model and (
-            "text-generation" in task
-            or ("image-text-to-text" in task and model_name == "language_model")
-            or getattr(sub_export_config, "stateful", False)
-        ):
-            sub_export_config.runtime_options["KV_CACHE_PRECISION"] = "f16"
+        )
+        if uses_decoder_runtime_options and not getattr(sub_export_config, "dflash2", False):
+            sub_export_config.runtime_options.setdefault("ACTIVATIONS_SCALE_FACTOR", "8.0")
+        if not quantized_model and uses_decoder_runtime_options:
+            sub_export_config.runtime_options.setdefault("KV_CACHE_PRECISION", "f16")
         # Gemma vision embedders produce activations large enough to overflow in
         # fp16, so scale them down at runtime the same way the language model does.
         if model_name == "vision_embeddings_model" and getattr(
@@ -1075,6 +1073,10 @@ def _add_dflash_mode_to_rt_info(model: Model, hf_config: "PretrainedConfig", can
         model.set_rt_info(str(candidate_position_offset), ["dflash", "candidate_position_offset"])
         if dflash.version == 2:
             model.set_rt_info("2", ["dflash", "version"])
+            model.set_rt_info(
+                str(DFLASH2_GPU_MIN_ACTIVATIONS_SCALE_FACTOR),
+                ["dflash", "gpu_min_activations_scale_factor"],
+            )
             for name in ("input_embedding_scale", "output_multiplier", "final_logit_softcapping"):
                 value = dflash_config.get(name)
                 if value is not None:

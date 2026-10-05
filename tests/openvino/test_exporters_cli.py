@@ -1072,9 +1072,10 @@ class OVCLIExportTestCase(unittest.TestCase):
             draft_model = core.read_model(draft_path)
             self.assertTrue(draft_model.has_rt_info(["dflash", "version"]))
             self.assertEqual(
-                draft_model.get_rt_info()["runtime_options"]["ACTIVATIONS_SCALE_FACTOR"].value,
+                draft_model.get_rt_info()["dflash"]["gpu_min_activations_scale_factor"].value,
                 "32.0",
             )
+            self.assertFalse(draft_model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"]))
             selector_model = core.read_model(selector_path)
             self.assertTrue(selector_model.has_rt_info(["dflash_selector", "dflash_version"]))
             self.assertFalse(selector_model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"]))

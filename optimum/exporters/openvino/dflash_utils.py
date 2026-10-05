@@ -28,7 +28,10 @@ DFLASH_ARCHITECTURE_VERSIONS = {
     "DFlash2DraftModel": 2,
 }
 DFLASH_ARCHITECTURES = set(DFLASH_ARCHITECTURE_VERSIONS)
-DFLASH2_RECOMMENDED_ACTIVATIONS_SCALE_FACTOR = 32.0
+# The DFlash-2 draft requires at least this activation scale for correct GPU FP16 execution. It is
+# stored as DFlash-specific IR metadata and applied by GenAI as an explicit compile property, since
+# the GPU plugin intentionally does not consume generic activation-scale RT info for LLM graphs.
+DFLASH2_GPU_MIN_ACTIVATIONS_SCALE_FACTOR = 32.0
 DFLASH_COMMON_CONFIG_FIELDS = (
     "mask_token_id",
     "target_layer_ids",

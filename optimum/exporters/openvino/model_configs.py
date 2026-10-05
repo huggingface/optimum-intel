@@ -22,9 +22,7 @@ import torch
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
 
 from optimum.exporters.openvino.base import (
-    ACTIVATIONS_SCALE_FACTOR_RT_OPTION,
     ConfigBehavior,
-    DEFAULT_ACTIVATIONS_SCALE_FACTOR,
     OpenVINOConfig,
     OpenVINOConfigWithPast,
     OpenVINOSeq2SeqConfigWithPast,
@@ -40,11 +38,7 @@ from optimum.exporters.openvino.config import (
     TextSeq2SeqOpenVINOConfig,
     VisionOpenVINOConfig,
 )
-from optimum.exporters.openvino.dflash_utils import (
-    DFLASH2_RECOMMENDED_ACTIVATIONS_SCALE_FACTOR,
-    DFLASH_ARCHITECTURES,
-    parse_and_validate_dflash_config,
-)
+from optimum.exporters.openvino.dflash_utils import DFLASH_ARCHITECTURES, parse_and_validate_dflash_config
 from optimum.exporters.openvino.input_generators import (
     AquilaDummyPastKeyValuesGenerator,
     ChatGLM2DummyPastKeyValuesGenerator,
@@ -509,10 +503,6 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
         if self.dflash:
             dflash = parse_and_validate_dflash_config(config)
             self.dflash2 = dflash.version == 2
-            if self.dflash2:
-                self.runtime_options[ACTIVATIONS_SCALE_FACTOR_RT_OPTION] = str(
-                    DFLASH2_RECOMMENDED_ACTIVATIONS_SCALE_FACTOR
-                )
         elif architecture == "Qwen3DSparkModel":
             if getattr(config, "markov_rank", 0) != 0:
                 raise ValueError(
