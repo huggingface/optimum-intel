@@ -420,8 +420,12 @@ class VLMPipelineTestCase(unittest.TestCase):
 
         transformers_model = optimum_model = genai_model = None
         try:
+            loading_kwargs = {}
+            if model_arch == "muse_glimmer":
+                # the tiny reference checkpoint is stored in bfloat16, force fp32 to match the OpenVINO model
+                loading_kwargs = {"dtype": torch.float32}
             transformers_model = transformers_class.from_pretrained(
-                model_id, trust_remote_code=trust_remote_code
+                model_id, trust_remote_code=trust_remote_code, **loading_kwargs
             ).eval()
 
             set_seed(42)
@@ -435,11 +439,7 @@ class VLMPipelineTestCase(unittest.TestCase):
                 output=self.temp_dir,
                 ov_config=export_ov_config,
             )
-            genai_config = dict(TEST_CONFIG)
-            if model_arch == "muse_glimmer":
-                genai_config["ATTENTION_BACKEND"] = "SDPA"
-                genai_config["KV_CACHE_PRECISION"] = "f32"
-            genai_model = VLMPipeline(self.temp_dir, device=OPENVINO_DEVICE, **genai_config)
+            genai_model = VLMPipeline(self.temp_dir, device=OPENVINO_DEVICE, **TEST_CONFIG)
 
             image = self.IMAGE
             prompt = "A photo of a cat sitting on a"
