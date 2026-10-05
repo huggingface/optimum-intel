@@ -276,6 +276,11 @@ class _OVModelForSenseVoice(OVModel):
             # The detokenizer IR is already compiled; reuse it directly as its inference request.
             self.detokenizer_request = self.detokenizer_model
 
+    def _reshape(self, model, batch_size, sequence_length, height=None, width=None):
+        # SenseVoice IRs are exported fully dynamic, so the generic
+        # rank-2 reshape does not apply; shapes are left dynamic.
+        return model
+
     def compile(self):
         super().compile()
         if self.detokenizer_model is not None and self.detokenizer_request is None:
