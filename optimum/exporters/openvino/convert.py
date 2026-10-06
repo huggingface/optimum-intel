@@ -22,7 +22,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
 
 from huggingface_hub import snapshot_download
-from packaging.version import Version
 from transformers.generation import GenerationMixin
 from transformers.models.speecht5.modeling_speecht5 import SpeechT5HifiGan
 from transformers.utils import is_torch_available
@@ -42,6 +41,7 @@ from optimum.exporters.openvino.utils import (
     _get_qwen3_tts_submodels_fn_and_export_configs,
     _normalize_dummy_inputs,
     allow_skip_tracing_check,
+    check_transformers_version_compatibility,
     clear_class_registry,
     remove_none_from_dummy_inputs,
     save_config,
@@ -219,26 +219,7 @@ def export(
     if "diffusers" in str(model.__class__) and not is_diffusers_available():
         raise ImportError("The package `diffusers` is required to export diffusion models to OpenVINO.")
 
-    min_version = getattr(config, "MIN_TRANSFORMERS_VERSION", None)
-    max_version = getattr(config, "MAX_TRANSFORMERS_VERSION", None)
-
-    if min_version is not None:
-        if isinstance(min_version, Version):
-            min_version = min_version.base_version
-        if is_transformers_version("<", min_version):
-            raise ValueError(
-                f"The current version of Transformers does not allow for the export of the model. Minimum required is "
-                f"{config.MIN_TRANSFORMERS_VERSION}, got: {_transformers_version}"
-            )
-
-    if max_version is not None:
-        if isinstance(max_version, Version):
-            max_version = max_version.base_version
-        if is_transformers_version(">", max_version):
-            raise ValueError(
-                f"The current version of Transformers does not allow for the export of the model. Maximum required is "
-                f"{config.MAX_TRANSFORMERS_VERSION.replace('99', '*')}, got: {_transformers_version}"
-            )
+    check_transformers_version_compatibility(config)
 
     if stateful:
         # This will be checked anyway after the model conversion, but checking it earlier will save time for a user if not suitable version is used
