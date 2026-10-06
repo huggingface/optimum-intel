@@ -98,7 +98,6 @@ jobs:
           uv pip install "transformers>=5.15,<5.16"
           pytest tests/openvino/${{ matrix.test-pattern }} -k "muse_glimmer" --durations=0
 
-      # MiniCPM-V 4.7 is not in a transformers release yet: pin the transformers commit that adds it (5.18.0.dev0).
       - name: MiniCPM-V-4.7 Validation
         run: |
           uv pip install "transformers>=5.18"
