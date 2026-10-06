@@ -453,18 +453,22 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         trust_remote_code: bool = False,
         **kwargs,
     ):
+        """Load the components named by ``_all_ov_model_paths``; a cached decoder is optional."""
         generation_config = kwargs.pop("generation_config", None)
         subfolder = kwargs.pop("subfolder", "")
 
-        default_encoder_file_name = ONNX_ENCODER_NAME if from_onnx else cls._all_ov_model_paths["encoder"]
-        default_decoder_file_name = ONNX_DECODER_NAME if from_onnx else cls._all_ov_model_paths["decoder"]
-        default_decoder_with_past_file_name = (
-            ONNX_DECODER_WITH_PAST_NAME if from_onnx else cls._all_ov_model_paths["decoder_with_past"]
-        )
-        encoder_file_name = encoder_file_name or default_encoder_file_name
-        decoder_file_name = decoder_file_name or default_decoder_file_name
-        decoder_with_past_file_name = decoder_with_past_file_name or default_decoder_with_past_file_name
-        decoder_with_past = None
+        model_file_names = cls._all_ov_model_paths.copy()
+        if "encoder" in model_file_names:
+            default_encoder_name = ONNX_ENCODER_NAME if from_onnx else model_file_names["encoder"]
+            model_file_names["encoder"] = encoder_file_name or default_encoder_name
+        if "decoder" in model_file_names:
+            default_decoder_name = ONNX_DECODER_NAME if from_onnx else model_file_names["decoder"]
+            model_file_names["decoder"] = decoder_file_name or default_decoder_name
+        if "decoder_with_past" in model_file_names:
+            default_decoder_with_past_name = (
+                ONNX_DECODER_WITH_PAST_NAME if from_onnx else model_file_names["decoder_with_past"]
+            )
+            model_file_names["decoder_with_past"] = decoder_with_past_file_name or default_decoder_with_past_name
 
         compile_only = kwargs.pop("compile_only", False)
         device = kwargs.pop("device", "CPU")
@@ -472,15 +476,11 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
 
         # Load model from hub
         if not os.path.isdir(model_id):
-            allow_patterns = {
-                encoder_file_name,
-                decoder_file_name,
-                decoder_with_past_file_name,
-                encoder_file_name.replace(".xml", ".bin"),
-                decoder_file_name.replace(".xml", ".bin"),
-                decoder_with_past_file_name.replace(".xml", ".bin"),
-                cls.config_name,
-            }
+            allow_patterns = {cls.config_name}
+            for file_name in model_file_names.values():
+                allow_patterns.add(str(Path(subfolder) / file_name))
+                if not from_onnx:
+                    allow_patterns.add(str(Path(subfolder) / file_name.replace(".xml", ".bin")))
 
             ignore_patterns = ["*.msgpack", "*.safetensors", "*pytorch_model.bin"]
             if not from_onnx:
@@ -498,28 +498,28 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
                 ignore_patterns=ignore_patterns,
             )
 
-            model_save_dir = Path(model_save_folder)
+            model_save_dir = Path(model_save_folder) / subfolder
 
         else:
-            model_save_dir = Path(model_id)
+            model_save_dir = Path(model_id) / subfolder
 
-        file_names = {
-            "encoder": model_save_dir / encoder_file_name,
-            "decoder": model_save_dir / decoder_file_name,
-            "decoder_with_past": model_save_dir / decoder_with_past_file_name,
-        }
-        if not compile_only:
-            encoder = cls.load_model(file_names["encoder"])
-            decoder = cls.load_model(file_names["decoder"])
-            if use_cache and not model_has_state(decoder) and os.path.exists(file_names["decoder_with_past"]):
-                decoder_with_past = cls.load_model(file_names["decoder_with_past"])
-        else:
-            model_kwargs = {"device": device, "ov_config": ov_config, "model_save_dir": model_save_dir}
-            encoder = cls._compile_model(file_names["encoder"], **model_kwargs)
-            decoder = cls._compile_model(file_names["decoder"], **model_kwargs)
+        file_names = {name: model_save_dir / file_name for name, file_name in model_file_names.items()}
+        model_kwargs = {"device": device, "ov_config": ov_config, "model_save_dir": model_save_dir}
 
-            if use_cache and not model_has_state(decoder) and os.path.exists(file_names["decoder_with_past"]):
-                decoder_with_past = cls._compile_model(file_names["decoder_with_past"], **model_kwargs)
+        def load_component(name):
+            if compile_only:
+                return cls._compile_model(file_names[name], **model_kwargs)
+            return cls.load_model(file_names[name])
+
+        components = {name: load_component(name) for name in file_names if name != "decoder_with_past"}
+        if "decoder_with_past" in file_names:
+            components["decoder_with_past"] = None
+            if (
+                use_cache
+                and not model_has_state(components["decoder"])
+                and os.path.exists(file_names["decoder_with_past"])
+            ):
+                components["decoder_with_past"] = load_component("decoder_with_past")
 
         if generation_config is None:
             try:
@@ -542,9 +542,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
         compile_model = kwargs.pop("compile", True)
         model = cls(
-            encoder=encoder,
-            decoder=decoder,
-            decoder_with_past=decoder_with_past,
+            **components,
             config=config,
             model_save_dir=model_save_dir,
             quantization_config=quantization_config,
@@ -557,15 +555,19 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         )
 
         if quantization_config:
-            if hasattr(config, "name_or_path"):
-                model_id = config.name_or_path
-            else:
-                logger.warning(
-                    "`model_id` could not be determined from the config. In the case there are default quantization "
-                    "configurations for this model, they will not be applied."
-                )
-            quantization_config = cls._resolve_default_quantization_config(model_id, quantization_config)
-            model._apply_quantization(quantization_config, compile_only, compile_model, model_id, trust_remote_code)
+            quantization_model_id = model_id
+            if "decoder" in model_file_names:
+                if hasattr(config, "name_or_path"):
+                    quantization_model_id = config.name_or_path
+                else:
+                    logger.warning(
+                        "`model_id` could not be determined from the config. In the case there are default quantization "
+                        "configurations for this model, they will not be applied."
+                    )
+            quantization_config = cls._resolve_default_quantization_config(quantization_model_id, quantization_config)
+            model._apply_quantization(
+                quantization_config, compile_only, compile_model, quantization_model_id, trust_remote_code
+            )
 
         return model
 
@@ -1798,89 +1800,9 @@ class _OVModelForQwen3ASR(OVModelForSpeechSeq2Seq):
         cls,
         model_id: Union[str, Path],
         config: PretrainedConfig,
-        token: Optional[Union[bool, str]] = None,
-        revision: Optional[str] = None,
-        force_download: bool = False,
-        cache_dir: str = HUGGINGFACE_HUB_CACHE,
-        subfolder: str = "",
-        local_files_only: bool = False,
-        load_in_8bit: bool = False,
-        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
-        trust_remote_code: bool = False,
         **kwargs,
     ):
-        model_file_names = cls._all_ov_model_paths
-        if os.path.isdir(model_id):
-            model_save_dir = Path(model_id) / subfolder
-        else:
-            component_files = {
-                str(Path(subfolder) / component_file)
-                for model_file_name in model_file_names.values()
-                for component_file in (model_file_name, model_file_name.replace(".xml", ".bin"))
-            }
-            model_save_dir = (
-                Path(
-                    snapshot_download(
-                        model_id,
-                        cache_dir=cache_dir,
-                        force_download=force_download,
-                        local_files_only=local_files_only,
-                        revision=revision,
-                        token=token,
-                        user_agent=http_user_agent,
-                        allow_patterns=component_files,
-                    )
-                )
-                / subfolder
-            )
-
-        file_names = {name: model_save_dir / file_name for name, file_name in model_file_names.items()}
-
-        compile_only = kwargs.get("compile_only", False)
-        device = kwargs.get("device", "CPU")
-        ov_config = kwargs.get("ov_config")
-        if compile_only:
-            components = {
-                name: cls._compile_model(path, device, ov_config, model_save_dir) for name, path in file_names.items()
-            }
-        else:
-            components = {name: cls.load_model(path) for name, path in file_names.items()}
-
-        generation_config = kwargs.pop("generation_config", None)
-        if generation_config is None:
-            try:
-                generation_config = GenerationConfig.from_pretrained(
-                    model_id,
-                    cache_dir=cache_dir,
-                    force_download=force_download,
-                    local_files_only=local_files_only,
-                    token=token,
-                    revision=revision,
-                    subfolder=subfolder,
-                )
-                generation_config.cache_implementation = None
-            except OSError:
-                logger.info(
-                    "Generation config file not found, using a generation config created from the model config."
-                )
-
-        quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
-        compile_model = kwargs.pop("compile", True)
-        model = cls(
-            audio_encoder=components["audio_encoder"],
-            text_embeddings=components["text_embeddings"],
-            language_model=components["language_model"],
-            config=config,
-            generation_config=generation_config,
-            model_save_dir=model_save_dir,
-            quantization_config=quantization_config,
-            compile=compile_model and not quantization_config,
-            **kwargs,
-        )
-        if quantization_config:
-            quantization_config = cls._resolve_default_quantization_config(model_id, quantization_config)
-            model._apply_quantization(quantization_config, compile_only, compile_model, model_id, trust_remote_code)
-        return model
+        return super(OVModelForSpeechSeq2Seq, cls)._from_pretrained(model_id, config, **kwargs)
 
 
 class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneration):
