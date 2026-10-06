@@ -1418,6 +1418,58 @@ class MistralOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
 
 
 @register_in_tasks_manager(
+    "voxtral_realtime",
+    "automatic-speech-recognition",
+    library_name="transformers",
+)
+class VoxtralRealtimeOpenVINOConfig(MistralOpenVINOConfig):
+    """Experimental top-level Voxtral Realtime export registration."""
+
+    MIN_TRANSFORMERS_VERSION = "5.2.0"
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig.with_args(
+        num_key_value_heads="num_key_value_heads",
+        feature_size="num_mel_bins",
+        allow_new=True,
+    )
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyAudioInputGenerator,) + MistralOpenVINOConfig.DUMMY_INPUT_GENERATOR_CLASSES
+
+    def __init__(self, config: "PretrainedConfig", **kwargs):
+        audio_config = config.audio_config
+        text_config = config.text_config
+        for field in (
+            "hidden_size",
+            "intermediate_size",
+            "num_hidden_layers",
+            "num_attention_heads",
+            "num_key_value_heads",
+            "max_position_embeddings",
+            "vocab_size",
+            "head_dim",
+            "sliding_window",
+        ):
+            setattr(config, field, getattr(text_config, field))
+        config.num_mel_bins = audio_config.num_mel_bins
+        super().__init__(config=config, **kwargs)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        inputs = super().inputs
+        inputs["input_features"] = {0: "batch_size", 2: "audio_sequence_length"}
+        return inputs
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        dummy_inputs = super().generate_dummy_inputs(framework=framework, **kwargs)
+        audio_tokens = dummy_inputs["input_features"].shape[-1] // (2 * self._config.downsample_factor)
+        input_ids = dummy_inputs["input_ids"]
+        dummy_inputs["input_ids"] = torch.zeros(
+            input_ids.shape[0], audio_tokens, dtype=input_ids.dtype, device=input_ids.device
+        )
+        if "attention_mask" in dummy_inputs:
+            dummy_inputs["attention_mask"] = torch.ones_like(dummy_inputs["input_ids"])
+        return dummy_inputs
+
+
+@register_in_tasks_manager(
     "ministral3",
     "text-generation-with-past",
     library_name="transformers",

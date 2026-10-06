@@ -48,6 +48,7 @@ from optimum.exporters.openvino.utils import (
     save_preprocessors,
     set_simplified_chat_template,
 )
+from optimum.exporters.openvino.voxtral_realtime import _get_voxtral_realtime_submodels_fn_and_export_configs
 from optimum.exporters.tasks import TasksManager
 from optimum.exporters.utils import (
     DECODER_NAME,
@@ -808,6 +809,12 @@ def export_from_model(
     if library_name == "qwen3_tts":
         custom_architecture = True
         custom_export_configs, fn_get_submodels = _get_qwen3_tts_submodels_fn_and_export_configs(
+            model, library_name, task, preprocessors, custom_export_configs, fn_get_submodels
+        )
+
+    if model_type == "voxtral_realtime":
+        custom_architecture = True
+        custom_export_configs, fn_get_submodels = _get_voxtral_realtime_submodels_fn_and_export_configs(
             model, library_name, task, preprocessors, custom_export_configs, fn_get_submodels
         )
 
