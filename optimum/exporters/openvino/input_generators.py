@@ -1263,8 +1263,8 @@ class DummyMiniCPMV4_7VisionInputGenerator(DummyVisionInputGenerator):
         self.patch_size = config.patch_size
         self.num_positions = (config.image_size // config.patch_size) ** 2
         # crop grid in patches, both sides divisible by 4 (2x2 window merge followed by 2x2 merge)
-        self.grid_height = 8
-        self.grid_width = 12
+        self.grid_height = max(4, self.height // self.patch_size // 4 * 4)
+        self.grid_width = max(4, self.width // self.patch_size // 4 * 4)
 
     @staticmethod
     def _block_order(height: int, width: int) -> torch.Tensor:
