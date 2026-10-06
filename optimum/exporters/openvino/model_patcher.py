@@ -10217,12 +10217,14 @@ def lfm2_moe_experts_forward(
         num_experts, -1, hidden_dim
     )  # (num_experts, num_tokens, hidden_dim)
 
-    if hasattr(self, "ov_gate_linear"):
-        # 16-bit export, see `prepare_16bit_moe_experts`
-        gate = self.ov_gate_linear(hidden_states_expanded)
-        up = self.ov_up_linear(hidden_states_expanded)
+    if hasattr(self, "ov_gate_proj"):
+        # 16-bit export, see `prepare_16bit_moe_experts`: `.to()` comes first so that the decompression Convert sits
+        # right on the 16-bit constant and is not constant-folded together with the Transpose into an f32 constant
+        dtype = hidden_states.dtype
+        gate = torch.bmm(hidden_states_expanded, self.ov_gate_proj.to(dtype).transpose(1, 2))
+        up = torch.bmm(hidden_states_expanded, self.ov_up_proj.to(dtype).transpose(1, 2))
         next_states = self.act_fn(gate) * up
-        next_states = self.ov_down_linear(next_states)
+        next_states = torch.bmm(next_states, self.down_proj.to(dtype).transpose(1, 2))
     else:
         gate_proj, up_proj = self.gate_up_proj.chunk(2, dim=-2)
 
@@ -10238,72 +10240,24 @@ def lfm2_moe_experts_forward(
     return next_states
 
 
-class OVBatchedLinear16bit(nn.Module):
+def prepare_16bit_moe_experts(experts: nn.Module):
     """
-    Batched `x @ weight^T` over experts, `weight` being a 16-bit `(num_experts, out_features, in_features)` tensor.
-
-    Converted by `OV_BATCHED_LINEAR_16BIT_EXTENSION` to OpenVINO's `ov_ext::linear`, i.e. a `MatMul(transpose_b=True)`
-    whose weight is the 16-bit constant behind a decompression `Convert`: the form OpenVINO fuses into its MoE
-    operations and compresses with NNCF. The weight is a parameter of the parent experts module and is only referenced
-    here (not registered), so that tracing reads it as a module attribute instead of copying it into the graph.
-    """
-
-    def __init__(self, weight: torch.Tensor):
-        super().__init__()
-        self.__dict__["weight_16bit"] = weight
-
-    def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        return torch.bmm(hidden_states, self.weight_16bit.transpose(1, 2).to(hidden_states.dtype))
-
-
-def _ov_batched_linear_16bit_extension():
-    from openvino.frontend.pytorch import ModuleExtension
-
-    return ModuleExtension(
-        OVBatchedLinear16bit,
-        "ov_ext::linear",
-        convert=lambda module, target_op, hidden_states, *args, **kwargs: target_op(
-            hidden_states, module.weight_16bit, None
-        ),
-        evaluate=lambda module, hidden_states, *args, **kwargs: torch.zeros(
-            *hidden_states.shape[:-1], module.weight_16bit.shape[1], dtype=torch.float32
-        ),
-    )
-
-
-def prepare_16bit_moe_experts(experts: nn.Module) -> Dict[type, Any]:
-    """
-    Prepares 16-bit experts (`gate_up_proj` / `down_proj` 3D weights) for `lfm2_moe_experts_forward` in a 16-bit export
-    and returns the module extensions the export needs.
-
-    The plain `torch.bmm(x, weight.transpose(1, 2))` form does not survive a 16-bit export of the big MoE checkpoints:
-    - OpenVINO's 16-bit tracing helper casts the parameters of the modules it does not wrap to f32;
-    - its `ov_ext::bmm` converts the 16-bit weight to f32 behind the `chunk` / `transpose`, so the whole chain is
-      constant-folded into new f32 constants,
-    both doubling the size of the experts. Instead each projection goes through `OVBatchedLinear16bit`, which keeps the
-    weights as 16-bit constants in the checkpoint `(num_experts, out, in)` layout. Only the gate / up halves are copied,
-    to make them contiguous. Undo with `restore_16bit_moe_experts`.
+    Prepares 16-bit experts (`gate_up_proj` / `down_proj` 3D weights) for `lfm2_moe_experts_forward` in a 16-bit
+    export, so that they stay 16-bit constants in the `(num_experts, out, in)` layout instead of being upcast to f32:
+    - the experts module is marked, so OpenVINO's 16-bit tracing helper does not cast its parameters to f32;
+    - the gate / up halves are copied into contiguous parameters, as a `chunk` (Slice) between the constant and its
+      decompression Convert would be constant-folded into new f32 constants.
+    Undo with `restore_16bit_moe_experts`.
     """
     gate_proj, up_proj = experts.gate_up_proj.detach().chunk(2, dim=-2)
     experts.ov_gate_proj = nn.Parameter(gate_proj.contiguous(), requires_grad=False)
     experts.ov_up_proj = nn.Parameter(up_proj.contiguous(), requires_grad=False)
-    experts.ov_gate_linear = OVBatchedLinear16bit(experts.ov_gate_proj)
-    experts.ov_up_linear = OVBatchedLinear16bit(experts.ov_up_proj)
-    experts.ov_down_linear = OVBatchedLinear16bit(experts.down_proj)
     # OpenVINO's 16-bit helper skips the modules carrying this attribute and restores `forward` from it when unpatching
     setattr(experts, _OV_16BIT_PATCH_ATTR, experts.forward)
-    return {OVBatchedLinear16bit: _ov_batched_linear_16bit_extension()}
 
 
 def restore_16bit_moe_experts(experts: nn.Module):
-    for name in (
-        "ov_gate_linear",
-        "ov_up_linear",
-        "ov_down_linear",
-        "ov_gate_proj",
-        "ov_up_proj",
-        _OV_16BIT_PATCH_ATTR,
-    ):
+    for name in ("ov_gate_proj", "ov_up_proj", _OV_16BIT_PATCH_ATTR):
         if hasattr(experts, name):
             delattr(experts, name)
 
@@ -13224,7 +13178,7 @@ class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
                 # 16-bit weights also need `prepare_16bit_moe_experts` to stay 16-bit (not upcast to f32) in the graph.
                 experts._orig_forward = experts.forward
                 if experts.gate_up_proj.dtype in (torch.float16, torch.bfloat16):
-                    self.module_extensions.update(prepare_16bit_moe_experts(experts))
+                    prepare_16bit_moe_experts(experts)
                 experts.forward = types.MethodType(lfm2_moe_experts_forward, experts)
 
     def __exit__(self, exc_type, exc_value, traceback):
