@@ -415,7 +415,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                             "int2": _DEFAULT_2BIT_WQ_CONFIG,
                             "int3": _DEFAULT_3BIT_WQ_CONFIG,
                             "int4": _DEFAULT_4BIT_WQ_CONFIG,
-                        }.get(self.args.weight_format)
+                        }[self.args.weight_format]
 
                         logger.info(f"Applying a default quantization config: {quantization_config}.")
                     if self.args.quantization_statistics_path is not None:
@@ -527,7 +527,7 @@ def prepare_wc_config(args, default_configs):
     }
 
     return {
-        "bits": weight_format_to_bits.get(args.weight_format, 8),
+        "bits": weight_format_to_bits.get(args.weight_format, 4),
         "ratio": 1.0 if is_int8 else (args.ratio or default_configs["ratio"]),
         "sym": True if is_int2_or_int3 else (args.sym or False),
         "group_size": -1 if is_int8 else args.group_size,

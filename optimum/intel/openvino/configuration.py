@@ -1176,7 +1176,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             )
 
         if self.dtype in ["int2", "int3", "int4", "int8"]:
-            bits = {"int2": 2, "int3": 3, "int4": 4, "int8": 8}.get(self.dtype)
+            bits = {"int2": 2, "int3": 3, "int4": 4, "int8": 8}[self.dtype]
 
             if self.bits is not None and self.bits != bits:
                 logger.warning(
@@ -1234,7 +1234,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             raise ValueError(f"Processor is expected to be a string, but found {self.processor}")
 
         if self.dtype is None:
-            self.dtype = {2: "int2", 3: "int3", 4: "int4", 8: "int8"}.get(self.bits)
+            self.dtype = {2: "int2", 3: "int3", 4: "int4", 8: "int8"}[self.bits]
 
         if self.dtype not in ["int2", "int3", "int4", "int8", "mxfp4", "nf4", "cb4"]:
             raise ValueError(
