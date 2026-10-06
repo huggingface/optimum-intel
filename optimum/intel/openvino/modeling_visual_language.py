@@ -8146,8 +8146,27 @@ class _OVMiniCPMV4_7ForCausalLM(OVModelForVisualCausalLM):
         mm_token_type_ids=None,
         **kwargs,
     ):
-        inputs_embeds = torch.from_numpy(self.get_text_embeddings(input_ids))
         is_prefill = past_key_values is None
+        batch_size = input_ids.shape[0]
+        if is_prefill and batch_size > 1 and (pixel_values is not None or pixel_values_videos is not None):
+            # Beam search / num_return_sequences: the rows are copies of one prompt, while the crop-packed vision
+            # inputs (kept unexpanded by `_expand_inputs_for_generation`) describe that prompt only. Embed the first
+            # row and repeat it.
+            if not (input_ids == input_ids[:1]).all():
+                raise NotImplementedError("MiniCPM-V 4.7 supports only one multimodal prompt per batch.")
+            inputs_embeds, _, position_ids = self.get_multimodal_embeddings(
+                input_ids[:1],
+                pixel_values=pixel_values,
+                attention_mask=attention_mask[:1] if attention_mask is not None else None,
+                pixel_values_videos=pixel_values_videos,
+                target_sizes=target_sizes,
+                target_sizes_videos=target_sizes_videos,
+                mm_token_type_ids=mm_token_type_ids[:1] if mm_token_type_ids is not None else None,
+            )
+            self.rope_deltas = self.rope_deltas.repeat(batch_size, 1)
+            return inputs_embeds.repeat(batch_size, 1, 1), attention_mask, position_ids.repeat(1, batch_size, 1)
+
+        inputs_embeds = torch.from_numpy(self.get_text_embeddings(input_ids))
 
         if is_prefill and pixel_values is not None:
             image_features = self.get_image_features(pixel_values, target_sizes)
@@ -8222,6 +8241,21 @@ class _OVMiniCPMV4_7ForCausalLM(OVModelForVisualCausalLM):
     def generate(self, *args, **kwargs):
         self.rope_deltas = None
         return super().generate(*args, **kwargs)
+
+    def _expand_inputs_for_generation(self, expand_size=1, is_encoder_decoder=False, input_ids=None, **model_kwargs):
+        # The generic expansion repeats every tensor along dim 0 per beam. The vision inputs are not batch-major
+        # (one packed patch sequence, one `target_sizes` row per crop), so they are kept as is, see
+        # `get_multimodal_embeddings`.
+        vision_inputs = {
+            name: model_kwargs.pop(name)
+            for name in ("pixel_values", "pixel_values_videos", "target_sizes", "target_sizes_videos")
+            if name in model_kwargs
+        }
+        input_ids, model_kwargs = super()._expand_inputs_for_generation(
+            expand_size=expand_size, is_encoder_decoder=is_encoder_decoder, input_ids=input_ids, **model_kwargs
+        )
+        model_kwargs.update(vision_inputs)
+        return input_ids, model_kwargs
 
     @staticmethod
     def preprocess_inputs(
