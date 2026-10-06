@@ -10250,6 +10250,8 @@ def prepare_minicpmv4_7_moe_weights(experts: nn.Module):
     experts.ov_up_proj = nn.Parameter(up_proj.contiguous(), requires_grad=False)
     # OpenVINO's 16-bit helper skips the modules carrying this attribute (name hard-coded in the OpenVINO PyTorch
     # frontend) and restores `forward` from it when unpatching
+    # TODO: remove it when OpenVINO's 16-bit tracing helper is fixed PyTorch Frontend
+    # Currently, without the mark, OpenVINO's 16-bit tracing helper runs param.data = param.data.float()
     setattr(experts, "_openvino_module_extension_patch_orig_forward", experts.forward)
 
 
