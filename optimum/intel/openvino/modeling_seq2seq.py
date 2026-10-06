@@ -1330,8 +1330,12 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
 
     @classmethod
     def from_pretrained(cls, model_id, export: bool = False, config: Optional["PretrainedConfig"] = None, **kwargs):
-        from .modeling_funasr import _is_funasr_source, _OVModelForFunAsr
-        from .modeling_sensevoice import _is_sensevoice_source, _OVModelForSenseVoice
+        from .modeling_funasr import (
+            _is_funasr_source,
+            _is_sensevoice_source,
+            _OVModelForFunAsr,
+            _OVModelForSenseVoice,
+        )
 
         # the original SenseVoice/FunASR models have no config.json, so _from_pretrained() dispatch does not work
         if config is None and _is_sensevoice_source(model_id, **kwargs):

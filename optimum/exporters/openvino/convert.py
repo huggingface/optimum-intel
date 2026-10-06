@@ -686,7 +686,7 @@ def _save_sensevoice_config_and_assets(model, output: Path):
     preprocess audio without a ``funasr`` dependency. The tokenizer/detokenizer IRs are produced
     separately by :func:`maybe_convert_tokenizers`, honoring the ``convert_tokenizer`` flag.
     """
-    from optimum.intel.openvino.modeling_sensevoice import copy_sensevoice_cmvn
+    from optimum.intel.openvino.modeling_funasr import copy_sensevoice_cmvn
 
     output = Path(output)
     save_config(model.config, output)

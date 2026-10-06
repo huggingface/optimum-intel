@@ -98,7 +98,7 @@ def infer_task(
             # Use the with-past task so the encoder-decoder export is stateful (KV cache hidden in
             # OpenVINO state). Without the `-with-past` suffix the decoder is exported stateless and
             # incremental generation breaks (only the first token is correct).
-            from optimum.intel.openvino.modeling_sensevoice import _is_sensevoice_source
+            from optimum.intel.openvino.modeling_funasr import _is_sensevoice_source
 
             if _is_sensevoice_source(
                 model_name_or_path, cache_dir=cache_dir, token=token, subfolder=subfolder, revision=revision
@@ -639,8 +639,11 @@ def main_export(
         elif library_name == "kokoro":
             model = _KokoroForTextToSpeech.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
         elif library_name == "funasr":
-            from optimum.intel.openvino.modeling_funasr import _FunASRForSpeechSeq2Seq
-            from optimum.intel.openvino.modeling_sensevoice import _is_sensevoice_source, _SenseVoiceForCTC
+            from optimum.intel.openvino.modeling_funasr import (
+                _FunASRForSpeechSeq2Seq,
+                _is_sensevoice_source,
+                _SenseVoiceForCTC,
+            )
 
             if _is_sensevoice_source(
                 model_name_or_path, cache_dir=cache_dir, token=token, subfolder=subfolder, revision=revision
@@ -935,7 +938,7 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
             # SenseVoiceSmall ships a SentencePiece BPE model rather than a transformers tokenizer, so it
             # is not among ``preprocessors``. It has no text input, so build only the OV detokenizer IR from
             # that BPE model.
-            from optimum.intel.openvino.modeling_sensevoice import export_sensevoice_tokenizers
+            from optimum.intel.openvino.modeling_funasr import export_sensevoice_tokenizers
 
             source = getattr(model, "_sensevoice_source", None)
             if source is None:
