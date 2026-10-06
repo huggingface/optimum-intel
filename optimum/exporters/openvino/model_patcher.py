@@ -10186,10 +10186,6 @@ class Gemma4UnifiedImageEmbeddingsModelPatcher(ModelPatcher):
         self.patched_forward = patched_forward
 
 
-# Marks a module as already patched, so OpenVINO's 16-bit tracing helper leaves its weights alone.
-_OV_16BIT_PATCH_ATTR = "_openvino_module_extension_patch_orig_forward"
-
-
 # Patches the MoE block with a vectorized implementation.
 # The vectorized form is required to ensure correct torch.jit tracing for this component.
 # Original implementation: https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/lfm2_moe/modeling_lfm2_moe.py#L167
@@ -10218,7 +10214,7 @@ def lfm2_moe_experts_forward(
     )  # (num_experts, num_tokens, hidden_dim)
 
     if hasattr(self, "ov_gate_proj"):
-        # 16-bit export, see `prepare_16bit_moe_experts`: `.to()` comes first so that the decompression Convert sits
+        # 16-bit export, see `prepare_minicpmv4_7_moe_weights`: `.to()` comes first so that the decompression Convert sits
         # right on the 16-bit constant and is not constant-folded together with the Transpose into an f32 constant
         dtype = hidden_states.dtype
         gate = torch.bmm(hidden_states_expanded, self.ov_gate_proj.to(dtype).transpose(1, 2))
@@ -10240,24 +10236,25 @@ def lfm2_moe_experts_forward(
     return next_states
 
 
-def prepare_16bit_moe_experts(experts: nn.Module):
+def prepare_minicpmv4_7_moe_weights(experts: nn.Module):
     """
     Prepares 16-bit experts (`gate_up_proj` / `down_proj` 3D weights) for `lfm2_moe_experts_forward` in a 16-bit
     export, so that they stay 16-bit constants in the `(num_experts, out, in)` layout instead of being upcast to f32:
     - the experts module is marked, so OpenVINO's 16-bit tracing helper does not cast its parameters to f32;
     - the gate / up halves are copied into contiguous parameters, as a `chunk` (Slice) between the constant and its
       decompression Convert would be constant-folded into new f32 constants.
-    Undo with `restore_16bit_moe_experts`.
+    Undo with `restore_minicpmv4_7_moe_weights`.
     """
     gate_proj, up_proj = experts.gate_up_proj.detach().chunk(2, dim=-2)
     experts.ov_gate_proj = nn.Parameter(gate_proj.contiguous(), requires_grad=False)
     experts.ov_up_proj = nn.Parameter(up_proj.contiguous(), requires_grad=False)
-    # OpenVINO's 16-bit helper skips the modules carrying this attribute and restores `forward` from it when unpatching
-    setattr(experts, _OV_16BIT_PATCH_ATTR, experts.forward)
+    # OpenVINO's 16-bit helper skips the modules carrying this attribute (name hard-coded in the OpenVINO PyTorch
+    # frontend) and restores `forward` from it when unpatching
+    setattr(experts, "_openvino_module_extension_patch_orig_forward", experts.forward)
 
 
-def restore_16bit_moe_experts(experts: nn.Module):
-    for name in ("ov_gate_proj", "ov_up_proj", _OV_16BIT_PATCH_ATTR):
+def restore_minicpmv4_7_moe_weights(experts: nn.Module):
+    for name in ("ov_gate_proj", "ov_up_proj", "_openvino_module_extension_patch_orig_forward"):
         if hasattr(experts, name):
             delattr(experts, name)
 
@@ -13175,10 +13172,10 @@ class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
                 # Patches Qwen3_5MoeExperts.forward:
                 # https://github.com/huggingface/transformers/blob/6da3313a6f89fb3fe0d51c02fe06e3664cd436b0/src/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py#L857
                 # Why: the per-expert loop does not trace; the `torch.bmm` form is fused into OpenVINO's MoE op.
-                # 16-bit weights also need `prepare_16bit_moe_experts` to stay 16-bit (not upcast to f32) in the graph.
+                # 16-bit weights also need `prepare_minicpmv4_7_moe_weights` to stay 16-bit (not upcast to f32) in the graph.
                 experts._orig_forward = experts.forward
                 if experts.gate_up_proj.dtype in (torch.float16, torch.bfloat16):
-                    prepare_16bit_moe_experts(experts)
+                    prepare_minicpmv4_7_moe_weights(experts)
                 experts.forward = types.MethodType(lfm2_moe_experts_forward, experts)
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -13192,7 +13189,7 @@ class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
             experts = getattr(decoder_layer.mlp, "experts", None)
             if experts is not None:
                 experts.forward = experts._orig_forward
-                restore_16bit_moe_experts(experts)
+                restore_minicpmv4_7_moe_weights(experts)
 
 
 # Patches MiniCPMV4_7VisionAttention.forward:
