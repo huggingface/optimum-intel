@@ -3633,7 +3633,7 @@ class MiniCPMV4_7OpenVINOConfig(BaseVLMOpenVINOConfig):
     `MiniCPMV4_7VisionEmbeddingsPatcher`.
     """
 
-    MIN_TRANSFORMERS_VERSION = "5.18.0.dev0"
+    MIN_TRANSFORMERS_VERSION = "5.18.0"
     MAX_TRANSFORMERS_VERSION = None
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in MiniCPMV4_7ConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
