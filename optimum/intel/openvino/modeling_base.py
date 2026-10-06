@@ -706,7 +706,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
                     8: {"bits": 8},
                 }[quantization_config["bits"]]
         else:
-            # Notify a user if {2,3,4,8}-bit quantization is requested and there is a recommended config for the model
+            # Notify a user if {2, 3, 4, 8} - bit quantization is requested and there is a recommended config for the model
             if isinstance(quantization_config, dict):
                 quantization_config = _quantization_config_from_dict(quantization_config)
             if isinstance(quantization_config, OVWeightQuantizationConfig) and quantization_config.dtype in [

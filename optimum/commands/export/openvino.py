@@ -67,7 +67,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
     optional_group.add_argument(
         "--weight-format",
         type=str,
-        choices=["fp32", "fp16", "int8", "int4", "int3", "int2", "mxfp4", "nf4", "cb4"],
+        choices=["fp32", "fp16", "int8", "int4", "mxfp4", "nf4", "cb4", "int3", "int2"],
         default=None,
         help=(
             "The weight format of the exported model. Option 'cb4' represents a codebook with 16 fixed fp8 values in E4M3 format."
@@ -403,7 +403,7 @@ class OVExportCommand(BaseOptimumCLICommand):
                     "int4",
                     "int8",
                 ]:
-                    # For int{2,3,4,8} quantization, if no compression parameters are provided, use the model's default
+                    # For int{2, 3, 4, 8} quantization, if no compression parameters are provided, use the model's default
                     # quantization config if one exists.
                     if default_quantization_config is not None:
                         quantization_config = default_quantization_config

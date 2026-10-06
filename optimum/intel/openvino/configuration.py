@@ -566,7 +566,7 @@ _DEFAULT_2BIT_WQ_CONFIG = {
     "bits": 2,
     "ratio": 1.0,
     "sym": True,  # only sym is supported
-    "group_size": 128,
+    "group_size": 64,
     "all_layers": None,
     "group_size_fallback": "ignore",
 }
@@ -575,7 +575,7 @@ _DEFAULT_2BIT_WQ_CONFIG = {
 _DEFAULT_3BIT_WQ_CONFIG = {
     "bits": 3,
     "ratio": 1.0,
-    "sym": False,
+    "sym": True,  # only sym is supported
     "group_size": 64,
     "all_layers": None,
     "group_size_fallback": "ignore",
@@ -585,8 +585,8 @@ _DEFAULT_3BIT_WQ_CONFIG = {
 _DEFAULT_4BIT_WQ_CONFIG = {
     "bits": 4,
     "ratio": 1.0,
-    "sym": True,  # only sym is supported
-    "group_size": 64,
+    "sym": False,
+    "group_size": 128,
     "all_layers": None,
     "group_size_fallback": "ignore",
 }
