@@ -8059,7 +8059,9 @@ class _OVMiniCPMV4_7ForCausalLM(OVModelForVisualCausalLM):
         vision_config = config.vision_config
         self.patch_size = vision_config.patch_size
         self.num_patches_per_side = vision_config.image_size // vision_config.patch_size
-        self.window_size = vision_config.window_kernel_size[0]
+        self.window_kernel_size = tuple(vision_config.window_kernel_size)
+        self.window_size = self.window_kernel_size[0]
+        self.merge_kernel_size = tuple(config.merge_kernel_size)
         self.rope_deltas = None
 
     def get_experts_implementation(self):
@@ -8088,8 +8090,15 @@ class _OVMiniCPMV4_7ForCausalLM(OVModelForVisualCausalLM):
             )
             if (window_cu_seqlens.diff() != self.window_size**2).any():
                 raise ValueError(f"Crop grid ({height}, {width}) must be divisible by the window size.")
+            # merge_index: token order for the final merger. The ViT window merger leaves a (height / window_h,
+            # width / window_w) grid; regroup it so that every merge_h x merge_w block is contiguous (MiniCPMV4_7Merger)
+            grid_h, grid_w = height // self.window_kernel_size[0], width // self.window_kernel_size[1]
+            merge_h, merge_w = self.merge_kernel_size
             merge_index = (
-                torch.arange(num_patches // 4).view(height // 4, 2, width // 4, 2).permute(0, 2, 1, 3).reshape(-1)
+                torch.arange(grid_h * grid_w)
+                .view(grid_h // merge_h, merge_h, grid_w // merge_w, merge_w)
+                .permute(0, 2, 1, 3)
+                .reshape(-1)
             )
             features.append(
                 torch.from_numpy(
