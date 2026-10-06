@@ -10371,6 +10371,7 @@ def qwen3_5_gated_delta_net_forward(
     cache_params=None,
     cache_position: Optional[torch.LongTensor] = None,
     attention_mask: Optional[torch.Tensor] = None,
+    **kwargs,
 ):
     def apply_mask_to_padding_states(hidden_states, attention_mask):
         """
@@ -10392,9 +10393,16 @@ def qwen3_5_gated_delta_net_forward(
     layer_idx = None
     recurrent_state = None
     if cache_params is not None:
-        layer_idx = cache_params.linear_attn_mapping[self.layer_idx]
-        conv_state = cache_params.conv_states[layer_idx]
-        recurrent_state = cache_params.recurrent_states[layer_idx]
+        if hasattr(cache_params, "linear_attn_mapping"):
+            # Qwen3_5DynamicCache: states of all linear-attention layers in flat lists
+            layer_idx = cache_params.linear_attn_mapping[self.layer_idx]
+            state_holder = cache_params
+        else:
+            # transformers `DynamicCache` (Qwen3_5DynamicCache was removed): per-layer LinearAttentionLayer
+            layer_idx = 0
+            state_holder = cache_params.layers[self.layer_idx]
+        conv_state = state_holder.conv_states[layer_idx]
+        recurrent_state = state_holder.recurrent_states[layer_idx]
 
     mixed_qkv = self.in_proj_qkv(hidden_states)
     mixed_qkv = mixed_qkv.transpose(1, 2)
@@ -10408,7 +10416,7 @@ def qwen3_5_gated_delta_net_forward(
     if cache_params is not None:
         new_mixed_qkv, new_conv_state = ov_causal_conv1d(conv_state, mixed_qkv, self.conv1d.weight, self.conv1d.bias)
         mixed_qkv = F.silu(new_mixed_qkv)
-        cache_params.conv_states[layer_idx] = new_conv_state
+        state_holder.conv_states[layer_idx] = new_conv_state
     else:
         mixed_qkv = F.silu(self.conv1d(mixed_qkv)[:, :, :seq_len])
 
@@ -10447,7 +10455,7 @@ def qwen3_5_gated_delta_net_forward(
 
     # Update cache
     if cache_params is not None:
-        cache_params.recurrent_states[layer_idx] = last_recurrent_state
+        state_holder.recurrent_states[layer_idx] = last_recurrent_state
 
     # reshape input data into 2D tensor
     core_attn_out = core_attn_out.reshape(-1, self.head_v_dim)
@@ -13123,30 +13131,6 @@ class Qwen3TTSCodecPatcher(OVDecoderModelPatcher):
         self._orig_extra_padding = {}
 
 
-# Replaces the transformers `Cache` passed to the Qwen3.5 decoder layers of MiniCPM-V 4.7.
-# Why: the hybrid cache API changes across transformers 5.x (no `Qwen3_5DynamicCache` since 5.18) and is not
-# trace-friendly; this one only holds the flattened model inputs and exposes what the patched layers use.
-class _MiniCPMV4_7HybridCache:
-    def __init__(self, layer_types, conv_states, recurrent_states, key_cache, value_cache):
-        self.conv_states = conv_states
-        self.recurrent_states = recurrent_states
-        self.key_cache = key_cache
-        self.value_cache = value_cache
-        self.linear_attn_mapping = {}
-        self.full_attn_mapping = {}
-        for layer_idx, layer_type in enumerate(layer_types):
-            if layer_type == "linear_attention":
-                self.linear_attn_mapping[layer_idx] = len(self.linear_attn_mapping)
-            else:
-                self.full_attn_mapping[layer_idx] = len(self.full_attn_mapping)
-
-    def update(self, key_states, value_states, layer_idx, cache_kwargs=None):
-        idx = self.full_attn_mapping[layer_idx]
-        self.key_cache[idx] = torch.cat([self.key_cache[idx], key_states], dim=2)
-        self.value_cache[idx] = torch.cat([self.value_cache[idx], value_states], dim=2)
-        return self.key_cache[idx], self.value_cache[idx]
-
-
 class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
     """
     Exports the Qwen3.5 / Qwen3.5-MoE (hybrid Gated DeltaNet + full attention) language model of MiniCPM-V 4.7.
@@ -13158,6 +13142,8 @@ class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
+        from transformers.cache_utils import LinearAttentionCacheLayerMixin
+
         from openvino.frontend.pytorch import ConversionExtension, ModuleExtension
 
         super().__init__(config, model, model_kwargs)
@@ -13166,75 +13152,41 @@ class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
         text_config = model.config.text_config
         layer_types = text_config.layer_types
         num_linear_attn_layers = layer_types.count("linear_attention")
-        num_full_attn_layers = layer_types.count("full_attention")
 
-        # Replaces Qwen3_5TextModel.forward / Qwen3_5MoeTextModel.forward + lm_head:
-        # https://github.com/huggingface/transformers/blob/6da3313a6f89fb3fe0d51c02fe06e3664cd436b0/src/transformers/models/qwen3_5/modeling_qwen3_5.py#L1240
-        # https://github.com/huggingface/transformers/blob/6da3313a6f89fb3fe0d51c02fe06e3664cd436b0/src/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py#L1350
-        # Why: flat cache tensors as inputs / outputs and a mask built from `attention_mask` and the past length,
-        # instead of the transformers Cache and mask utilities, which do not trace.
+        # Packs the flat model inputs into a transformers `DynamicCache` and unpacks it into the outputs, so that the
+        # KV-cache, conv and recurrent states are graph inputs / outputs. `cache_params` is grouped by layer type:
+        # all linear-attention layers first (conv, recurrent), then all full-attention layers (key, value).
         def patched_forward(inputs_embeds, attention_mask, position_ids, cache_params):
-            cache = _MiniCPMV4_7HybridCache(
-                layer_types,
-                conv_states=[cache_params[2 * i] for i in range(num_linear_attn_layers)],
-                recurrent_states=[cache_params[2 * i + 1] for i in range(num_linear_attn_layers)],
-                key_cache=[cache_params[2 * num_linear_attn_layers + 2 * i] for i in range(num_full_attn_layers)],
-                value_cache=[
-                    cache_params[2 * num_linear_attn_layers + 2 * i + 1] for i in range(num_full_attn_layers)
-                ],
-            )
-
-            seq_len = inputs_embeds.shape[1]
-            past_len = cache.key_cache[0].shape[2]
-            # (3, batch, seq) M-RoPE positions [T, H, W]
-            position_embeddings = text_model.rotary_emb(inputs_embeds, position_ids)
-
-            # 4D additive mask for the full-attention layers: causal and padding
-            query_pos = torch.arange(seq_len, device=inputs_embeds.device).unsqueeze(1) + past_len
-            key_pos = torch.arange(past_len + seq_len, device=inputs_embeds.device).unsqueeze(0)
-            masked = (key_pos > query_pos)[None, None, :, :] | (attention_mask[:, None, None, :] == 0)
-            causal_mask = torch.where(
-                masked,
-                torch.tensor(torch.finfo(torch.float16).min, dtype=inputs_embeds.dtype),
-                torch.tensor(0.0, dtype=inputs_embeds.dtype),
-            )
-            # 2D padding mask for the linear-attention layers, restricted to the current tokens
-            linear_attn_mask = attention_mask[:, -seq_len:]
-
-            hidden_states = inputs_embeds
-            for layer_idx, decoder_layer in enumerate(text_model.layers):
-                residual = hidden_states
-                hidden_states = decoder_layer.input_layernorm(hidden_states)
-                if layer_types[layer_idx] == "linear_attention":
-                    hidden_states = decoder_layer.linear_attn(
-                        hidden_states, cache_params=cache, attention_mask=linear_attn_mask
-                    )
+            conv_states = iter(cache_params[0 : 2 * num_linear_attn_layers : 2])
+            recurrent_states = iter(cache_params[1 : 2 * num_linear_attn_layers : 2])
+            key_states = iter(cache_params[2 * num_linear_attn_layers :: 2])
+            value_states = iter(cache_params[2 * num_linear_attn_layers + 1 :: 2])
+            cache = DynamicCache(config=text_config)
+            for layer in cache.layers:
+                if isinstance(layer, LinearAttentionCacheLayerMixin):
+                    layer.conv_states[0] = next(conv_states)
+                    layer.recurrent_states[0] = next(recurrent_states)
                 else:
-                    hidden_states, _ = decoder_layer.self_attn(
-                        hidden_states=hidden_states,
-                        position_embeddings=position_embeddings,
-                        attention_mask=causal_mask,
-                        past_key_values=cache,
-                    )
-                hidden_states = residual + hidden_states
-                residual = hidden_states
-                hidden_states = decoder_layer.mlp(decoder_layer.post_attention_layernorm(hidden_states))
-                if isinstance(hidden_states, tuple):
-                    # MoE blocks may also return the router logits
-                    hidden_states = hidden_states[0]
-                hidden_states = residual + hidden_states
+                    layer.keys, layer.values = next(key_states), next(value_states)
+                    layer.is_initialized = True
 
-            hidden_states = text_model.norm(hidden_states)
-            logits = self._model.lm_head(hidden_states)
+            # (3, batch, seq) M-RoPE positions [T, H, W]
+            outputs = text_model(
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=cache,
+                use_cache=True,
+            )
+            logits = self._model.lm_head(outputs.last_hidden_state)
 
-            present_key_values = []
-            for idx in range(num_linear_attn_layers):
-                present_key_values.append(cache.conv_states[idx])
-                present_key_values.append(cache.recurrent_states[idx])
-            for idx in range(num_full_attn_layers):
-                present_key_values.append(cache.key_cache[idx])
-                present_key_values.append(cache.value_cache[idx])
-            return {"logits": logits, "present_key_values": present_key_values}
+            linear_attn_outputs, full_attn_outputs = [], []
+            for layer in outputs.past_key_values.layers:
+                if isinstance(layer, LinearAttentionCacheLayerMixin):
+                    linear_attn_outputs += [layer.conv_states[0], layer.recurrent_states[0]]
+                else:
+                    full_attn_outputs += [layer.keys, layer.values]
+            return {"logits": logits, "present_key_values": linear_attn_outputs + full_attn_outputs}
 
         self._text_model = text_model
         self._layer_types = layer_types
