@@ -792,7 +792,7 @@ def load_preprocessors(
     return preprocessors
 
 
-# TODO: remove load_minicpmv4_7_processor once official 4.7 checkpoints are published 
+# TODO: remove load_minicpmv4_7_processor once official 4.7 checkpoints are published
 def load_minicpmv4_7_processor(model_name_or_path: Union[str, Path], subfolder: str = ""):
     from transformers import (
         AutoTokenizer,
