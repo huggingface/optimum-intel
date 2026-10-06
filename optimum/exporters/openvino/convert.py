@@ -681,10 +681,8 @@ def _save_qwen3_tts_config_and_assets(model, output: Path):
 def _save_sensevoice_config_and_assets(model, output: Path):
     """Save SenseVoiceSmall config.json and the CMVN statistics.
 
-    The exported folder mirrors the FunASR layout: alongside ``openvino_encoder_model.xml`` and
-    ``openvino_ctc_model.xml`` it holds ``am.mvn`` (feature CMVN statistics) so the runtime can
-    preprocess audio without a ``funasr`` dependency. The tokenizer/detokenizer IRs are produced
-    separately by :func:`maybe_convert_tokenizers`, honoring the ``convert_tokenizer`` flag.
+    The exported folder contains a single ``openvino_model.xml`` alongside ``am.mvn`` (feature CMVN
+    statistics), so the runtime can preprocess audio without a ``funasr`` dependency.
     """
     from optimum.intel.openvino.modeling_funasr import copy_sensevoice_cmvn
 

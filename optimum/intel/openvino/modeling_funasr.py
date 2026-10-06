@@ -1092,20 +1092,24 @@ class _OVModelForSenseVoice(OVModel):
         assert (
             input_features is not None or waveforms is not None
         ), "Either input_features or waveform must be specified."
+        assert isinstance(
+            language, str
+        ), '\'language\' should be of type str and one of "auto", "zh", "en", "yue", "ja", "ko", "nospeech".'
+
         if waveforms is not None:
             inputs = self.preprocess_input(waveforms, sampling_rate, language=language, use_itn=use_itn)
             outputs, encoder_out_lens = self.forward(**inputs)
         else:
-            lid_dict = self.config.lid_dict
-            textnorm_dict = self.config.textnorm_dict
-            language_id = lid_dict.get(language, 0)
-            textnorm_id = textnorm_dict["withitn"] if use_itn else textnorm_dict["woitn"]
+            language_id = self.config.lid_dict.get(language, 0)
+            language = torch.full((input_features.shape[0],), language_id, dtype=torch.long)
+            textnorm = kwargs.pop("textnorm", None)
+            if textnorm is None:
+                textnorm_id = self.config.textnorm_dict["withitn"] if use_itn else self.config.textnorm_dict["woitn"]
+                textnorm = torch.full((input_features.shape[0],), textnorm_id, dtype=torch.long)
 
             if speech_lengths is None:
                 speech_lengths = torch.tensor([f.shape[0] for f in input_features], dtype=torch.int32)
 
-            language = torch.full((input_features.shape[0],), language_id, dtype=torch.long)
-            textnorm = torch.full((input_features.shape[0],), textnorm_id, dtype=torch.long)
             outputs, encoder_out_lens = self.forward(
                 input_features=input_features, speech_lengths=speech_lengths, language=language, textnorm=textnorm
             )
