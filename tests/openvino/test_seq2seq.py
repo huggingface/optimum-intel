@@ -78,7 +78,6 @@ from optimum.intel.openvino.modeling_text2speech import (
 from optimum.intel.openvino.modeling_visual_language import (
     MODEL_PARTS_CLS_MAPPING,
     MODEL_TYPE_TO_CLS_MAPPING,
-    _OVMiniCPMVForCausalLM,
     _OVQwen3OmniMoeForCausalLM,
 )
 from optimum.intel.pipelines import pipeline as optimum_pipeline
@@ -593,6 +592,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "videochat_flash_qwen",
         "internvl_chat",
         "minicpmv",
+        "minicpm_v4_5",
         "minicpmo",
         "llava-qwen2",
         "phi3_v",
@@ -621,6 +621,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "qwen3_vl",
         "videochat_flash_qwen",
         "muse_glimmer",
+        "minicpm_v4_5",
         "gemma4",
         "gemma4_moe",
         "gemma4_unified",
@@ -752,7 +753,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 transformers_inputs["inputs"] = transformers_inputs.pop("input_ids")
             ov_outputs = ov_model.generate(**inputs, generation_config=generation_config)
             # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
-            if model_arch in ["minicpmv", "minicpmo", "internvl_chat", "videochat_flash_qwen"]:
+            if model_arch in ["minicpmv", "minicpm_v4_5", "minicpmo", "internvl_chat", "videochat_flash_qwen"]:
                 ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
             with torch.no_grad():
                 transformers_outputs = transformers_model.generate(
@@ -891,7 +892,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 transformers_outputs = transformers_outputs[1].sequences
 
         # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
-        if model_arch in ["minicpmv", "minicpmo", "internvl_chat", "videochat_flash_qwen"]:
+        if model_arch in ["minicpmv", "minicpm_v4_5", "minicpmo", "internvl_chat", "videochat_flash_qwen"]:
             ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
         self.assertTrue(
             torch.equal(ov_outputs, transformers_outputs),
@@ -964,103 +965,6 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
         del ov_model
         gc.collect()
-
-    def test_minicpm_v4_5_video_preprocessing(self):
-        class Processor:
-            chat_template = "template"
-
-            def apply_chat_template(self, messages, **kwargs):
-                self.messages = messages
-                self.template_kwargs = kwargs
-                return "prompt"
-
-            def __call__(self, prompts, images, **kwargs):
-                self.prompts = prompts
-                self.images = images
-                self.kwargs = kwargs
-                return {"image_sizes": [], "input_ids": torch.ones((1, 1), dtype=torch.long)}
-
-        class Config:
-            version = 4.5
-
-        processor = Processor()
-        image = np.zeros((2, 2, 3), dtype=np.uint8)
-        video = np.ones((7, 2, 2, 3), dtype=np.uint8)
-        inputs = _OVMiniCPMVForCausalLM.preprocess_inputs(
-            text="Describe the video", image=image, video=video, processor=processor, config=Config()
-        )
-
-        self.assertEqual(
-            processor.messages,
-            [
-                {
-                    "role": "user",
-                    "content": "(<image>./</image>)" * 8 + "\nDescribe the video",
-                }
-            ],
-        )
-        self.assertEqual(processor.prompts, "prompt")
-        self.assertEqual(
-            processor.template_kwargs,
-            {"tokenize": False, "add_generation_prompt": True},
-        )
-        self.assertEqual(len(processor.images), 8)
-        self.assertTrue(np.array_equal(processor.images[0], image))
-        self.assertTrue(np.array_equal(np.asarray(processor.images[1]), video[0]))
-        self.assertTrue(np.array_equal(np.asarray(processor.images[-1]), video[-1]))
-        self.assertEqual(
-            processor.kwargs,
-            {
-                "temporal_ids": [[-1], [0, 1, 2, 3, 4, 5], [6]],
-                "max_slice_nums": 1,
-                "use_image_id": False,
-                "return_tensors": "pt",
-            },
-        )
-        self.assertNotIn("image_sizes", inputs)
-
-    def test_minicpm_v4_5_temporal_groups_use_separate_resampler_calls(self):
-        class ModelStub:
-            resampling = _OVMiniCPMVForCausalLM.resampling
-            _get_1d_sincos_pos_embed_from_grid_new = (
-                _OVMiniCPMVForCausalLM._get_1d_sincos_pos_embed_from_grid_new
-            )
-            embed_dim = 16
-            max_size = (4, 4)
-            _pos_embeds = torch.zeros((4, 4, embed_dim), dtype=torch.float32)
-
-            def __init__(self):
-                self.calls = []
-
-            def _adjust_pos_cache(self, tgt_sizes):
-                pass
-
-            def resampler(self, image_feature, pos_embed, key_padding_mask):
-                self.calls.append(
-                    (
-                        image_feature.shape,
-                        pos_embed.shape,
-                        key_padding_mask.shape,
-                        pos_embed[:, 0].numpy().copy(),
-                    )
-                )
-                return np.zeros((1, 2, self.embed_dim), dtype=np.float32)
-
-        model = ModelStub()
-        image_features = torch.zeros((10, 6, 8), dtype=torch.float32)
-        tgt_sizes = torch.tensor([[2, 3]] * 10, dtype=torch.int32)
-
-        output = model.resampling(image_features, tgt_sizes, [list(range(6)), list(range(6, 10))])
-
-        self.assertEqual(output.shape, (2, 2, model.embed_dim))
-        self.assertEqual(
-            [(call[0], call[1], call[2]) for call in model.calls],
-            [
-                ((1, 36, 8), (36, 1, 16), (1, 36)),
-                ((1, 24, 8), (24, 1, 16), (1, 24)),
-            ],
-        )
-        self.assertFalse(np.array_equal(model.calls[0][3][0], model.calls[0][3][6]))
 
     @parameterized.expand(
         ["llava", "llava_next", "llava_next_video", "llava_next_mistral"]

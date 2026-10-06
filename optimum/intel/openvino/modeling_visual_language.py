@@ -2566,6 +2566,8 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         pos_embed = torch.nn.utils.rnn.pad_sequence(pos_embed, batch_first=True, padding_value=0.0).permute(
             1, 0, 2
         )  # BLD => L * B * D
+        # A temporal group is represented by one fixed set of resampler query tokens, so concatenate
+        # its frame features and positions before inference instead of producing tokens for every frame.
         if temporal_groups is not None:
             group_outputs = []
             frame_start = 0

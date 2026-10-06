@@ -974,6 +974,7 @@ TEST_NAME_TO_MODEL_TYPE = {
     "ltx2": "ltx2-video-transformer",
     "ltx2.3": "ltx2-video-transformer",
     "mistral-nemo": "mistral",
+    "minicpm_v4_5": "minicpmv",
     "mixtral_awq": "mixtral",
     "nanollava_vision_tower": "siglip",
     "opt125m": "opt",
