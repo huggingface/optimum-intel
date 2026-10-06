@@ -101,7 +101,7 @@ jobs:
       # MiniCPM-V 4.7 is not in a transformers release yet: pin the transformers commit that adds it (5.18.0.dev0).
       - name: MiniCPM-V-4.7 Validation
         run: |
-          uv pip install "transformers @ git+https://github.com/huggingface/transformers.git@6da3313a6f89fb3fe0d51c02fe06e3664cd436b0"
+          uv pip install "transformers>=5.18"
           pytest tests/openvino/${{ matrix.test-pattern }} -k "minicpmv4_7" --durations=0
 
       # test_quantization and test_cb_compatible are not matched by the matrix test-pattern glob, so run them
@@ -109,7 +109,7 @@ jobs:
       - name: MiniCPM-V-4.7 Quantization and Continuous Batching Validation
         if: ${{ matrix.test-pattern == '*export*' }}
         run: |
-          uv pip install "transformers @ git+https://github.com/huggingface/transformers.git@6da3313a6f89fb3fe0d51c02fe06e3664cd436b0"
+          uv pip install "transformers>=5.18"
           pytest tests/openvino/test_quantization.py tests/openvino/test_cb_compatible.py -k "minicpmv4_7" --durations=0
 
       # QwenImage21Pipeline is only available in diffusers main. test_diffusion is not matched by the matrix
