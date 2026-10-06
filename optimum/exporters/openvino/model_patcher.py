@@ -876,9 +876,9 @@ class MistralModelPatcher(OVDecoderModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
-        if hasattr(self._model.model, "model") and hasattr(self._model.model.model, "layers"):
+        if hasattr(self._model, "model") and hasattr(self._model.model, "layers"):
             for layer in self._model.model.layers:
-                if hasattr(layer.self_attn, "rotary_emb"):
+                if hasattr(layer.self_attn, "rotary_emb") and hasattr(layer.self_attn.rotary_emb, "_orig_forward"):
                     layer.self_attn.rotary_emb.forward = layer.self_attn.rotary_emb._orig_forward
                     del layer.self_attn.rotary_emb._orig_forward
 
@@ -12512,6 +12512,15 @@ class MuseGlimmerLanguageModelPatcher(OVDecoderModelPatcher):
 ZIMAGE_CAP_SEQ = 128
 
 
+def _z_image_precompute_rope_tables(rope_embedder):
+    """Compute the real (cos, sin) RoPE lookup tables eagerly, in float32."""
+    raw_freqs = rope_embedder.precompute_freqs_cis(
+        rope_embedder.axes_dims, rope_embedder.axes_lens, theta=rope_embedder.theta
+    )
+    rope_embedder._ov_freqs_cos = [f.real.float() for f in raw_freqs]
+    rope_embedder._ov_freqs_sin = [f.imag.float() for f in raw_freqs]
+
+
 def _z_image_rope_embedder_call(self, ids: "torch.Tensor"):
     """
     Patched RopeEmbedder.__call__ for OV export.
@@ -12522,12 +12531,12 @@ def _z_image_rope_embedder_call(self, ids: "torch.Tensor"):
     """
     device = ids.device
 
-    # Lazily precompute real (cos, sin) lookup tables
-    if not hasattr(self, "_ov_freqs_cos") or self._ov_freqs_cos is None:
-        raw_freqs = self.precompute_freqs_cis(self.axes_dims, self.axes_lens, theta=self.theta)
-        self._ov_freqs_cos = [f.real.float() for f in raw_freqs]
-        self._ov_freqs_sin = [f.imag.float() for f in raw_freqs]
-        self.freqs_cis = raw_freqs  # keep original for non-export use
+    # The (cos, sin) lookup tables are precomputed by ZImageTransformerModelPatcher.__enter__,
+    # outside tracing, so they land in the IR as constants. Computing them here instead would
+    # trace precompute_freqs_cis's float64 arange/pow/outer into the graph, and the GPU plugin
+    # evaluates that float64 subgraph incorrectly, corrupting RoPE in every attention layer.
+    if getattr(self, "_ov_freqs_cos", None) is None:
+        _z_image_precompute_rope_tables(self)
 
     # Move to the correct device
     if self._ov_freqs_cos[0].device != device:
@@ -12564,22 +12573,23 @@ def _z_image_attn_proc_call(
     """
 
     def apply_rotary_emb_real(x_in, freqs_cis_real):
-        """Real-number RoPE: avoids view_as_complex/view_as_real."""
+        """Real-number RoPE: avoids view_as_complex/view_as_real.
+
+        Written in the interleaved form of diffusers' Flux apply_rotary_emb,
+        x * cos + rotate_pairs(x) * sin, which OpenVINO's RoPEFusionFlux fuses into a single
+        RoPE op. The complex product is identical, but spelling it out per half
+        (x0 * cos - x1 * sin, x0 * sin + x1 * cos) matches no RoPE fusion pattern.
+        """
         # x_in:          [batch, seq, heads, head_dim]
         # freqs_cis_real:[batch, seq, head_dim//2, 2]  (last dim: [cos, sin])
-        cos = freqs_cis_real[..., 0]  # [batch, seq, head_dim//2]
-        sin = freqs_cis_real[..., 1]  # [batch, seq, head_dim//2]
+        # Full-width tables, broadcast over the heads dimension: [batch, seq, 1, head_dim]
+        cos = freqs_cis_real[..., 0].repeat_interleave(2, dim=-1).unsqueeze(2)
+        sin = freqs_cis_real[..., 1].repeat_interleave(2, dim=-1).unsqueeze(2)
 
         x_float = x_in.float()
-        x_pairs = x_float.reshape(*x_float.shape[:-1], -1, 2)  # [batch, seq, heads, head_dim//2, 2]
-
-        # Broadcast cos/sin over the heads dimension
-        cos = cos.unsqueeze(2)  # [batch, seq, 1, head_dim//2]
-        sin = sin.unsqueeze(2)
-
-        out_real = x_pairs[..., 0] * cos - x_pairs[..., 1] * sin  # [batch, seq, heads, head_dim//2]
-        out_imag = x_pairs[..., 0] * sin + x_pairs[..., 1] * cos
-        out = torch.stack([out_real, out_imag], dim=-1).flatten(-2)  # [batch, seq, heads, head_dim]
+        x_real, x_imag = x_float.reshape(*x_float.shape[:-1], -1, 2).unbind(-1)  # [batch, seq, heads, head_dim//2]
+        x_rotated = torch.stack([-x_imag, x_real], dim=-1).flatten(3)  # [batch, seq, heads, head_dim]
+        out = x_float * cos + x_rotated * sin
         return out.type_as(x_in)
 
     query = attn.to_q(hidden_states)
@@ -12797,6 +12807,10 @@ class ZImageTransformerModelPatcher(ModelPatcher):
         #    img_ids:                [B, img_seq_len, 3]
         _model_ref = self._model
 
+        # 3. Precompute the RoPE tables before tracing so they are exported as constants
+        #    (see _z_image_rope_embedder_call)
+        _z_image_precompute_rope_tables(self._model.rope_embedder)
+
         def patched_forward(hidden_states, timestep, encoder_hidden_states, encoder_attention_mask, txt_ids, img_ids):
             return _patched_z_image_batched_forward(
                 _model_ref, hidden_states, timestep, encoder_hidden_states, encoder_attention_mask, txt_ids, img_ids
@@ -12806,6 +12820,9 @@ class ZImageTransformerModelPatcher(ModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
+
+        rope_embedder = self._model.rope_embedder
+        del rope_embedder._ov_freqs_cos, rope_embedder._ov_freqs_sin
 
         # Restore ZSingleStreamAttnProcessor class-level patch
         try:

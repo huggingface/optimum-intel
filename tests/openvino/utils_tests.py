@@ -272,6 +272,7 @@ HUB_MODEL_NAMES = {
     "mistral": "optimum-intel-internal-testing/tiny-random-mistral",
     "mistral-nemo": "optimum-intel-internal-testing/tiny-random-mistral-nemo",
     "mistral3": "optimum-intel-internal-testing/tiny-random-mistral3",
+    "ministral3": "optimum-intel-internal-testing/tiny-random-ministral3",
     "mixtral": "optimum-intel-internal-testing/tiny-mixtral",
     "mixtral_awq": "optimum-intel-internal-testing/tiny-mixtral-AWQ-4bit",
     "mobilebert": "optimum-intel-internal-testing/tiny-random-MobileBertModel",
@@ -397,11 +398,24 @@ def _resolve_cached_model_paths(model_names: dict) -> dict:
         if not os.path.exists(constants.HF_HUB_CACHE):
             return model_names
 
-        repo_id_to_local_paths = {
-            repo.repo_id: str(next(iter(repo.revisions)).snapshot_path)
-            for repo in scan_cache_dir().repos
-            if repo.revisions
-        }
+        repo_id_to_local_paths = {}
+        for repo in scan_cache_dir().repos:
+            if not repo.revisions:
+                continue
+            best = None
+            for rev in sorted(repo.revisions, key=lambda r: r.last_modified, reverse=True):
+                file_names = {f.file_name for f in rev.files}
+                if "config.json" not in file_names:
+                    continue
+                # Skip repos with custom Python code — their Hub repos can add new .py
+                # files that a stale local snapshot won't have, causing FileNotFoundError
+                if any(f.endswith(".py") for f in file_names):
+                    break
+                if all(os.path.exists(f.file_path) for f in rev.files):
+                    best = rev
+                    break
+            if best is not None:
+                repo_id_to_local_paths[repo.repo_id] = str(best.snapshot_path)
         return {k: repo_id_to_local_paths.get(v, v) for k, v in model_names.items()}
     except Exception:
         return model_names
@@ -497,7 +511,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_encoder": 394,
     },
     "z-image": {
-        "transformer": 104,
+        "transformer": 116,
         "vae_decoder": 60,
         "vae_encoder": 44,
         "text_encoder": 16,
@@ -548,6 +562,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_model": 15,
     },
     "mistral3": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 16,
+        "multi_modal_projector_model": 3,
+    },
+    "ministral3": {
         "lm_model": 30,
         "text_embeddings_model": 1,
         "vision_embeddings_model": 16,
@@ -770,6 +790,15 @@ REMOTE_CODE_MODELS = (
     "qwen3_asr",
     "fun_asr",
     "videochat_flash_qwen",
+    "internvl_chat",
+    "minicpmv",
+    "minicpm_v4_5",
+    "minicpmo",
+    "llava-qwen2",
+    "phi3_v",
+    "maira2",
+    "phi4mm",
+    "gemma3n",
 )
 
 if is_transformers_version("<", "5"):
@@ -791,17 +820,146 @@ ARCH_TO_MODEL_CLASS = {
     "qwen3_5_moe": "OVModelForVisualCausalLM",
     "gemma4_moe": "OVModelForVisualCausalLM",
     "gemma4_unified": "OVModelForVisualCausalLM",
-    "gemma4_unified-it": "OVModelForVisualCausalLM",
     "muse_glimmer": "OVModelForVisualCausalLM",
     "minicpmv4_7": "OVModelForVisualCausalLM",
     "qwen3_omni_moe": "OVModelForMultimodalLM",
     "stable-diffusion": "OVDiffusionPipeline",
     "whisper": "OVModelForSpeechSeq2Seq",
-    "bart": "OVModelForSeq2SeqLM",
     "bert": "OVModelForFeatureExtraction",
     "electra": "OVModelForFeatureExtraction",
     "clip": "OVModelForZeroShotImageClassification",
     "siglip": "OVModelForZeroShotImageClassification",
+    # From test_export.py
+    "albert": "OVModelForSequenceClassification",
+    "blenderbot": "OVModelForFeatureExtraction",
+    "distilbert": "OVModelForQuestionAnswering",
+    "hunyuan_v1_dense": "OVModelForCausalLM",
+    "roberta": "OVModelForTokenClassification",
+    "sam": "OVSamModel",
+    "smollm3": "OVModelForCausalLM",
+    "speecht5": "OVModelForTextToSpeechSeq2Seq",
+    "t5": "OVModelForSeq2SeqLM",
+    "vit": "OVModelForImageClassification",
+    "wav2vec2": "OVModelForAudioClassification",
+    # From test_decoder.py - CausalLM models
+    "arcee": "OVModelForCausalLM",
+    "biogpt": "OVModelForCausalLM",
+    "bloom": "OVModelForCausalLM",
+    "codegen": "OVModelForCausalLM",
+    "cohere": "OVModelForCausalLM",
+    "falcon": "OVModelForCausalLM",
+    "falcon-40b": "OVModelForCausalLM",
+    "glm4": "OVModelForCausalLM",
+    "gpt_bigcode": "OVModelForCausalLM",
+    "gpt_neo": "OVModelForCausalLM",
+    "gpt_neox": "OVModelForCausalLM",
+    "gpt_neox_japanese": "OVModelForCausalLM",
+    "gpt_oss": "OVModelForCausalLM",
+    "gpt_oss_mxfp4": "OVModelForCausalLM",
+    "gptj": "OVModelForCausalLM",
+    "granite": "OVModelForCausalLM",
+    "granitemoe": "OVModelForCausalLM",
+    "mistral-nemo": "OVModelForCausalLM",
+    "mixtral": "OVModelForCausalLM",
+    "mpt": "OVModelForCausalLM",
+    "opt": "OVModelForCausalLM",
+    "pegasus": "OVModelForCausalLM",
+    "persimmon": "OVModelForCausalLM",
+    "phi": "OVModelForCausalLM",
+    "phi3": "OVModelForCausalLM",
+    "qwen2_moe": "OVModelForCausalLM",
+    "stablelm": "OVModelForCausalLM",
+    "starcoder2": "OVModelForCausalLM",
+    "xglm": "OVModelForCausalLM",
+    # From test_seq2seq.py - Seq2SeqLM models
+    "bigbird_pegasus": "OVModelForSeq2SeqLM",
+    "blenderbot-small": "OVModelForSeq2SeqLM",
+    "longt5": "OVModelForSeq2SeqLM",
+    "m2m_100": "OVModelForSeq2SeqLM",
+    "mbart": "OVModelForSeq2SeqLM",
+    # Vision models - ImageClassification
+    "audio-spectrogram-transformer": "OVModelForAudioClassification",
+    "beit": "OVModelForImageClassification",
+    "convnext": "OVModelForImageClassification",
+    "data2vec-vision": "OVModelForImageClassification",
+    "deit": "OVModelForImageClassification",
+    "levit": "OVModelForImageClassification",
+    "mobilenet_v1": "OVModelForImageClassification",
+    "mobilenet_v2": "OVModelForImageClassification",
+    "mobilevit": "OVModelForImageClassification",
+    "perceiver_vision": "OVModelForImageClassification",
+    "poolformer": "OVModelForImageClassification",
+    "resnet": "OVModelForImageClassification",
+    "swin": "OVModelForImageClassification",
+    "swin-window": "OVModelForImageClassification",
+    "vit-with-attentions": "OVModelForImageClassification",
+    "vit-with-hidden-states": "OVModelForImageClassification",
+    # Vision models - Feature Extraction / Object Detection
+    "donut-swin": "OVModelForFeatureExtraction",
+    "open-clip": "OVModelOpenCLIPForZeroShotImageClassification",
+    "segformer": "OVModelForFeatureExtraction",
+    # Text models - Masked LM / Feature Extraction / Embeddings
+    "bge": "OVModelForFeatureExtraction",
+    "camembert": "OVModelForMaskedLM",
+    "convbert": "OVModelForSequenceClassification",
+    "deberta": "OVModelForMaskedLM",
+    "deberta-v2": "OVModelForMaskedLM",
+    "esm": "OVModelForMaskedLM",
+    "ibert": "OVModelForMaskedLM",
+    "mobilebert": "OVModelForMaskedLM",
+    "mpnet": "OVModelForFeatureExtraction",
+    "perceiver_text": "OVModelForMaskedLM",
+    "rembert": "OVModelForMaskedLM",
+    "roformer": "OVModelForMaskedLM",
+    "sentence-transformers-bert": "OVModelForFeatureExtraction",
+    "squeezebert": "OVModelForMaskedLM",
+    "st-bert": "OVModelForFeatureExtraction",
+    "st-mpnet": "OVModelForFeatureExtraction",
+    "xlm-roberta": "OVModelForMaskedLM",
+    # Audio models
+    "data2vec-audio": "OVModelForAudioClassification",
+    "hubert": "OVModelForAudioClassification",
+    "sew": "OVModelForAudioClassification",
+    "sew-d": "OVModelForAudioClassification",
+    "unispeech": "OVModelForAudioClassification",
+    "unispeech-sat": "OVModelForAudioClassification",
+    "wav2vec2-conformer": "OVModelForAudioClassification",
+    "wav2vec2-hf": "OVModelForAudioClassification",
+    "wavlm": "OVModelForAudioClassification",
+    # Causal LM - Additional models
+    "cohere2": "OVModelForCausalLM",
+    "gemma3": "OVModelForVisualCausalLM",
+    "olmo": "OVModelForCausalLM",
+    "olmo2": "OVModelForCausalLM",
+    "opt125m": "OVModelForCausalLM",
+    "phimoe": "OVModelForCausalLM",
+    # Vision-Language / Multimodal models
+    "gemma3n": "OVModelForVisualCausalLM",
+    "gemma4": "OVModelForVisualCausalLM",
+    "llava_next": "OVModelForVisualCausalLM",
+    "llava_next_mistral": "OVModelForVisualCausalLM",
+    "mistral3": "OVModelForVisualCausalLM",
+    "pix2struct": "OVModelForPix2Struct",
+    "trocr": "OVModelForVision2Seq",
+    "vision-encoder-decoder": "OVModelForVision2Seq",
+    # Diffusion pipelines
+    "flux": "OVFluxPipeline",
+    "flux-fill": "OVFluxFillPipeline",
+    "flux.2-klein": "OVFlux2KleinPipeline",
+    "latent-consistency": "OVLatentConsistencyModelPipeline",
+    "ltx-video": "OVLTXPipeline",
+    "ltx2": "OVLTX2Pipeline",
+    "ltx2.3": "OVLTX2Pipeline",
+    "qwenimage": "OVQwenImagePipeline",
+    "sana": "OVSanaPipeline",
+    "sana-sprint": "OVSanaPipeline",
+    "stable-diffusion-3": "OVStableDiffusion3Pipeline",
+    "stable-diffusion-xl": "OVStableDiffusionXLPipeline",
+    "stable-diffusion-xl-refiner": "OVStableDiffusionXLImg2ImgPipeline",
+    "stable-diffusion-with-custom-variant": "OVStableDiffusionPipeline",
+    "stable-diffusion-with-safety-checker": "OVStableDiffusionPipeline",
+    "stable-diffusion-with-textual-inversion": "OVStableDiffusionPipeline",
+    "z-image": "OVZImagePipeline",
 }
 
 
