@@ -89,7 +89,7 @@ if is_transformers_version(">=", "5.2"):
         Qwen3_5VisionRotaryEmbedding,
     )
 
-if is_transformers_version(">=", "5.18.0.dev0"):
+if is_transformers_version(">=", "5.18"):
     from transformers.models.minicpmv4_7.modeling_minicpmv4_7 import MiniCPMV4_7Model
     from transformers.vision_utils import get_vision_nearest_position_ids, get_vision_window_index
 
