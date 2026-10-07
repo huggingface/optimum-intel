@@ -1093,9 +1093,6 @@ class _OVModelForSenseVoice(OVModel):
         assert (
             input_features is not None or waveforms is not None
         ), "Either input_features or waveform must be specified."
-        assert isinstance(
-            language, str
-        ), '\'language\' should be of type str and one of "auto", "zh", "en", "yue", "ja", "ko", "nospeech".'
 
         if waveforms is not None:
             inputs = self.preprocess_input(waveforms, sampling_rate, language=language, use_itn=use_itn)
