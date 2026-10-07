@@ -8040,8 +8040,8 @@ class _OVMiniCPMV4_7ForCausalLM(OVModelForVisualCausalLM):
         quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
         **kwargs,
     ):
-        if is_transformers_version("<", "5.18.0.dev0"):
-            raise ImportError("MiniCPM-V 4.7 requires transformers >= 5.18.0.dev0.")
+        if is_transformers_version("<", "5.18.0"):
+            raise ImportError("MiniCPM-V 4.7 requires transformers >= 5.18.0.")
         super().__init__(
             language_model=language_model,
             text_embeddings=text_embeddings,
