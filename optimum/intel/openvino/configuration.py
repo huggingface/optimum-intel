@@ -562,6 +562,20 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
             "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
         },
     },
+    # Teacher-forced top-1 agreement with the bf16 model on text-only / image / video answers: 93.8% vs 93.0% with the
+    # generic int4 config (group size 128); int8 reaches 97.8%.
+    "openbmb/MiniCPM-V-4.7-35B-A3B": {
+        "quantization_configs": {
+            "lm_model": {
+                "bits": 4,
+                "sym": False,
+                "backup_precision": "int8_sym",
+                "group_size": 64,
+            },
+            "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
+            "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
+        },
+    },
     "openbmb/MiniCPM5-2B": {
         "bits": 4,
         "sym": False,

@@ -266,6 +266,7 @@ HUB_MODEL_NAMES = {
     "minicpm": "optimum-intel-internal-testing/tiny-random-minicpm",
     "minicpm3": "optimum-intel-internal-testing/tiny-random-minicpm3",
     "minicpmv": "optimum-intel-internal-testing/tiny-random-minicpmv-2_6",
+    "minicpmv4_7": "optimum-intel-internal-testing/tiny-random-minicpmv47",
     "minicpmo": "optimum-intel-internal-testing/tiny-random-MiniCPM-o-2_6",
     "minicpm_v4_5": "optimum-intel-internal-testing/tiny-random-minicpm-v-4_5",
     "mistral": "optimum-intel-internal-testing/tiny-random-mistral",
@@ -531,6 +532,11 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "lm_model": 66,
         "text_embeddings_model": 1,
         "vision_embeddings_model": 30,
+    },
+    "minicpmv4_7": {
+        "lm_model": 110,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 28,
     },
     "llava_next": {
         "lm_model": 30,
@@ -815,6 +821,7 @@ ARCH_TO_MODEL_CLASS = {
     "gemma4_moe": "OVModelForVisualCausalLM",
     "gemma4_unified": "OVModelForVisualCausalLM",
     "muse_glimmer": "OVModelForVisualCausalLM",
+    "minicpmv4_7": "OVModelForVisualCausalLM",
     "qwen3_omni_moe": "OVModelForMultimodalLM",
     "stable-diffusion": "OVDiffusionPipeline",
     "whisper": "OVModelForSpeechSeq2Seq",

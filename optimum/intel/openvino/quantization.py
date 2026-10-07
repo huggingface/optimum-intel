@@ -818,7 +818,13 @@ class OVCalibrationDatasetBuilder:
 
         from PIL import Image
 
-        processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=self.trust_remote_code)
+        if self.model.config.model_type == "minicpmv4_7":
+            # the checkpoint processor configs point at remote code, see `load_minicpmv4_7_processor`
+            from optimum.exporters.openvino.utils import load_minicpmv4_7_processor
+
+            processor = load_minicpmv4_7_processor(config.processor)
+        else:
+            processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=self.trust_remote_code)
         try:
             tokenizer = AutoTokenizer.from_pretrained(config.tokenizer, trust_remote_code=self.trust_remote_code)
             tokenizer_error = None
