@@ -18,14 +18,17 @@ import inspect
 
 import itertools
 import logging
+import os
 import unittest
 from collections import defaultdict
 from collections.abc import Iterable
 from functools import partial
+from pathlib import Path
 from typing import Union, Type
 
 import pytest
 import numpy as np
+import openvino as ov
 import torch
 from PIL import Image
 from parameterized import parameterized
@@ -136,6 +139,28 @@ pattern_prefix = "^__module.model"
 
 class OVQuantizerTest(unittest.TestCase):
     maxDiff = None
+
+    @parameterized.expand([(4, nncf.CompressWeightsMode.INT4_SYM), (8, nncf.CompressWeightsMode.INT8_SYM)])
+    @unittest.skipUnless(os.environ.get("PARAFORMER_TEST_MODEL"), "Set PARAFORMER_TEST_MODEL to an exported IR")
+    def test_paraformer_weight_compression(self, bits, mode):
+        model_path = Path(os.environ["PARAFORMER_TEST_MODEL"]) / "openvino_model.xml"
+        compressed = nncf.compress_weights(ov.Core().read_model(str(model_path)), mode=mode)
+        weight_type = ov.Type.i4 if bits == 4 else ov.Type.i8
+        self.assertTrue(
+            any(op.get_type_name() == "Constant" and op.get_output_element_type(0) == weight_type
+                for op in compressed.get_ops())
+        )
+
+        compiled = ov.Core().compile_model(compressed, "CPU")
+        inputs = {
+            input_port.get_any_name(): (
+                np.array([100], dtype=np.int32)
+                if "length" in input_port.get_any_name().lower()
+                else np.random.randn(1, 100, 560).astype(np.float32)
+            )
+            for input_port in compiled.inputs
+        }
+        self.assertTrue(compiled(inputs))
 
     # TODO (nikita-savelyevv): Extend for OVModelForSpeechSeq2Seq, OVStableDiffusionPipeline and OVModelForSeq2SeqLM
     SUPPORTED_ARCHITECTURES_OV_MODEL = (

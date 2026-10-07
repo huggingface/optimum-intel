@@ -94,6 +94,7 @@ from .modeling_seq2seq import (
     OVModelForSpeechSeq2Seq,
     OVModelForVision2Seq,
 )
+from .modeling_speech2text import OVParaformerForSpeechSeq2Seq
 from .modeling_text2speech import OVModelForTextToSpeechSeq2Seq
 from .modeling_visual_language import OVModelForMultimodalLM, OVModelForVisualCausalLM
 
