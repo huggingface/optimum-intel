@@ -19,6 +19,7 @@ from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Union
 
 import torch
+from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
 
 from optimum.exporters.openvino.base import (
@@ -302,7 +303,59 @@ COMMON_TEXT2TEXT_GENERATION_TASKS = [
 logger = logging.getLogger(__name__)
 
 
+def _add_custom_default_tasks_registry():
+    """Add `TasksManager._CUSTOM_DEFAULT_TASKS`: (framework, model_type) -> task.
+
+    Entries win over the task automatic inference derives from the Hub pipeline tag, which for some
+    architectures advertises a task they are not registered for in the OpenVINO exporter.
+    """
+    if hasattr(TasksManager, "_CUSTOM_DEFAULT_TASKS"):
+        return
+    TasksManager._CUSTOM_DEFAULT_TASKS = {}
+
+    original = TasksManager._infer_task_from_model_name_or_path.__func__
+
+    def _infer_task_from_model_name_or_path(
+        cls,
+        model_name_or_path: str,
+        subfolder: str = "",
+        revision: Optional[str] = None,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
+        token: Optional[Union[bool, str]] = None,
+        library_name: Optional[str] = None,
+    ) -> str:
+        if cls._CUSTOM_DEFAULT_TASKS and library_name in (None, "transformers"):
+            try:
+                # Raw config read: AutoConfig cannot resolve model types that live in remote code.
+                config_dict, _ = PretrainedConfig.get_config_dict(
+                    model_name_or_path,
+                    subfolder=subfolder,
+                    revision=revision,
+                    cache_dir=cache_dir,
+                    token=token,
+                )
+                default_task = cls._CUSTOM_DEFAULT_TASKS.get(("pt", config_dict.get("model_type")))
+            except Exception:
+                default_task = None
+            if default_task is not None:
+                return default_task
+
+        return original(
+            cls,
+            model_name_or_path,
+            subfolder=subfolder,
+            revision=revision,
+            cache_dir=cache_dir,
+            token=token,
+            library_name=library_name,
+        )
+
+    TasksManager._infer_task_from_model_name_or_path = classmethod(_infer_task_from_model_name_or_path)
+
+
 def init_model_configs():
+    _add_custom_default_tasks_registry()
+
     if "open_clip" not in TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES:
         TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES["open_clip"] = {}
     if "kokoro" not in TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES:
@@ -387,6 +440,10 @@ def init_model_configs():
             "transformers",
             "Qwen3OmniMoeForConditionalGeneration",
         )
+
+    # Hy-MT2 decoders are published with pipeline_tag=translation, so the inferred task would be
+    # text2text-generation even though they are plain causal LMs.
+    TasksManager._CUSTOM_DEFAULT_TASKS[("pt", "hunyuan_v1_dense")] = "text-generation"
 
     if is_diffusers_available() and "fill" not in TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS:
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_LOADERS["fill"] = "FluxFillPipeline"
