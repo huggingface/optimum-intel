@@ -1987,8 +1987,7 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
             )
 
     def _copy_assets(self, source: Path, destination: Path) -> None:
-        """Copy the non-IR assets of a complete export into ``destination``.
-        """
+        """Copy the non-IR assets of a complete export into ``destination``."""
         import shutil
 
         ir_files = set()
