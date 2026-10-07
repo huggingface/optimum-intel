@@ -8293,7 +8293,7 @@ class _OVMiniCPMV4_7ForCausalLM(OVModelForVisualCausalLM):
         )
 
 
-if is_transformers_version(">=", "5.18.0.dev0"):
+if is_transformers_version(">=", "5.18.0"):
     _OVMiniCPMV4_7ForCausalLM.get_rope_index = MiniCPMV4_7Model.get_rope_index
     _OVMiniCPMV4_7ForCausalLM.get_vision_position_ids = MiniCPMV4_7Model.get_vision_position_ids
     _OVMiniCPMV4_7ForCausalLM._group_visual_frames = MiniCPMV4_7Model._group_visual_frames
