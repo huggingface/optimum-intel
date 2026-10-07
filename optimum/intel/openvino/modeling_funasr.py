@@ -80,6 +80,7 @@ def _extract_fbank_lfr(
     frame_shift: int = 10,
     lfr_m: int = 7,
     lfr_n: int = 6,
+    dither: float = 0.0,
 ) -> torch.Tensor:
     """Compute Kaldi fbank features for a single waveform and apply LFR stacking.
 
@@ -101,7 +102,7 @@ def _extract_fbank_lfr(
         num_mel_bins=n_mels,
         frame_length=min(frame_length, wav.shape[1] / target_fs * 1000),
         frame_shift=frame_shift,
-        dither=0.0,
+        dither=dither,
         energy_floor=0.0,
         window_type="hamming",
         sample_frequency=target_fs,
@@ -1032,7 +1033,7 @@ class _OVModelForSenseVoice(OVModel):
 
         feats: List[torch.Tensor] = []
         for arr in wav_list:
-            mat = _extract_fbank_lfr(arr, sampling_rate)
+            mat = _extract_fbank_lfr(arr, sampling_rate, dither=1.0)
             mat = _apply_cmvn(mat)
             feats.append(mat)
 
