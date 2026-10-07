@@ -8064,13 +8064,6 @@ class _OVMiniCPMV4_7ForCausalLM(OVModelForVisualCausalLM):
         self.merge_kernel_size = tuple(config.merge_kernel_size)
         self.rope_deltas = None
 
-    def get_experts_implementation(self):
-        # `generate` queries it to swap MoE kernels for decoding; there is nothing to swap in an exported graph
-        return {}
-
-    def set_experts_implementation(self, experts_implementation):
-        return
-
     def _encode_crops(self, pixel_values: torch.Tensor, target_sizes: torch.Tensor) -> torch.Tensor:
         """Runs the vision graph on every crop of the NaViT-packed `pixel_values` `(1, C, patch, sum(h*w)*patch)`."""
         features = []
