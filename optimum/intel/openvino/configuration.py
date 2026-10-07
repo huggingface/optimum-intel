@@ -586,6 +586,12 @@ _DEFAULT_8BIT_WQ_CONFIGS = {
             "text_encoder": {"bits": 8, "sym": False, "weight_only": True},
         },
     },
+    "Lightricks/LTX-2.5-Diffusers": {
+        "quantization_configs": {
+            "transformer": {"bits": 8, "sym": False, "weight_only": True},
+            "text_encoder": {"bits": 8, "sym": False, "weight_only": True},
+        },
+    },
 }
 
 # Add configs for model id aliases

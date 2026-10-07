@@ -16,6 +16,7 @@ import copy
 import functools
 import gc
 import inspect
+import json
 import logging
 import os
 from pathlib import Path
@@ -694,6 +695,12 @@ def export_from_model(
     **kwargs_shapes,
 ):
     model_kwargs = model_kwargs or {}
+    # `stateful` is narrowed below by what *this* model's task supports. Nested exports (LTX-2.5's prompt
+    # enhancer) are a different task, so they need the caller's request, not the narrowed value.
+    requested_stateful = stateful
+    # IRs written by nested `export_from_model` calls, which the caller still needs to see (auto
+    # compression sizes every returned path) but which are not this model's own components.
+    nested_submodel_paths = []
 
     if ov_config is not None and ov_config.quantization_config and not is_nncf_available():
         raise ImportError(
@@ -920,7 +927,19 @@ def export_from_model(
         if safety_checker is not None:
             safety_checker.save_pretrained(output.joinpath("safety_checker"))
 
+        # Kept out of `files_subpaths`, which doubles as `output_names` for this model's own
+        # `export_models` call below and must stay one name per component.
+        nested_submodel_paths += _export_ltx2_prompt_enhancer(
+            model,
+            output,
+            ov_config=ov_config,
+            stateful=requested_stateful,
+            trust_remote_code=trust_remote_code,
+            device=device,
+        )
+
         model.save_config(output)
+        _drop_unexported_ltx2_components(model, output)
 
     _set_runtime_options(
         models_and_export_configs,
@@ -942,7 +961,7 @@ def export_from_model(
         library_name=library_name,
     )
 
-    return files_subpaths
+    return files_subpaths + nested_submodel_paths
 
 
 def export_tokenizer(
@@ -1417,6 +1436,86 @@ def get_ltx_video_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     return models_for_export
 
 
+def _export_ltx2_prompt_enhancer(model, output: Path, **export_kwargs) -> List[str]:
+    """Export LTX-2.5's optional prompt enhancer into `prompt_enhancer/`, returning its IR subpaths.
+
+    The enhancer is a `Gemma4ForConditionalGeneration`, which optimum-intel already exports as an
+    `image-text-to-text` VLM: several IRs (language model plus text, per-layer text, vision and audio
+    embeddings) rather than the one-IR-per-subfolder shape `get_ltx2_video_models_for_export` can
+    express. So it is exported by a nested `export_from_model` call into its own subfolder instead of
+    joining the component map.
+
+    Returns an empty list for LTX-2.0/2.3 and for 2.5 checkpoints that register no enhancer, leaving
+    their exports untouched.
+    """
+    if not model.__class__.__name__.startswith("LTX2"):
+        return []
+    prompt_enhancer = getattr(model, "prompt_enhancer", None)
+    if prompt_enhancer is None:
+        return []
+
+    import torch
+
+    subfolder = "prompt_enhancer"
+    logger.info(f"Exporting the LTX-2 prompt enhancer to {subfolder}/")
+    # Tracing a 16-bit module without this fails outright ("expected m1 and m2 to have the same dtype"),
+    # and the real enhancer is bf16. Decided off the enhancer's own weights, as `main_export` does for a
+    # top-level export, rather than inherited from the pipeline's dtype.
+    if getattr(prompt_enhancer, "dtype", None) in (torch.float16, torch.bfloat16):
+        export_kwargs["patch_16bit_model"] = True
+    # The processor is saved separately at the pipeline root, but the enhancer folder needs its own copy
+    # to load as a standalone VLM.
+    preprocessors = [p for p in (getattr(model, "processor", None),) if p is not None]
+    enhancer_paths = export_from_model(
+        model=prompt_enhancer,
+        output=output / subfolder,
+        task="image-text-to-text",
+        preprocessors=preprocessors,
+        **export_kwargs,
+    )
+    return [os.path.join(subfolder, path) for path in enhancer_paths]
+
+
+def _drop_unexported_ltx2_components(model, output: Path):
+    """Null out `model_index.json` entries for LTX-2 components that were never written to disk.
+
+    `save_config` copies the torch pipeline's module registry verbatim. From LTX-2.5 on that registry
+    includes components belonging to *sibling* pipelines -- `diffusion_decoder` is only used by
+    `LTX2VideoDiffusionDecodePipeline` -- which this export does not produce, so loading the result
+    would go looking for folders that are not there.
+
+    Scoped to LTX-2 on purpose: other pipelines have their own long-standing handling of absent
+    components (the `safety_checker` back-compat path in `OVDiffusionPipeline._from_pretrained`, say),
+    and this must not change what they write.
+    """
+    if not model.__class__.__name__.startswith("LTX2"):
+        return
+
+    config_path = output / "model_index.json"
+    if not config_path.is_file():
+        return
+
+    model_index = json.loads(config_path.read_text())
+    dropped = []
+    for name, entry in model_index.items():
+        if name.startswith("_") or not (isinstance(entry, (list, tuple)) and len(entry) == 2):
+            continue
+        if entry[0] is None:
+            continue
+        # A component is on disk under its own name, or split across `<name>_*` folders: `vae` is
+        # written as `vae_decoder` / `vae_encoder`, `audio_vae` as `audio_vae_decoder`.
+        if (output / name).is_dir() or any(
+            child.is_dir() and child.name.startswith(f"{name}_") for child in output.iterdir()
+        ):
+            continue
+        model_index[name] = [None, None]
+        dropped.append(name)
+
+    if dropped:
+        logger.info(f"Not exported, so removed from model_index.json: {', '.join(sorted(dropped))}")
+        config_path.write_text(json.dumps(model_index, indent=2, sort_keys=True) + "\n")
+
+
 def get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     models_for_export = {}
 
@@ -1464,6 +1563,22 @@ def get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
         transformer.config, int_dtype=int_dtype, float_dtype=float_dtype
     )
     models_for_export["transformer"] = (transformer, transformer_export_config)
+
+    # Duration head. Registered from LTX-2.5 onwards; LTX-2.0/2.3 have no such module, so this leaves
+    # their export sets untouched.
+    duration_head = getattr(pipeline, "duration_head", None)
+    if duration_head is not None:
+        duration_head_config_constructor = TasksManager.get_exporter_config_constructor(
+            model=duration_head,
+            exporter=exporter,
+            library_name="diffusers",
+            task="semantic-segmentation",
+            model_type="ltx2-duration-head",
+        )
+        duration_head_export_config = duration_head_config_constructor(
+            duration_head.config, int_dtype=int_dtype, float_dtype=float_dtype
+        )
+        models_for_export["duration_head"] = (duration_head, duration_head_export_config)
 
     # VAE Decoder
     vae_decoder = copy.deepcopy(pipeline.vae)

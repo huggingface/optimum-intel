@@ -99,6 +99,10 @@ else:
     LTX2Pipeline = object
     LTX2ImageToVideoPipeline = object
 
+if is_diffusers_version(">=", "0.40.0"):
+    # LTX-2.5 onwards. Imported for `predict_num_frames`, which `OVModelDurationHead` reuses verbatim.
+    from diffusers.pipelines.ltx2 import LTX2DurationHead
+
 if is_diffusers_version(">=", "0.29.0"):
     from diffusers import StableDiffusion3Img2ImgPipeline, StableDiffusion3Pipeline
 else:
@@ -160,6 +164,8 @@ DIFFUSION_MODEL_TEXT_ENCODER_I2I_SUBFOLDER = "text_encoder_i2i"
 DIFFUSION_MODEL_CONNECTORS_SUBFOLDER = "connectors"
 DIFFUSION_MODEL_AUDIO_VAE_DECODER_SUBFOLDER = "audio_vae_decoder"
 DIFFUSION_MODEL_VOCODER_SUBFOLDER = "vocoder"
+DIFFUSION_MODEL_DURATION_HEAD_SUBFOLDER = "duration_head"
+DIFFUSION_MODEL_PROMPT_ENHANCER_SUBFOLDER = "prompt_enhancer"
 
 core = Core()
 
@@ -189,6 +195,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             "connectors": os.path.join(DIFFUSION_MODEL_CONNECTORS_SUBFOLDER, OV_XML_FILE_NAME),
             "audio_vae_decoder": os.path.join(DIFFUSION_MODEL_AUDIO_VAE_DECODER_SUBFOLDER, OV_XML_FILE_NAME),
             "vocoder": os.path.join(DIFFUSION_MODEL_VOCODER_SUBFOLDER, OV_XML_FILE_NAME),
+            "duration_head": os.path.join(DIFFUSION_MODEL_DURATION_HEAD_SUBFOLDER, OV_XML_FILE_NAME),
         }
         return models_paths
 
@@ -210,6 +217,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         connectors: Optional[openvino.Model] = None,
         audio_vae_decoder: Optional[openvino.Model] = None,
         vocoder: Optional[openvino.Model] = None,
+        duration_head: Optional[openvino.Model] = None,
         # optional pipeline submodels
         tokenizer: Optional[CLIPTokenizer] = None,
         tokenizer_2: Optional[CLIPTokenizer] = None,
@@ -308,6 +316,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         self.connectors = None
         self.audio_vae_decoder = None
         self.vocoder = None
+        self.duration_head = None
         # We wrap the VAE Decoder & Encoder in a single object to simulate diffusers API
         self.vae = OVModelVae(decoder=self.vae_decoder, encoder=self.vae_encoder)
 
@@ -435,6 +444,11 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             if config_path.is_file():
                 shutil.copyfile(config_path, save_path / CONFIG_NAME)
 
+        # LTX-2.5's prompt enhancer is a whole VLM in its own subfolder, not an `OVPipelinePart`, so it
+        # saves itself rather than going through the component loop above.
+        if getattr(self, "prompt_enhancer", None) is not None:
+            self.prompt_enhancer.save_pretrained(save_directory / DIFFUSION_MODEL_PROMPT_ENHANCER_SUBFOLDER)
+
         if self.tokenizer is not None:
             self.tokenizer.save_pretrained(save_directory / "tokenizer")
         if self.tokenizer_2 is not None:
@@ -520,6 +534,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             "connectors": connectors_file_name or default_file_name,
             "audio_vae_decoder": audio_vae_decoder_file_name or default_file_name,
             "vocoder": vocoder_file_name or default_file_name,
+            "duration_head": default_file_name,
         }
 
         if not os.path.isdir(str(model_id)):
@@ -2056,6 +2071,33 @@ class OVModelVocoder(OVPipelinePart):
         return self.forward(mel_spectrograms)
 
 
+class OVModelDurationHead(OVPipelinePart):
+    """OV wrapper for the LTX-2.5 duration head, which predicts a video length from connector tokens."""
+
+    def forward(self, video_tokens, audio_tokens):
+        # Both inputs are required: an IR cannot make one optional, and the pipeline always has both.
+        if video_tokens is None or audio_tokens is None:
+            raise ValueError(
+                "`OVModelDurationHead` requires both `video_tokens` and `audio_tokens`; the exported IR takes "
+                "both connector streams."
+            )
+        self.compile()
+        model_inputs = {"video_tokens": video_tokens, "audio_tokens": audio_tokens}
+        ov_outputs = self.request(model_inputs, share_inputs=True).to_dict()
+        outputs = {next(iter(key.names)): torch.from_numpy(value) for key, value in ov_outputs.items()}
+        # Seconds: the `.exp()` off the log-duration regression is inside the graph.
+        return outputs.get("duration", next(iter(outputs.values())))
+
+    def __call__(self, video_tokens=None, audio_tokens=None):
+        return self.forward(video_tokens, audio_tokens)
+
+    if is_diffusers_version(">=", "0.40.0"):
+        # Borrowed rather than reimplemented. `predict_num_frames` only calls `self(...)` and then does pure
+        # Python -- clamp to [min_seconds, max_seconds], snap to the `k * temporal_compression_ratio + 1`
+        # grid, snap up when flooring undershoots. Reimplementing it is how the two sides drift.
+        predict_num_frames = LTX2DurationHead.predict_num_frames
+
+
 class OVModelVaeDecoder(OVPipelinePart):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -2469,13 +2511,20 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
             "connectors": os.path.join(DIFFUSION_MODEL_CONNECTORS_SUBFOLDER, OV_XML_FILE_NAME),
             "audio_vae_decoder": os.path.join(DIFFUSION_MODEL_AUDIO_VAE_DECODER_SUBFOLDER, OV_XML_FILE_NAME),
             "vocoder": os.path.join(DIFFUSION_MODEL_VOCODER_SUBFOLDER, OV_XML_FILE_NAME),
+            # LTX-2.5 onwards; absent from 2.0/2.3 exports, where the path simply does not resolve.
+            "duration_head": os.path.join(DIFFUSION_MODEL_DURATION_HEAD_SUBFOLDER, OV_XML_FILE_NAME),
         }
         return models_paths
 
     @property
     def _ov_model_names(self) -> List[str]:
         """Return list of OV submodel names for quantization."""
-        return list(self._all_ov_model_paths.keys())
+        # `duration_head` only when it was actually loaded: it is LTX-2.5 onwards, and the names here
+        # are looked up in `ov_models`, which is keyed by the loaded components.
+        names = [name for name in self._all_ov_model_paths if name != "duration_head"]
+        if self.duration_head is not None:
+            names.append("duration_head")
+        return names
 
     @property
     def ov_models(self) -> Dict[str, Union[openvino.Model, openvino.CompiledModel]]:
@@ -2491,8 +2540,10 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
         connectors: Optional[openvino.Model] = None,
         audio_vae_decoder: Optional[openvino.Model] = None,
         vocoder: Optional[openvino.Model] = None,
+        duration_head: Optional[openvino.Model] = None,
         vae_encoder: Optional[openvino.Model] = None,
         tokenizer: Optional[CLIPTokenizer] = None,
+        processor: Optional[Any] = None,
         device: str = "CPU",
         compile: bool = True,
         compile_only: bool = False,
@@ -2593,6 +2644,11 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
         self.tokenizer_2 = None
         self.tokenizer_3 = None
         self.feature_extractor = None
+        # LTX-2.5 registers a `Gemma4Processor` for the prompt enhancer. It has to be held here even when
+        # the enhancer itself is not loaded, or `_save_pretrained` drops the `processor/` folder while
+        # `model_index.json` keeps naming it, and the round-trip fails on reload.
+        self.processor = processor
+        self.prompt_enhancer = self._load_prompt_enhancer(compile=compile and not compile_only)
 
         # Get latents_mean/std from vae_decoder config or audio_vae_decoder config
         vae_cfg = self.vae_decoder.config
@@ -2619,6 +2675,13 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
 
         vocoder = OVModelVocoder(vocoder, self, DIFFUSION_MODEL_VOCODER_SUBFOLDER)
 
+        # LTX-2.5 onwards. Absent from 2.0/2.3 exports, where `__call__` keeps its fixed 121-frame default.
+        self.duration_head = (
+            OVModelDurationHead(duration_head, self, DIFFUSION_MODEL_DURATION_HEAD_SUBFOLDER)
+            if isinstance(duration_head, (openvino.Model, openvino.CompiledModel))
+            else None
+        )
+
         # Register the OV submodels via diffusers' pipeline init; this sets self.audio_vae,
         # self.vocoder, self.connectors, self.transformer, ... and registers them in self.config.
         diffusers_pipeline_args = {
@@ -2631,6 +2694,16 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
             "transformer": self.transformer,
             "vocoder": vocoder,
         }
+        if self.processor is not None:
+            # Same reason as `duration_head`: `LTX2Pipeline.__init__` on diffusers<0.40 has no such parameter.
+            diffusers_pipeline_args["processor"] = self.processor
+        if self.prompt_enhancer is not None:
+            diffusers_pipeline_args["prompt_enhancer"] = self.prompt_enhancer
+        if self.duration_head is not None:
+            # Only when present: `__call__` reads `getattr(self, "duration_head", None)` to decide whether an
+            # omitted `num_frames` means auto-duration, and `LTX2Pipeline.__init__` on diffusers<0.40 has no
+            # such parameter.
+            diffusers_pipeline_args["duration_head"] = self.duration_head
         self.auto_model_class.__init__(self, **diffusers_pipeline_args)
 
         # This must exist because properties like batch_size check them
@@ -2646,6 +2719,33 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
 
         if compile and not self._compile_only:
             self.compile()
+
+    def _load_prompt_enhancer(self, compile: bool = True):
+        """Load LTX-2.5's optional prompt enhancer from the `prompt_enhancer/` subfolder, if it was exported.
+
+        It is a `Gemma4ForConditionalGeneration` VLM, exported as several IRs into its own subfolder rather
+        than as one of the pipeline's components, so it is loaded by `OVModelForVisualCausalLM` rather than
+        coming through `_from_pretrained`'s component map. `enhance_prompt` needs only `.to(device)` and
+        `.generate(...)` from it, both of which that class provides.
+        """
+        model_dir = self.model_save_dir
+        if model_dir is None:
+            return None
+        if isinstance(model_dir, TemporaryDirectory):
+            model_dir = model_dir.name
+        enhancer_dir = Path(model_dir) / DIFFUSION_MODEL_PROMPT_ENHANCER_SUBFOLDER
+        if not enhancer_dir.is_dir():
+            return None
+
+        # Imported here: `modeling_visual_language` imports this module, so a top-level import cycles.
+        from .modeling_visual_language import OVModelForVisualCausalLM
+
+        return OVModelForVisualCausalLM.from_pretrained(
+            enhancer_dir,
+            device=self._device,
+            ov_config=self.ov_config,
+            compile=compile,
+        )
 
     @property
     def _execution_device(self):
@@ -2672,6 +2772,8 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
             comp["audio_vae_decoder"] = self.audio_vae
         if self.vocoder is not None:
             comp["vocoder"] = self.vocoder
+        if getattr(self, "duration_head", None) is not None:
+            comp["duration_head"] = self.duration_head
         return comp
 
     def _reshape_transformer(
@@ -2721,7 +2823,9 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
         # The connectors run on the concatenated negative+positive prompts, so they see twice the
         # batch under classifier-free guidance. The audio VAE and the vocoder run after the
         # denoising loop, where the guidance halves have already been merged back, so they see the
-        # plain batch.
+        # plain batch. The duration head is deliberately absent: it is always fed a single row
+        # (`video_tokens[:1]` off the positive half), which no `batch_size * num_images_per_prompt`
+        # expression reproduces, so it is left fully dynamic.
         guided_batch = batch_size * num_images_per_prompt * 2 if known_batch else -1
         plain_batch = batch_size * num_images_per_prompt if known_batch else -1
         for ov_model_attr, effective_batch in [

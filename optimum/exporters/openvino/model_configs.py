@@ -99,6 +99,7 @@ from optimum.exporters.openvino.input_generators import (
     Lfm2DummyPastKeyValuesGenerator,
     LTX2AudioVaeDecoderDummyInputGenerator,
     LTX2ConnectorsDummyInputGenerator,
+    LTX2DurationHeadDummyInputGenerator,
     LTX2TransformerDummyInputGenerator,
     LTX2VaeDummyInputGenerator,
     LTX2VocoderDummyInputGenerator,
@@ -236,7 +237,7 @@ from optimum.exporters.openvino.model_patcher import (
     ZImageTransformerModelPatcher,
     _get_model_attribute,
 )
-from optimum.exporters.openvino.utils import is_ltx2_3_transformer_config
+from optimum.exporters.openvino.utils import has_ltx2_extended_guidance_inputs
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
     is_diffusers_available,
@@ -3366,6 +3367,27 @@ class LTX2ConnectorsOpenVINOConfig(VaeEncoderOpenVINOConfig):
         }
 
 
+@register_in_tasks_manager("ltx2-duration-head", *["semantic-segmentation"], library_name="diffusers")
+class LTX2DurationHeadOpenVINOConfig(VaeEncoderOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (LTX2DurationHeadDummyInputGenerator,)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        # Both connector streams, in the order `LTX2DurationHead.forward` declares them. The head
+        # accepts either one alone, but the pipeline always has both, and an IR cannot make an input
+        # optional.
+        return {
+            "video_tokens": {0: "batch_size", 1: "video_sequence_length"},
+            "audio_tokens": {0: "batch_size", 1: "audio_sequence_length"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        # Seconds, not frames: the `.exp()` off the log-duration regression is inside the graph, and
+        # the grid snapping that turns seconds into a frame count is pure Python on the caller's side.
+        return {"duration": {0: "batch_size"}}
+
+
 @register_in_tasks_manager("ltx2-video-transformer", *["semantic-segmentation"], library_name="diffusers")
 class LTX2VideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
     _MODEL_PATCHER = LTX2TransformerPatcher
@@ -3409,7 +3431,7 @@ class LTX2VideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
             "video_coords": {0: "batch_size", 2: "video_sequence_length"},
             "audio_coords": {0: "batch_size", 2: "audio_sequence_length"},
         }
-        if is_ltx2_3_transformer_config(self._normalized_config.config):
+        if has_ltx2_extended_guidance_inputs(self._normalized_config.config):
             inputs["cross_modality_gate"] = {}
         if getattr(self._normalized_config.config, "perturbed_attn", False):
             inputs["stg_perturbation_mask"] = {}
