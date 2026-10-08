@@ -2580,9 +2580,7 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
                     raise ValueError("Temporal groups contain more frames than were encoded")
 
                 group_pos_embed = pos_embed[:, frame_start:frame_end].permute(1, 0, 2)
-                temporal_positions = np.asarray(
-                    [max(temporal_id, 0) for temporal_id in group_ids], dtype=np.float32
-                )
+                temporal_positions = np.asarray([max(temporal_id, 0) for temporal_id in group_ids], dtype=np.float32)
                 temporal_embed = self._get_1d_sincos_pos_embed_from_grid_new(
                     self.embed_dim, temporal_positions[:, None]
                 ).squeeze(1)
@@ -2733,7 +2731,8 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
             from PIL import Image as PILImage
 
             video_frames = [
-                frame if isinstance(frame, PILImage.Image) else PILImage.fromarray(np.asarray(frame)) for frame in video
+                frame if isinstance(frame, PILImage.Image) else PILImage.fromarray(np.asarray(frame))
+                for frame in video
             ]
             if len(video_frames) == 0:
                 raise ValueError("Video input must contain at least one frame")
@@ -2754,9 +2753,7 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
             chat_template_processor = (
                 processor if getattr(processor, "chat_template", None) is not None else processor.tokenizer
             )
-            prompt = chat_template_processor.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            )
+            prompt = chat_template_processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
             inputs = processor(
                 prompt,
                 visual_inputs,
