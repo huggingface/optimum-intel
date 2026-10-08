@@ -81,7 +81,10 @@ def _load_funasr_model(
             device="cpu",
             disable_update=True,
         )
-    return auto_model.model.eval().float()
+    model = auto_model.model.eval().float()
+    # Preserve the frontend feature-extraction config (e.g. `dither`) so downstream consumers can read it.
+    model._frontend_conf = dict(auto_model.kwargs.get("frontend_conf") or {})
+    return model
 
 
 def _extract_fbank_lfr(
@@ -593,6 +596,9 @@ class _SenseVoiceForCTC(torch.nn.Module):
         config.blank_id = int(getattr(funasr_model, "blank_id", 0))
         config.lid_dict = dict(funasr_model.lid_dict)
         config.textnorm_dict = dict(funasr_model.textnorm_dict)
+        # Fbank dithering factor: taken from the frontend config if present, otherwise defaults to 1.0.
+        frontend_conf = getattr(funasr_model, "_frontend_conf", None) or {}
+        config.dither = float(frontend_conf.get("dither", 1.0))
 
         model = cls(funasr_model, config)
         model.config._name_or_path = str(model_name_or_path)
@@ -976,7 +982,7 @@ class _OVModelForSenseVoice(OVModel):
 
         feats: List[torch.Tensor] = []
         for arr in wav_list:
-            mat = _extract_fbank_lfr(arr, sampling_rate, dither=1.0)
+            mat = _extract_fbank_lfr(arr, sampling_rate, dither=float(getattr(self.config, "dither", 1.0)))
             mat = _apply_cmvn(mat)
             feats.append(mat)
 
