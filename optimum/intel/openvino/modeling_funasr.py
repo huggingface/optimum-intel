@@ -732,8 +732,9 @@ class _OVModelForSenseVoice(OVModel):
             self.detokenizer_request = self.detokenizer_model
 
     def _reshape(self, model, batch_size, sequence_length, height=None, width=None):
-        # SenseVoice IRs are exported fully dynamic, so the generic
-        # rank-2 reshape does not apply; shapes are left dynamic.
+        logger.warning(
+            "SenseVoice IRs are exported fully dynamic, so the generic rank-2 reshape does not apply; shapes are left dynamic."
+        )
         return model
 
     def compile(self):
@@ -778,6 +779,10 @@ class _OVModelForSenseVoice(OVModel):
         config.is_encoder_decoder = False
         return cls._from_pretrained(model_id, config=config, **kwargs)
 
+    # The base _export() doesn't convert the tokenizer, while SenseVoice requires the detokenizer IR.
+    # SenseVoiceSmall also ships a SentencePiece BPE model instead of a transformers tokenizer,
+    # so the detokenizer must be built here (via `convert_tokenizer=True`) and
+    # saved next to the model IR; otherwise a freshly exported model would have no way to decode output.
     @classmethod
     def _export(cls, model_id, config, **kwargs):
         save_dir = TemporaryDirectory()
@@ -831,6 +836,8 @@ class _OVModelForSenseVoice(OVModel):
             **kwargs,
         )
 
+    # Overridden because a SenseVoice besides `openvino_model.xml` also needs the detokenizer IR
+    # and the CMVN stats file. The base loader only loads the main model IR.
     @classmethod
     def _from_pretrained(
         cls,
@@ -1080,9 +1087,8 @@ class _OVModelForSenseVoice(OVModel):
         Multiple waveforms are zero-padded into a single batch and run through the model in one forward; each
         sample is then CTC-decoded using its own valid encoder-output length so the padding is ignored.
         """
-        assert (
-            input_features is not None or waveforms is not None
-        ), "Either input_features or waveform must be specified."
+        if input_features is None and waveforms is None:
+            raise ValueError("Either input_features or waveform must be specified.")
 
         if waveforms is not None:
             inputs = self.preprocess_input(waveforms, sampling_rate, language=language, use_itn=use_itn)
