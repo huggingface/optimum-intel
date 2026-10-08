@@ -11862,19 +11862,7 @@ class _LTX2TraceSafeAttnProcessor:
         query = query.transpose(1, 2)
         key = key.transpose(1, 2)
         value = value.transpose(1, 2)
-
-        # Call SDPA rather than spelling the attention out as matmul/softmax/matmul. The written-out
-        # form does not survive the round trip: `SDPAFusion` cannot fold it back while the scale is
-        # `1 / query.shape[-1] ** 0.5`, which tracing turns into a runtime
-        # ShapeOf -> Gather -> Power -> Divide chain rather than a constant, so the IR keeps one
-        # SoftMax per attention (288 of them on the real model) instead of a single op.
-        # On CPU this is latency-neutral - the plugin tokenizes the decomposed form into Snippets
-        # subgraphs anyway - but it keeps the attention recognizable for plugins without that pass,
-        # drops the shape-derived scale chain, and lets RMSFusion fire on the surrounding norms.
-        hidden_states = torch.nn.functional.scaled_dot_product_attention(
-            query, key, value, attn_mask=attention_mask
-        )
-
+        hidden_states = torch.nn.functional.scaled_dot_product_attention(query, key, value, attn_mask=attention_mask)
         hidden_states = hidden_states.transpose(1, 2).flatten(2, 3)
         hidden_states = hidden_states.to(query.dtype)
 

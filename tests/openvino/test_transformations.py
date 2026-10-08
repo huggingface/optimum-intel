@@ -472,8 +472,6 @@ if is_diffusers_version(">=", "0.38.0"):
             "PackMultiHeadAttention",
             "CommonFusions",
             "TransposeConvert",
-            # No "TransposeFuse": the attention processor emits ScaledDotProductAttention directly,
-            # which absorbs the transposes the hand-written matmul/softmax form used to leave behind.
             "ReverseInputChannelsFusion",
             "BroadcastTransition",
         ],
