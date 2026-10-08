@@ -10361,7 +10361,7 @@ def qwen3_5_gated_delta_net_forward(
     batch_size, seq_len, _ = hidden_states.shape
 
     # getting projected states from cache if it exists
-    cache_layer = None
+    layer_idx = None
     recurrent_state = None
     if cache_params is not None:
         if hasattr(cache_params, "linear_attn_mapping"):
