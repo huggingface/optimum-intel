@@ -105,7 +105,9 @@ from optimum.exporters.openvino.input_generators import (
     LTX2VaeDummyInputGenerator,
     LTX2VocoderDummyInputGenerator,
     LTXTransformerDummyInputGenerator,
+    LTXVaeDecoderDummyInputGenerator,
     LTXVaeDummyInputGenerator,
+    LTXVaeEncoderDummyInputGenerator,
     MambaCacheDummyInputGenerator,
     OVFalconDummyPastKeyValuesGenerator,
     OVMiniCPM3DummyPastKeyValuesGenerator,
@@ -3006,7 +3008,7 @@ class LTXVaeEncoderOpenVINOConfig(VisionOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
         num_channels="in_channels", image_size="sample_size", allow_new=True
     )
-    DUMMY_INPUT_GENERATOR_CLASSES = (LTXVaeDummyInputGenerator,)
+    DUMMY_INPUT_GENERATOR_CLASSES = (LTXVaeEncoderDummyInputGenerator,)
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -3025,7 +3027,7 @@ class LTXVaeEncoderOpenVINOConfig(VisionOpenVINOConfig):
 class LTXVaeDecoderOpenVINOConfig(VisionOpenVINOConfig):
     ATOL_FOR_VALIDATION = 3e-4  # TODO: this only happens in test_export.py
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(num_channels="latent_channels", allow_new=True)
-    DUMMY_INPUT_GENERATOR_CLASSES = (LTXVaeDummyInputGenerator,)
+    DUMMY_INPUT_GENERATOR_CLASSES = (LTXVaeDecoderDummyInputGenerator,)
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -3033,7 +3035,7 @@ class LTXVaeDecoderOpenVINOConfig(VisionOpenVINOConfig):
             "latent_sample": {0: "batch_size", 2: "num_frames", 3: "latent_height", 4: "latent_width"},
         }
         if self._normalized_config.config.timestep_conditioning:
-            base_input["timestep"] = {}
+            base_input["timestep"] = {0: "batch_size"}
         return base_input
 
     @property

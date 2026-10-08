@@ -913,9 +913,27 @@ class LTXVaeDummyInputGenerator(DummyVisionInputGenerator):
                 [self.batch_size, self.num_channels, self.num_frames, self.height, self.width]
             )
         if input_name == "timestep":
-            return self.random_int_tensor([1], max_value=20, min_value=1, framework=framework, dtype=int_dtype)
+            return self.random_int_tensor(
+                [self.batch_size], max_value=20, min_value=1, framework=framework, dtype=int_dtype
+            )
 
         return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class LTXVaeEncoderDummyInputGenerator(LTXVaeDummyInputGenerator):
+    # Encoder's causal temporal downsamplers need temporal_compression_ratio + 1 frames (1 + 8k for
+    # LTX-Video 0.9.5), otherwise unflatten over the frame dim fails while tracing
+    def __init__(self, task, normalized_config, *args, num_frames: Optional[int] = None, **kwargs):
+        if num_frames is None:
+            num_frames = (getattr(normalized_config.config, "temporal_compression_ratio", None) or 1) + 1
+        super().__init__(task, normalized_config, *args, num_frames=num_frames, **kwargs)
+
+
+class LTXVaeDecoderDummyInputGenerator(LTXVaeDummyInputGenerator):
+    # Downsize default height/width to avoid running out of memory as decoder upsamples the latent 32x spatially and 8x temporally,
+    # 64x64 latent result in 2048x2048. height/width are dynamic axes.
+    def __init__(self, *args, width: int = 8, height: int = 8, **kwargs):
+        super().__init__(*args, width=width, height=height, **kwargs)
 
 
 class QwenImage21VaeDummyInputGenerator(LTXVaeDummyInputGenerator):
