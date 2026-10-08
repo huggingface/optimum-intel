@@ -197,6 +197,9 @@ class _FunASRForSpeechSeq2Seq(torch.nn.Module):
         config.max_position_embeddings = getattr(llm_config, "max_position_embeddings", 32768)
         # encoder config: feature size produced by WavFrontend (lfr_m * n_mels)
         config.num_mel_bins = getattr(funasr_model.audio_encoder, "input_size", 560)
+        # Fbank dithering factor: taken from the frontend config if present, otherwise defaults to 0.0.
+        frontend_conf = getattr(funasr_model, "_frontend_conf", None) or {}
+        config.dither = float(frontend_conf.get("dither", 0.0))
 
         model = cls(funasr_model, config)
         model.config._name_or_path = str(model_name_or_path)
@@ -364,7 +367,7 @@ class _OVModelForFunAsr(OVModelForSpeechSeq2Seq):
         audio_token_id = getattr(self.config, "audio_token_id", 0)
 
         def _extract_features(waveform: torch.Tensor) -> torch.Tensor:
-            return _extract_fbank_lfr(waveform, sampling_rate)
+            return _extract_fbank_lfr(waveform, sampling_rate, dither=float(getattr(self.config, "dither", 0.0)))
 
         def _num_audio_tokens(num_frames: int) -> int:
             olens = 1 + (num_frames - 3 + 2 * 1) // 2
