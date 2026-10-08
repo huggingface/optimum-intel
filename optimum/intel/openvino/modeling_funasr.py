@@ -27,7 +27,7 @@ from openvino import Core
 from transformers import PretrainedConfig
 from transformers.modeling_outputs import CausalLMOutput
 
-from ..utils.import_utils import is_funasr_available
+from ..utils.import_utils import is_funasr_available, is_openvino_tokenizers_available, is_torchaudio_available
 from ..utils.modeling_utils import _find_files_matching_pattern
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling import OVModel
@@ -46,6 +46,14 @@ from transformers import T5Tokenizer
 
 from optimum.exporters.openvino.__main__ import main_export
 from optimum.exporters.tasks import TasksManager
+
+
+if is_openvino_tokenizers_available():
+    import openvino_tokenizers  # noqa: F401
+
+if is_torchaudio_available():
+    import torchaudio
+    import torchaudio.compliance.kaldi as kaldi
 
 
 def _load_funasr_model(
@@ -94,9 +102,6 @@ def _extract_fbank_lfr(
     `n_mels`-bin fbank features, then stacks consecutive frames with `_apply_lfr`. Shared by both the
     FunASR and SenseVoice preprocessing paths.
     """
-    import torchaudio
-    import torchaudio.compliance.kaldi as kaldi
-
     waveform = torch.as_tensor(waveform).float()
     if waveform.ndim > 1:
         waveform = waveform.mean(0)
@@ -410,8 +415,6 @@ class _OVModelForFunAsr(OVModelForSpeechSeq2Seq):
     def _funasr_tokenizer_encode(self, text: str) -> List[int]:
         """Encode text to token ids using the exported OpenVINO tokenizer IR."""
         if getattr(self, "_ov_tokenizer", None) is None:
-            import openvino_tokenizers  # noqa: F401
-
             tokenizer_path = Path(self.model_save_dir) / OV_TOKENIZER_NAME.format("")
             if not tokenizer_path.is_file():
                 raise FileNotFoundError(

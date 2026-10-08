@@ -128,6 +128,14 @@ if _funasr_available:
     except importlib_metadata.PackageNotFoundError:
         _funasr_available = False
 
+_torchaudio_available = importlib.util.find_spec("torchaudio") is not None
+_torchaudio_version = "N/A"
+if _torchaudio_available:
+    try:
+        _torchaudio_version = importlib_metadata.version("torchaudio")
+    except importlib_metadata.PackageNotFoundError:
+        _torchaudio_available = False
+
 _safetensors_version = "N/A"
 _safetensors_available = importlib.util.find_spec("safetensors") is not None
 if _safetensors_available:
@@ -322,6 +330,10 @@ def is_qwen_tts_available():
 
 def is_funasr_available():
     return _funasr_available
+
+
+def is_torchaudio_available():
+    return _torchaudio_available
 
 
 def is_safetensors_available():
