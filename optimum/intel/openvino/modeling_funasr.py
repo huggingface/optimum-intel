@@ -12,20 +12,27 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import io
 import json
 import logging
 import shutil
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Dict, List, Optional, Union
 
 import numpy as np
 import openvino
 import torch
+from funasr import AutoModel as FunASRAutoModel
 from huggingface_hub import hf_hub_download, snapshot_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino import Core
-from transformers import PretrainedConfig
+from transformers import PretrainedConfig, T5Tokenizer
 from transformers.modeling_outputs import CausalLMOutput
+
+from optimum.exporters.openvino.__main__ import main_export
+from optimum.exporters.tasks import TasksManager
 
 from ..utils.import_utils import is_funasr_available, is_openvino_tokenizers_available, is_torchaudio_available
 from ..utils.modeling_utils import _find_files_matching_pattern
@@ -35,25 +42,14 @@ from .modeling_seq2seq import FunASRPretrainedConfig, OVModelForSpeechSeq2Seq
 from .utils import OV_DETOKENIZER_NAME, OV_TOKENIZER_NAME, OV_XML_FILE_NAME
 
 
-logger = logging.getLogger(__name__)
-
-import io
-from contextlib import redirect_stderr, redirect_stdout
-from tempfile import TemporaryDirectory
-
-from funasr import AutoModel as FunASRAutoModel
-from transformers import T5Tokenizer
-
-from optimum.exporters.openvino.__main__ import main_export
-from optimum.exporters.tasks import TasksManager
-
-
 if is_openvino_tokenizers_available():
     import openvino_tokenizers  # noqa: F401
 
 if is_torchaudio_available():
     import torchaudio
     import torchaudio.compliance.kaldi as kaldi
+
+logger = logging.getLogger(__name__)
 
 
 def _load_funasr_model(
