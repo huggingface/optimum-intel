@@ -28,6 +28,7 @@ from transformers import PretrainedConfig
 from transformers.modeling_outputs import CausalLMOutput
 
 from ..utils.import_utils import is_funasr_available
+from ..utils.modeling_utils import _find_files_matching_pattern
 from .configuration import OVConfig, OVWeightQuantizationConfig
 from .modeling import OVModel
 from .modeling_seq2seq import FunASRPretrainedConfig, OVModelForSpeechSeq2Seq
@@ -35,6 +36,16 @@ from .utils import OV_DETOKENIZER_NAME, OV_TOKENIZER_NAME, OV_XML_FILE_NAME
 
 
 logger = logging.getLogger(__name__)
+
+import io
+from contextlib import redirect_stderr, redirect_stdout
+from tempfile import TemporaryDirectory
+
+from funasr import AutoModel as FunASRAutoModel
+from transformers import T5Tokenizer
+
+from optimum.exporters.openvino.__main__ import main_export
+from optimum.exporters.tasks import TasksManager
 
 
 def _load_funasr_model(
@@ -53,11 +64,6 @@ def _load_funasr_model(
             "To load a FunASR/SenseVoice model, the `funasr` package is required. "
             "Please install it with `pip install funasr`."
         )
-
-    import io
-    from contextlib import redirect_stderr, redirect_stdout
-
-    from funasr import AutoModel as FunASRAutoModel
 
     buf = io.StringIO()
     with redirect_stdout(buf), redirect_stderr(buf):
@@ -235,8 +241,6 @@ def _is_funasr_model(
 
 def _is_funasr_source(model_id, **kwargs) -> bool:
     """Check whether model_id points to a FunASR source (original repo or exported OV model)."""
-    from optimum.exporters.tasks import TasksManager
-
     cache_dir = kwargs.get("cache_dir", HUGGINGFACE_HUB_CACHE)
     token = kwargs.get("token")
     subfolder = kwargs.get("subfolder", "")
@@ -297,8 +301,6 @@ def _apply_lfr(inputs: torch.Tensor, lfr_n, lfr_m) -> torch.Tensor:
 class _OVModelForFunAsr(OVModelForSpeechSeq2Seq):
     @classmethod
     def _from_pretrained_funasr(cls, model_id, export: bool = False, **kwargs):
-        from ..utils.modeling_utils import _find_files_matching_pattern
-
         _export = export
         try:
             ov_files = _find_files_matching_pattern(
@@ -615,7 +617,6 @@ def _is_sensevoice_model(
 
 def _is_sensevoice_source(model_id, **kwargs) -> bool:
     """Check whether model_id points to a SenseVoice source (original repo or exported OV model)."""
-    from optimum.exporters.tasks import TasksManager
 
     cache_dir = kwargs.get("cache_dir", HUGGINGFACE_HUB_CACHE)
     token = kwargs.get("token")
@@ -667,8 +668,6 @@ def export_sensevoice_tokenizers(source_model_id, output, cache_dir=HUGGINGFACE_
     so CTC greedy output can be detokenized entirely with the exported IR, without a runtime SentencePiece
     dependency.
     """
-    from transformers import T5Tokenizer
-
     try:
         from openvino_tokenizers import convert_tokenizer
     except ModuleNotFoundError:
@@ -755,8 +754,6 @@ class _OVModelForSenseVoice(OVModel):
 
     @classmethod
     def _from_pretrained_sensevoice(cls, model_id, export: bool = False, **kwargs):
-        from ..utils.modeling_utils import _find_files_matching_pattern
-
         _export = export
         try:
             ov_files = _find_files_matching_pattern(
@@ -784,10 +781,6 @@ class _OVModelForSenseVoice(OVModel):
 
     @classmethod
     def _export(cls, model_id, config, **kwargs):
-        from tempfile import TemporaryDirectory
-
-        from optimum.exporters.openvino.__main__ import main_export
-
         save_dir = TemporaryDirectory()
         save_dir_path = Path(save_dir.name)
         # Keep one reference on the temporary directory so garbage collection does not remove the
@@ -853,8 +846,6 @@ class _OVModelForSenseVoice(OVModel):
         compile_only=False,
         **kwargs,
     ):
-        import openvino_tokenizers  # noqa: F401  — registers the SentencePiece ops extension
-
         model_dir = cls._resolve_model_dir(
             model_id,
             token=token,
