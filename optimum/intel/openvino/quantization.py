@@ -31,7 +31,6 @@ import requests
 import torch
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino import Core, Tensor
-from openvino._offline_transformations import compress_quantize_weights_transformation
 from torch.utils.data import DataLoader, RandomSampler
 from tqdm import tqdm
 from transformers import AutoProcessor, AutoTokenizer, DataCollator, default_data_collator
@@ -819,7 +818,13 @@ class OVCalibrationDatasetBuilder:
 
         from PIL import Image
 
-        processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=self.trust_remote_code)
+        if self.model.config.model_type == "minicpmv4_7":
+            # the checkpoint processor configs point at remote code, see `load_minicpmv4_7_processor`
+            from optimum.exporters.openvino.utils import load_minicpmv4_7_processor
+
+            processor = load_minicpmv4_7_processor(config.processor)
+        else:
+            processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=self.trust_remote_code)
         try:
             tokenizer = AutoTokenizer.from_pretrained(config.tokenizer, trust_remote_code=self.trust_remote_code)
             tokenizer_error = None
@@ -1283,9 +1288,7 @@ class OVQuantizer(OptimumQuantizer):
     Handle the NNCF quantization process.
     """
 
-    def __init__(
-        self, model: OVBaseModel, task: Optional[str] = None, seed: int = 42, trust_remote_code: bool = False, **kwargs
-    ):
+    def __init__(self, model: OVBaseModel, seed: int = 42, trust_remote_code: bool = False, **kwargs):
         """
         Args:
             model (`OVBaseModel`):
@@ -1298,14 +1301,6 @@ class OVQuantizer(OptimumQuantizer):
         super().__init__()
         self.model = model
         self.dataset_builder = OVCalibrationDatasetBuilder(model, seed, trust_remote_code)
-        self._task = task
-        if self._task is not None:
-            logger.warning("The `task` argument is ignored and will be removed in optimum-intel v1.27")
-
-    @property
-    def task(self) -> str:
-        logger.warning("The `task` attribute is deprecated and will be removed in v1.27.")
-        return self._task
 
     @classmethod
     def from_pretrained(cls, model: OVBaseModel, trust_remote_code: bool = False, **kwargs):
@@ -1555,11 +1550,6 @@ class OVQuantizer(OptimumQuantizer):
                 save_directory = Path(save_directory)
                 save_directory.mkdir(parents=True, exist_ok=True)
                 self.model.save_pretrained(save_directory)
-
-    @staticmethod
-    def _save_pretrained(model: openvino.Model, output_path: str):
-        compress_quantize_weights_transformation(model)
-        openvino.save_model(model, output_path, compress_to_fp16=False)
 
     def get_calibration_dataset(
         self,
