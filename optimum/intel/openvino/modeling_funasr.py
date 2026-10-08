@@ -24,7 +24,6 @@ from typing import Dict, List, Optional, Union
 import numpy as np
 import openvino
 import torch
-from funasr import AutoModel as FunASRAutoModel
 from huggingface_hub import hf_hub_download, snapshot_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino import Core
@@ -42,12 +41,16 @@ from .modeling_seq2seq import FunASRPretrainedConfig, OVModelForSpeechSeq2Seq
 from .utils import OV_DETOKENIZER_NAME, OV_TOKENIZER_NAME
 
 
+if is_funasr_available():
+    from funasr import AutoModel as FunASRAutoModel
+
 if is_openvino_tokenizers_available():
     import openvino_tokenizers  # noqa: F401
 
 if is_torchaudio_available():
     import torchaudio
     import torchaudio.compliance.kaldi as kaldi
+
 
 logger = logging.getLogger(__name__)
 
