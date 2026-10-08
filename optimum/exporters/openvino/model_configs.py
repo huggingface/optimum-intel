@@ -16,7 +16,7 @@ import copy
 import enum
 import logging
 from collections import OrderedDict
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import Any, Dict, List, Optional, Union
 
 import torch
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
