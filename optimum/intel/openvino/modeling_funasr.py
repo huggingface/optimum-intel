@@ -36,10 +36,10 @@ from optimum.exporters.tasks import TasksManager
 
 from ..utils.import_utils import is_funasr_available, is_openvino_tokenizers_available, is_torchaudio_available
 from ..utils.modeling_utils import _find_files_matching_pattern
-from .configuration import OVConfig, OVWeightQuantizationConfig
+from .configuration import OVConfig
 from .modeling import OVModel
 from .modeling_seq2seq import FunASRPretrainedConfig, OVModelForSpeechSeq2Seq
-from .utils import OV_DETOKENIZER_NAME, OV_TOKENIZER_NAME, OV_XML_FILE_NAME
+from .utils import OV_DETOKENIZER_NAME, OV_TOKENIZER_NAME
 
 
 if is_openvino_tokenizers_available():
@@ -707,17 +707,26 @@ class _OVModelForSenseVoice(OVModel):
         model,
         config,
         model_save_dir=None,
-        detokenizer_model=None,
         device="CPU",
         ov_config=None,
         compile=True,
         **kwargs,
     ):
-        # The detokenizer is a second IR that the base class is unaware of; set it up before delegating
-        # so that the base `__init__` (which calls `self.compile()`) also compiles the detokenizer.
-        self.detokenizer_model = detokenizer_model
+        # The detokenizer is a second IR that the base class is unaware of. Load it from the model
+        # directory before delegating so that the base `__init__` (which calls `self.compile()`) also
+        # compiles it; SenseVoiceSmall emits raw CTC token ids that this IR turns into text.
+        self.detokenizer_model = None
         self.detokenizer_request = None
         self._cmvn = None
+        detokenizer_path = (
+            Path(model_save_dir) / OV_DETOKENIZER_NAME.format("") if model_save_dir is not None else None
+        )
+        if detokenizer_path is not None and detokenizer_path.is_file():
+            if kwargs.get("compile_only", False):
+                # In compile_only mode the IR is compiled eagerly and reused as its inference request.
+                self.detokenizer_model = self._compile_model(detokenizer_path, device, ov_config, model_save_dir)
+            else:
+                self.detokenizer_model = Core().read_model(detokenizer_path)
         super().__init__(
             model,
             config,
@@ -777,7 +786,19 @@ class _OVModelForSenseVoice(OVModel):
 
         config = SenseVoicePretrainedConfig.from_pretrained(model_id)
         config.is_encoder_decoder = False
-        return cls._from_pretrained(model_id, config=config, **kwargs)
+        # SenseVoice needs extra assets (detokenizer IR + CMVN stats) that the base loader does not fetch,
+        # so resolve the full asset directory first, then delegate model loading to the base class.
+        subfolder = kwargs.pop("subfolder", "")
+        model_dir = cls._resolve_model_dir(
+            model_id,
+            token=kwargs.get("token"),
+            revision=kwargs.get("revision"),
+            force_download=kwargs.get("force_download", False),
+            cache_dir=kwargs.get("cache_dir", HUGGINGFACE_HUB_CACHE),
+            subfolder=subfolder,
+            local_files_only=kwargs.get("local_files_only", False),
+        )
+        return super()._from_pretrained(model_dir, config=config, **kwargs)
 
     # The base _export() doesn't convert the tokenizer, while SenseVoice requires the detokenizer IR.
     # SenseVoiceSmall also ships a SentencePiece BPE model instead of a transformers tokenizer,
@@ -827,7 +848,7 @@ class _OVModelForSenseVoice(OVModel):
             convert_tokenizer=True,
         )
 
-        return cls._from_pretrained(
+        return super()._from_pretrained(
             model_id=save_dir_path,
             config=config,
             load_in_8bit=load_in_8bit,
@@ -835,84 +856,6 @@ class _OVModelForSenseVoice(OVModel):
             compile_only=compile_only,
             **kwargs,
         )
-
-    # Overridden because a SenseVoice besides `openvino_model.xml` also needs the detokenizer IR
-    # and the CMVN stats file. The base loader only loads the main model IR.
-    @classmethod
-    def _from_pretrained(
-        cls,
-        model_id,
-        config,
-        token=None,
-        revision=None,
-        force_download=False,
-        cache_dir=HUGGINGFACE_HUB_CACHE,
-        subfolder="",
-        local_files_only=False,
-        compile_only=False,
-        **kwargs,
-    ):
-        model_dir = cls._resolve_model_dir(
-            model_id,
-            token=token,
-            revision=revision,
-            force_download=force_download,
-            cache_dir=cache_dir,
-            subfolder=subfolder,
-            local_files_only=local_files_only,
-        )
-        core = Core()
-        load_in_8bit = kwargs.pop("load_in_8bit", None)
-        quantization_config = kwargs.pop("quantization_config", None)
-        quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
-        trust_remote_code = kwargs.pop("trust_remote_code", False)
-        compile_model = kwargs.get("compile", True)
-        device = kwargs.get("device", "CPU")
-        ov_config = kwargs.get("ov_config")
-
-        if compile_only and quantization_config is not None:
-            raise ValueError(
-                "`compile_only` mode is not supported together with quantization, since quantization requires an "
-                "editable model. Please set `compile_only=False` to quantize the model."
-            )
-
-        model_path = model_dir / OV_XML_FILE_NAME
-        detokenizer_path = model_dir / OV_DETOKENIZER_NAME.format("")
-        if compile_only:
-            model = cls._compile_model(model_path, device, ov_config, model_save_dir=model_dir)
-            detokenizer_model = (
-                cls._compile_model(core.read_model(detokenizer_path), device, model_save_dir=model_dir)
-                if detokenizer_path.is_file()
-                else None
-            )
-        else:
-            model = core.read_model(model_path)
-            detokenizer_model = core.read_model(detokenizer_path) if detokenizer_path.is_file() else None
-
-        ov_model = cls(
-            model=model,
-            config=config,
-            model_save_dir=model_dir,
-            detokenizer_model=detokenizer_model,
-            device=device,
-            ov_config=ov_config,
-            compile=compile_model and not quantization_config,
-            compile_only=compile_only,
-            quantization_config=quantization_config,
-        )
-
-        # Reuse the shared OVBaseModel weight-only quantization pipeline (NNCF via OVQuantizer).
-        if quantization_config is not None:
-            quantization_config = cls._resolve_default_quantization_config(str(model_id), quantization_config)
-            ov_model._apply_quantization(
-                quantization_config,
-                compile_only,
-                compile_model,
-                str(model_id),
-                trust_remote_code,
-            )
-
-        return ov_model
 
     @staticmethod
     def _resolve_model_dir(
