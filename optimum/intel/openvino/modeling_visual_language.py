@@ -39,8 +39,15 @@ from transformers import (
 )
 from transformers.modeling_outputs import BaseModelOutputWithPooling
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLModel
-from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLModel, VisionRotaryEmbedding
+from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLModel
 from transformers.utils import ModelOutput
+
+
+try:
+    from transformers.models.qwen2_vl.modeling_qwen2_vl import VisionRotaryEmbedding
+except ImportError:
+    # renamed in newer transformers releases
+    from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLVisionRotaryEmbedding as VisionRotaryEmbedding
 
 from optimum.exporters.openvino import main_export
 from optimum.exporters.openvino.stateful import ensure_stateful_is_available, model_has_input_output_name
@@ -81,6 +88,10 @@ if is_transformers_version(">=", "5.2"):
         Qwen3_5VisionModel,
         Qwen3_5VisionRotaryEmbedding,
     )
+
+if is_transformers_version(">=", "5.18"):
+    from transformers.models.minicpmv4_7.modeling_minicpmv4_7 import MiniCPMV4_7Model
+    from transformers.vision_utils import get_vision_nearest_position_ids, get_vision_window_index
 
 
 if TYPE_CHECKING:
@@ -4236,7 +4247,7 @@ if is_transformers_version(">=", "4.57"):
     _OVQwen3VLForCausalLM.get_placeholder_mask = Qwen3VLModel.get_placeholder_mask
     _OVQwen3VLForCausalLM.get_rope_index = Qwen3VLModel.get_rope_index
     _OVQwen3VLForCausalLM.get_video_features = Qwen3VLModel.get_video_features
-    _OVQwen3VLForCausalLM.rot_pos_emb = Qwen3VLVisionModel.rot_pos_emb
+    _OVQwen3VLForCausalLM.rot_pos_emb = getattr(Qwen3VLVisionModel, "rot_pos_emb", None)
     _OVQwen3VLForCausalLM.get_vision_position_ids = getattr(Qwen3VLModel, "get_vision_position_ids", None)
 
 
@@ -7938,7 +7949,7 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM):
 if is_transformers_version(">=", "5.2"):
     _OVQwen3_5ForCausalLM.get_placeholder_mask = Qwen3_5Model.get_placeholder_mask
     _OVQwen3_5ForCausalLM.get_rope_index = Qwen3_5Model.get_rope_index
-    _OVQwen3_5ForCausalLM.rot_pos_emb = Qwen3_5VisionModel.rot_pos_emb
+    _OVQwen3_5ForCausalLM.rot_pos_emb = getattr(Qwen3_5VisionModel, "rot_pos_emb", None)
 if is_transformers_version(">=", "5.15"):
     _OVQwen3_5ForCausalLM.get_vision_position_ids = Qwen3_5Model.get_vision_position_ids
 
@@ -8043,6 +8054,281 @@ class _OVMuseGlimmerForCausalLM(OVModelForVisualCausalLM):
         return inputs
 
 
+class _OVMiniCPMV4_7ForCausalLM(OVModelForVisualCausalLM):
+    """
+    OpenVINO runtime for MiniCPM-V 4.7 (native transformers implementation).
+
+    The vision graph encodes one crop at a time (see `MiniCPMV4_7VisionEmbeddingsPatcher`); the crop-dependent index
+    tensors are computed here. The canvas M-RoPE positions are computed once at prefill with the transformers
+    `get_rope_index` and extended with the cached `rope_deltas` while decoding.
+    """
+
+    def __init__(
+        self,
+        language_model: ov.Model,
+        text_embeddings: ov.Model,
+        vision_embeddings: ov.Model,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = None,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        **kwargs,
+    ):
+        if is_transformers_version("<", "5.18.0"):
+            raise ImportError("MiniCPM-V 4.7 requires transformers >= 5.18.0.")
+        super().__init__(
+            language_model=language_model,
+            text_embeddings=text_embeddings,
+            vision_embeddings=vision_embeddings,
+            config=config,
+            device=device,
+            dynamic_shapes=dynamic_shapes,
+            ov_config=ov_config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
+            **kwargs,
+        )
+        if config.downsample_mode != "16x":
+            raise NotImplementedError(f"Only the 16x downsample mode is supported, got {config.downsample_mode}.")
+        vision_config = config.vision_config
+        self.patch_size = vision_config.patch_size
+        self.num_patches_per_side = vision_config.image_size // vision_config.patch_size
+        self.window_kernel_size = tuple(vision_config.window_kernel_size)
+        self.window_size = self.window_kernel_size[0]
+        self.merge_kernel_size = tuple(config.merge_kernel_size)
+        self.rope_deltas = None
+
+    def _encode_crops(self, pixel_values: torch.Tensor, target_sizes: torch.Tensor) -> torch.Tensor:
+        """Runs the vision graph on every crop of the NaViT-packed `pixel_values` `(1, C, patch, sum(h*w)*patch)`."""
+        features = []
+        start = 0
+        for height, width in target_sizes.tolist():
+            num_patches = height * width
+            crop = pixel_values[..., start * self.patch_size : (start + num_patches) * self.patch_size]
+            start += num_patches
+
+            crop_size = torch.tensor([[height, width]])
+            position_ids = get_vision_nearest_position_ids(crop_size, self.num_patches_per_side)
+            window_index, window_cu_seqlens = get_vision_window_index(
+                torch.nn.functional.pad(crop_size, (1, 0), value=1),
+                spatial_merge_size=1,
+                window_size=self.window_size,
+                patch_size=1,
+            )
+            if (window_cu_seqlens.diff() != self.window_size**2).any():
+                raise ValueError(f"Crop grid ({height}, {width}) must be divisible by the window size.")
+            # merge_index: token order for the final merger. The ViT window merger leaves a (height / window_h,
+            # width / window_w) grid; regroup it so that every merge_h x merge_w block is contiguous (MiniCPMV4_7Merger)
+            grid_h, grid_w = height // self.window_kernel_size[0], width // self.window_kernel_size[1]
+            merge_h, merge_w = self.merge_kernel_size
+            merge_index = (
+                torch.arange(grid_h * grid_w)
+                .view(grid_h // merge_h, merge_h, grid_w // merge_w, merge_w)
+                .permute(0, 2, 1, 3)
+                .reshape(-1)
+            )
+            features.append(
+                torch.from_numpy(
+                    self.vision_embeddings(
+                        crop,
+                        position_ids=position_ids,
+                        window_index=window_index,
+                        merge_index=merge_index,
+                    )[0]
+                )
+            )
+        return torch.cat(features, dim=0)
+
+    def get_image_features(self, pixel_values, target_sizes):
+        return self._encode_crops(pixel_values[:1], target_sizes)
+
+    def get_video_features(self, pixel_values_videos, target_sizes_videos):
+        # Mirrors MiniCPMV4_7Model.get_video_features: repack the frames into one NaViT sequence
+        num_frames = pixel_values_videos.shape[0]
+        pixel_values = pixel_values_videos.permute(1, 2, 0, 3).reshape(
+            1, pixel_values_videos.shape[1], pixel_values_videos.shape[2], -1
+        )
+        return self._encode_crops(pixel_values, target_sizes_videos.repeat(num_frames, 1))
+
+    def _scatter_features(self, inputs_embeds, input_ids, features, token_id):
+        mask = input_ids == token_id
+        if mask.sum().item() != features.shape[0]:
+            raise ValueError(
+                f"Multimodal features and tokens do not match, tokens: {mask.sum().item()}, "
+                f"features: {features.shape[0]}"
+            )
+        mask = mask.unsqueeze(-1).expand_as(inputs_embeds)
+        return inputs_embeds.masked_scatter(mask, features.to(inputs_embeds.dtype))
+
+    def get_multimodal_embeddings(
+        self,
+        input_ids,
+        pixel_values=None,
+        attention_mask=None,
+        position_ids=None,
+        past_key_values=None,
+        pixel_values_videos=None,
+        target_sizes=None,
+        target_sizes_videos=None,
+        mm_token_type_ids=None,
+        **kwargs,
+    ):
+        is_prefill = past_key_values is None
+        batch_size = input_ids.shape[0]
+        if is_prefill and batch_size > 1 and (pixel_values is not None or pixel_values_videos is not None):
+            # Beam search / num_return_sequences: the rows are copies of one prompt, while the crop-packed vision
+            # inputs (kept unexpanded by `_expand_inputs_for_generation`) describe that prompt only. Embed the first
+            # row and repeat it.
+            if not (input_ids == input_ids[:1]).all():
+                raise NotImplementedError("MiniCPM-V 4.7 supports only one multimodal prompt per batch.")
+            inputs_embeds, _, position_ids = self.get_multimodal_embeddings(
+                input_ids[:1],
+                pixel_values=pixel_values,
+                attention_mask=attention_mask[:1] if attention_mask is not None else None,
+                pixel_values_videos=pixel_values_videos,
+                target_sizes=target_sizes,
+                target_sizes_videos=target_sizes_videos,
+                mm_token_type_ids=mm_token_type_ids[:1] if mm_token_type_ids is not None else None,
+            )
+            self.rope_deltas = self.rope_deltas.repeat(batch_size, 1)
+            return inputs_embeds.repeat(batch_size, 1, 1), attention_mask, position_ids.repeat(1, batch_size, 1)
+
+        inputs_embeds = torch.from_numpy(self.get_text_embeddings(input_ids))
+
+        if is_prefill and pixel_values is not None:
+            image_features = self.get_image_features(pixel_values, target_sizes)
+            inputs_embeds = self._scatter_features(
+                inputs_embeds, input_ids, image_features, self.config.image_token_id
+            )
+        if is_prefill and pixel_values_videos is not None:
+            video_features = self.get_video_features(pixel_values_videos, target_sizes_videos)
+            inputs_embeds = self._scatter_features(
+                inputs_embeds, input_ids, video_features, self.config.video_token_id
+            )
+
+        batch_size, seq_len = input_ids.shape
+        has_multimodal = target_sizes is not None or target_sizes_videos is not None
+        if is_prefill and has_multimodal and mm_token_type_ids is not None:
+            position_ids, self.rope_deltas = self.get_rope_index(
+                input_ids,
+                mm_token_type_ids=mm_token_type_ids,
+                target_sizes=target_sizes,
+                target_sizes_videos=target_sizes_videos,
+                attention_mask=attention_mask,
+            )
+        else:
+            if is_prefill:
+                self.rope_deltas = torch.zeros((batch_size, 1), dtype=torch.long)
+            # text positions (the same on the three M-RoPE axes) shifted by the canvas offset of the prompt
+            if attention_mask is not None:
+                text_positions = attention_mask.long().cumsum(-1) - 1
+                text_positions = text_positions.masked_fill(attention_mask == 0, 0)[:, -seq_len:]
+            else:
+                past_length = 0 if is_prefill else self.language_model._past_length
+                text_positions = torch.arange(past_length, past_length + seq_len).unsqueeze(0).expand(batch_size, -1)
+            position_ids = (text_positions + self.rope_deltas).unsqueeze(0).expand(3, -1, -1)
+
+        return inputs_embeds, attention_mask, position_ids
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        inputs_embeds=None,
+        pixel_values=None,
+        attention_mask=None,
+        pixel_values_videos=None,
+        target_sizes=None,
+        target_sizes_videos=None,
+        mm_token_type_ids=None,
+        **kwargs,
+    ):
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+        # positions are derived from the attention mask and the prompt's rope deltas in `get_multimodal_embeddings`
+        model_inputs["position_ids"] = None
+        is_prefill = past_key_values is None
+        model_inputs.update(
+            {
+                "pixel_values": pixel_values if is_prefill else None,
+                "pixel_values_videos": pixel_values_videos if is_prefill else None,
+                "target_sizes": target_sizes,
+                "target_sizes_videos": target_sizes_videos,
+                "mm_token_type_ids": mm_token_type_ids if is_prefill else None,
+            }
+        )
+        return model_inputs
+
+    def generate(self, *args, **kwargs):
+        self.rope_deltas = None
+        return super().generate(*args, **kwargs)
+
+    def _expand_inputs_for_generation(self, expand_size=1, is_encoder_decoder=False, input_ids=None, **model_kwargs):
+        # The generic expansion repeats every tensor along dim 0 per beam. The vision inputs are not batch-major
+        # (one packed patch sequence, one `target_sizes` row per crop), so they are kept as is, see
+        # `get_multimodal_embeddings`.
+        vision_inputs = {
+            name: model_kwargs.pop(name)
+            for name in ("pixel_values", "pixel_values_videos", "target_sizes", "target_sizes_videos")
+            if name in model_kwargs
+        }
+        input_ids, model_kwargs = super()._expand_inputs_for_generation(
+            expand_size=expand_size, is_encoder_decoder=is_encoder_decoder, input_ids=input_ids, **model_kwargs
+        )
+        model_kwargs.update(vision_inputs)
+        return input_ids, model_kwargs
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+        content = [{"type": "text", "text": text}]
+        if video is not None:
+            content.insert(0, {"type": "video"})
+        if image is not None:
+            content.insert(0, {"type": "image"})
+        text_prompt = processor.apply_chat_template(
+            [{"role": "user", "content": content}], tokenize=False, add_generation_prompt=True
+        )
+        kwargs = {}
+        if video is not None and not isinstance(video, str):
+            # already decoded frames come without the fps / duration metadata the video processor samples frames
+            # with, so they are used as given
+            kwargs["do_sample_frames"] = False
+        return processor(
+            text=text_prompt,
+            images=[image] if image is not None else None,
+            videos=[video] if video is not None else None,
+            return_tensors="pt",
+            **kwargs,
+        )
+
+
+if is_transformers_version(">=", "5.18.0"):
+    _OVMiniCPMV4_7ForCausalLM.get_rope_index = MiniCPMV4_7Model.get_rope_index
+    _OVMiniCPMV4_7ForCausalLM.get_vision_position_ids = MiniCPMV4_7Model.get_vision_position_ids
+    _OVMiniCPMV4_7ForCausalLM._group_visual_frames = MiniCPMV4_7Model._group_visual_frames
+    _OVMiniCPMV4_7ForCausalLM._frame_end_idx = staticmethod(MiniCPMV4_7Model._frame_end_idx)
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "muse_glimmer": _OVMuseGlimmerForCausalLM,
     "llava": _OVLlavaForCausalLM,
@@ -8050,6 +8336,7 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "llava_next_video": _OVLlavaNextVideoForCausalLM,
     "mistral3": _OVMistral3ForCausalLM,
     "minicpmv": _OVMiniCPMVForCausalLM,
+    "minicpmv4_7": _OVMiniCPMV4_7ForCausalLM,
     "llava-qwen2": _OVNanoLlavaForCausalLM,
     "maira2": _OVMaira2ForCausalLM,
     "phi3_v": _OVPhi3VisionForCausalLM,

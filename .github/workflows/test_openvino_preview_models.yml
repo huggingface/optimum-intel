@@ -70,6 +70,19 @@ jobs:
           pytest tests/openvino/${{ matrix.test-pattern }} -k qwen3_5_compressed_tensors --durations=0
           uv pip uninstall compressed-tensors
 
+      - name: MiniCPM-V-4.7 Validation
+        run: |
+          uv pip install "transformers>=5.18"
+          pytest tests/openvino/${{ matrix.test-pattern }} -k "minicpmv4_7" --durations=0
+
+      # test_quantization and test_cb_compatible are not matched by the matrix test-pattern glob, so run them
+      # explicitly and only once (the export job).
+      - name: MiniCPM-V-4.7 Quantization and Continuous Batching Validation
+        if: ${{ matrix.test-pattern == '*export*' }}
+        run: |
+          uv pip install "transformers>=5.18"
+          pytest tests/openvino/test_quantization.py tests/openvino/test_cb_compatible.py -k "minicpmv4_7" --durations=0
+
       # QwenImage21Pipeline is only available in diffusers main. test_diffusion is not matched by the matrix
       # test-pattern glob, so run the Qwen-Image-2.1 diffusion, export and transformation tests explicitly and only once.
       - name: Qwen-Image-2.1 Validation
