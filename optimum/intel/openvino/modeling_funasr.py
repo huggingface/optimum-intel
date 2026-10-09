@@ -669,8 +669,7 @@ def _resolve_sensevoice_asset(source_model_id, asset, cache_dir=HUGGINGFACE_HUB_
 
 
 class _SenseVoiceSentencePieceTokenizer(PreTrainedTokenizer):
-    """Minimal slow SentencePiece-backed tokenizer used only to export the SenseVoice detokenizer IR.
-    """
+    """Minimal slow SentencePiece-backed tokenizer used only to export the SenseVoice detokenizer IR."""
 
     vocab_files_names = {"vocab_file": "spiece.model"}
 
@@ -704,7 +703,9 @@ class _SenseVoiceSentencePieceTokenizer(PreTrainedTokenizer):
         return self.sp_model.decode(tokens)
 
     def save_vocabulary(self, save_directory, filename_prefix=None):
-        out = Path(save_directory) / ((filename_prefix + "-" if filename_prefix else "") + self.vocab_files_names["vocab_file"])
+        out = Path(save_directory) / (
+            (filename_prefix + "-" if filename_prefix else "") + self.vocab_files_names["vocab_file"]
+        )
         if Path(self.vocab_file).resolve() != out.resolve():
             shutil.copyfile(self.vocab_file, out)
         return (str(out),)
