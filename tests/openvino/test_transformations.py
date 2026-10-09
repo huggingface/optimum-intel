@@ -472,7 +472,6 @@ if is_diffusers_version(">=", "0.38.0"):
             "PackMultiHeadAttention",
             "CommonFusions",
             "TransposeConvert",
-            "TransposeFuse",
             "ReverseInputChannelsFusion",
             "BroadcastTransition",
         ],
