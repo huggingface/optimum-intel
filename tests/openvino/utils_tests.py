@@ -378,6 +378,7 @@ HUB_MODEL_NAMES = {
     "sana": "optimum-intel-internal-testing/tiny-random-sana",
     "sana-sprint": "optimum-intel-internal-testing/tiny-random-sana-sprint",
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
+    "ltx-video-0.9.5": "johnfeng0220/tiny-random-ltx-video-0.9.5",
     "qwenimage": "optimum-intel-internal-testing/tiny-random-qwen-image",
     "qwenimage21": "optimum-intel-internal-testing/tiny-random-qwen-image-2.1",
     "ltx2": "optimum-intel-internal-testing/tiny-random-ltx2",
@@ -658,6 +659,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vae_decoder": 28,
         "vae_encoder": 28,
         "text_encoder": 64,
+    },
+    "ltx-video-0.9.5": {
+        "transformer": 34,
+        "vae_decoder": 46,
+        "vae_encoder": 32,
+        "text_encoder": 18,
     },
     "ltx2": {
         "transformer": 108,
@@ -1107,6 +1114,7 @@ TEST_NAME_TO_MODEL_TYPE = {
     "llama_compressed_tensors": "llama",
     "llava_next_mistral": "llava_next",
     "ltx-video": "ltx-video-transformer",
+    "ltx-video-0.9.5": "ltx-video-transformer",
     "ltx2": "ltx2-video-transformer",
     "ltx2.3": "ltx2-video-transformer",
     "mistral-nemo": "mistral",
