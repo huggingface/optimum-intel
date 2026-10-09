@@ -132,6 +132,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("image-to-video", "ltx2"),
         ("text-to-video", "ltx2.3"),
         ("image-to-video", "ltx2.3"),
+        ("text-to-video", "ltx2.5"),
+        ("image-to-video", "ltx2.5"),
         ("feature-extraction", "sam"),
         ("text-to-audio", "speecht5"),
         ("zero-shot-image-classification", "clip"),
@@ -212,6 +214,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "ltx-video": 2,
         "ltx2": 2,
         "ltx2.3": 2,
+        "ltx2.5": 2,
         "sam": 0,  # no tokenizer
         "speecht5": 2,
         "kokoro": 0,  # uses g2p, no tokenizer

@@ -17,7 +17,7 @@ from typing import Optional, Tuple
 
 import torch
 
-from optimum.exporters.openvino.utils import is_ltx2_3_transformer_config
+from optimum.exporters.openvino.utils import has_ltx2_extended_guidance_inputs
 from optimum.intel.utils.import_utils import is_diffusers_version
 from optimum.utils import (
     DEFAULT_DUMMY_SHAPES,
@@ -1044,7 +1044,7 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
                 normalized_config.config, "audio_cross_attention_dim", self.cross_attention_dim
             )
 
-        self.is_ltx2_3 = is_ltx2_3_transformer_config(normalized_config.config)
+        self.has_extended_guidance_inputs = has_ltx2_extended_guidance_inputs(normalized_config.config)
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         import torch
@@ -1080,7 +1080,8 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
         if input_name == "encoder_attention_mask":
             # LTX-2.0 exported this as i64, from the generic seq2seq generator this one replaced.
             # Keeping the dtype avoids changing its IRs; the mask is only ever used arithmetically.
-            if not self.is_ltx2_3:
+            # Later architectures (2.3, 2.5) get f32.
+            if not self.has_extended_guidance_inputs:
                 return self.random_mask_tensor(
                     [self.batch_size, self.encoder_seq_length], framework=framework, dtype=int_dtype
                 )
@@ -1140,6 +1141,33 @@ class LTX2ConnectorsDummyInputGenerator(DummyVisionInputGenerator):
             import torch
 
             return torch.ones(self.batch_size, self.sequence_length, dtype=torch.float32)
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class LTX2DurationHeadDummyInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("video_tokens", "audio_tokens")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, **kwargs)
+        self.sequence_length = sequence_length
+        # The head is fed the connector outputs verbatim, so these widths are pinned by the input
+        # projections' weights: no other width will run.
+        config = normalized_config.config
+        self.video_channels = config.video_cross_attention_dim
+        self.audio_channels = config.audio_cross_attention_dim
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "video_tokens":
+            return self.random_float_tensor([self.batch_size, self.sequence_length, self.video_channels])
+        if input_name == "audio_tokens":
+            return self.random_float_tensor([self.batch_size, self.sequence_length, self.audio_channels])
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
 

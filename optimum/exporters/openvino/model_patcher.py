@@ -62,7 +62,7 @@ from optimum.exporters.openvino.patching_utils import (
     postprocess_past_key_values,
     preprocess_past_key_values,
 )
-from optimum.exporters.openvino.utils import is_ltx2_3_transformer_config
+from optimum.exporters.openvino.utils import has_ltx2_extended_guidance_inputs
 from optimum.intel.utils.import_utils import (
     is_diffusers_version,
     is_openvino_version,
@@ -12052,10 +12052,11 @@ class LTX2TransformerPatcher(ModelPatcher):
                     _LTX2TraceSafeAttnProcessor(self._guidance_state, perturbable_attns.get(id(module)))
                 )
 
-        # Only LTX-2.3 exports the gate, so leave LTX-2.0's graph untouched. Modality isolation is
-        # architecturally available there too, but adding the input would change its published IRs.
+        # Only architectures carrying the extended-guidance flags export the gate (LTX-2.3, LTX-2.5),
+        # so leave LTX-2.0's graph untouched. Modality isolation is architecturally available there too,
+        # but adding the input would change its published IRs.
         self._orig_cross_modality_forwards = []
-        if is_ltx2_3_transformer_config(self._model.config):
+        if has_ltx2_extended_guidance_inputs(self._model.config):
             for block in transformer_blocks:
                 for attn_name in ("audio_to_video_attn", "video_to_audio_attn"):
                     attn = getattr(block, attn_name, None)

@@ -1263,6 +1263,20 @@ class OVWeightCompressionTest(unittest.TestCase):
             },
         ),
         (
+            OVLTX2Pipeline,
+            "ltx2.5",
+            8,
+            _DEFAULT_8BIT_WQ_CONFIGS["Lightricks/LTX-2.5-Diffusers"],
+            {
+                "transformer": {"int8": 192},
+                "text_encoder": {"int8": 28},
+                "connectors": {},
+                "vae_decoder": {},
+                "audio_vae_decoder": {},
+                "vocoder": {},
+            },
+        ),
+        (
             OVModelForVisualCausalLM,
             "llava",
             4,
