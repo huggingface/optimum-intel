@@ -843,7 +843,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         self._check_device_and_request(ov_model, test_device, False)
 
         # pytorch minicpmv and internvl_chat are not designed to be used via forward
-        if model_arch not in ["minicpmv", "minicpmo", "internvl_chat", "videochat_flash_qwen"]:
+        if model_arch not in ["minicpmv", "minicpm_v4_5", "minicpmo", "internvl_chat", "videochat_flash_qwen"]:
             set_seed(SEED)
             ov_outputs = ov_model(**inputs)
             set_seed(SEED)
@@ -880,8 +880,8 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             transformers_inputs["past_key_values"] = DynamicCache()
 
         with torch.no_grad():
-            if model_arch in ["minicpmo"]:
-                # `generate` method for minicpmo requires tokenizer
+            if model_arch in ["minicpmo", "minicpm_v4_5"]:
+                # MiniCPM's custom generate method requires the tokenizer to resolve terminator IDs.
                 tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in REMOTE_CODE_MODELS)
                 additional_inputs["tokenizer"] = tokenizer
             transformers_outputs = transformers_model.generate(
