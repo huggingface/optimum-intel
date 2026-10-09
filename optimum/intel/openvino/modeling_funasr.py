@@ -27,7 +27,7 @@ import torch
 from huggingface_hub import hf_hub_download, snapshot_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino import Core
-from transformers import PretrainedConfig, T5Tokenizer
+from transformers import PretrainedConfig, PreTrainedTokenizer
 from transformers.modeling_outputs import CausalLMOutput
 
 from optimum.exporters.openvino.__main__ import main_export
@@ -668,16 +668,55 @@ def _resolve_sensevoice_asset(source_model_id, asset, cache_dir=HUGGINGFACE_HUB_
         return None
 
 
+class _SenseVoiceSentencePieceTokenizer(PreTrainedTokenizer):
+    """Minimal slow SentencePiece-backed tokenizer used only to export the SenseVoice detokenizer IR.
+    """
+
+    vocab_files_names = {"vocab_file": "spiece.model"}
+
+    def __init__(self, vocab_file, **kwargs):
+        import sentencepiece as spm
+
+        self.vocab_file = vocab_file
+        self.sp_model = spm.SentencePieceProcessor()
+        self.sp_model.Load(vocab_file)
+        super().__init__(**kwargs)
+
+    @property
+    def vocab_size(self):
+        return self.sp_model.GetPieceSize()
+
+    def get_vocab(self):
+        vocab = {self.sp_model.IdToPiece(i): i for i in range(self.vocab_size)}
+        vocab.update(self.added_tokens_encoder)
+        return vocab
+
+    def _tokenize(self, text):
+        return self.sp_model.encode(text, out_type=str)
+
+    def _convert_token_to_id(self, token):
+        return self.sp_model.PieceToId(token)
+
+    def _convert_id_to_token(self, index):
+        return self.sp_model.IdToPiece(index)
+
+    def convert_tokens_to_string(self, tokens):
+        return self.sp_model.decode(tokens)
+
+    def save_vocabulary(self, save_directory, filename_prefix=None):
+        out = Path(save_directory) / ((filename_prefix + "-" if filename_prefix else "") + self.vocab_files_names["vocab_file"])
+        if Path(self.vocab_file).resolve() != out.resolve():
+            shutil.copyfile(self.vocab_file, out)
+        return (str(out),)
+
+
 def export_sensevoice_tokenizers(source_model_id, output, cache_dir=HUGGINGFACE_HUB_CACHE, token=None):
     """Convert the SenseVoice SentencePiece model to an OpenVINO detokenizer IR under ``output``.
 
     SenseVoiceSmall does not accept text input, so only the detokenizer (token ids -> text) is needed; the
     tokenizer IR is intentionally not generated. SenseVoice ships a raw SentencePiece model rather than a
-    transformers tokenizer, so it is wrapped in a `T5Tokenizer` (which is SentencePiece-backed) before
-    conversion. The resulting OpenVINO detokenizer maps token ids to text identically to
-    `SentencePieceProcessor.DecodeIds` for SenseVoice ids (including the `<|lang|>`/`<|emo|>` special tokens),
-    so CTC greedy output can be detokenized entirely with the exported IR, without a runtime SentencePiece
-    dependency.
+    transformers tokenizer, so it is wrapped in a SentencePiece-backed tokenizer (`_SenseVoiceSentencePieceTokenizer`)
+    and converted with the SentencePiece backend.
     """
     try:
         from openvino_tokenizers import convert_tokenizer
@@ -687,8 +726,8 @@ def export_sensevoice_tokenizers(source_model_id, output, cache_dir=HUGGINGFACE_
     bpe_path = _resolve_sensevoice_asset(source_model_id, SENSEVOICE_BPE_FILE, cache_dir=cache_dir, token=token)
     if bpe_path is None:
         return
-    tokenizer = T5Tokenizer(vocab_file=str(bpe_path), extra_ids=0, legacy=True)
-    _, detokenizer = convert_tokenizer(tokenizer, with_detokenizer=True)
+    tokenizer = _SenseVoiceSentencePieceTokenizer(vocab_file=str(bpe_path))
+    _, detokenizer = convert_tokenizer(tokenizer, with_detokenizer=True, use_sentencepiece_backend=True)
     openvino.save_model(detokenizer, Path(output) / OV_DETOKENIZER_NAME.format(""))
 
 
