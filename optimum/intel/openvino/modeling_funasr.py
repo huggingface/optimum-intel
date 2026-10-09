@@ -18,7 +18,6 @@ import logging
 import shutil
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
-from tempfile import TemporaryDirectory
 from typing import Dict, List, Optional, Union
 
 import numpy as np
@@ -30,7 +29,8 @@ from openvino import Core
 from transformers import PretrainedConfig, PreTrainedTokenizer
 from transformers.modeling_outputs import CausalLMOutput
 
-from optimum.exporters.openvino.__main__ import main_export
+from optimum.exporters.openvino.__main__ import maybe_convert_tokenizers
+from optimum.exporters.openvino.utils import load_preprocessors
 from optimum.exporters.tasks import TasksManager
 
 from ..utils.import_utils import (
@@ -40,7 +40,6 @@ from ..utils.import_utils import (
     is_torchaudio_available,
 )
 from ..utils.modeling_utils import _find_files_matching_pattern
-from .configuration import OVConfig
 from .modeling import OVModel
 from .modeling_seq2seq import FunASRPretrainedConfig, OVModelForSpeechSeq2Seq
 from .utils import OV_DETOKENIZER_NAME, OV_TOKENIZER_NAME
@@ -755,44 +754,9 @@ class _OVModelForSenseVoice(OVModel):
     export_feature = "automatic-speech-recognition"
     main_input_name = "input_features"
     _library_name = "funasr"
-
-    def __init__(
-        self,
-        model,
-        config,
-        model_save_dir=None,
-        device="CPU",
-        ov_config=None,
-        compile=True,
-        **kwargs,
-    ):
-        # The detokenizer is a second IR that the base class is unaware of. Load it from the model
-        # directory before delegating so that the base `__init__` (which calls `self.compile()`) also
-        # compiles it; SenseVoiceSmall emits raw CTC token ids that this IR turns into text.
-        self.detokenizer_model = None
-        self.detokenizer_request = None
-        self._cmvn = None
-        detokenizer_path = (
-            Path(model_save_dir) / OV_DETOKENIZER_NAME.format("") if model_save_dir is not None else None
-        )
-        if detokenizer_path is not None and detokenizer_path.is_file():
-            if kwargs.get("compile_only", False):
-                # In compile_only mode the IR is compiled eagerly and reused as its inference request.
-                self.detokenizer_model = self._compile_model(detokenizer_path, device, ov_config, model_save_dir)
-            else:
-                self.detokenizer_model = Core().read_model(detokenizer_path)
-        super().__init__(
-            model,
-            config,
-            device=device,
-            ov_config=ov_config,
-            model_save_dir=model_save_dir,
-            compile=compile,
-            **kwargs,
-        )
-        if self._compile_only:
-            # The detokenizer IR is already compiled; reuse it directly as its inference request.
-            self.detokenizer_request = self.detokenizer_model
+    _cmvn = None
+    detokenizer_model = None
+    detokenizer_request = None
 
     def _reshape(self, model, batch_size, sequence_length, height=None, width=None):
         logger.warning(
@@ -800,12 +764,28 @@ class _OVModelForSenseVoice(OVModel):
         )
         return model
 
-    def compile(self):
-        super().compile()
-        if self.detokenizer_model is not None and self.detokenizer_request is None:
-            self.detokenizer_request = self._compile_model(
-                self.detokenizer_model, self._device, {**self.ov_config}, self.model_save_dir
-            )
+    def set_detokenizer(self):
+        detokenizer_path = (
+            Path(self.model_save_dir) / OV_DETOKENIZER_NAME.format("") if self.model_save_dir is not None else None
+        )
+        if detokenizer_path is not None and detokenizer_path.is_file():
+            if self._compile_only:
+                # In compile_only mode the IR is compiled eagerly and reused as its inference request.
+                self.detokenizer_model = self._compile_model(
+                    detokenizer_path, self._device, self.ov_config, self.model_save_dir
+                )
+            else:
+                self.detokenizer_model = Core().read_model(detokenizer_path)
+
+        # The detokenizer IR is already compiled; reuse it directly as its inference request.
+        if self._compile_only:
+            self.detokenizer_request = self.detokenizer_model
+
+        if not self._compile_only:
+            if self.detokenizer_model is not None and self.detokenizer_request is None:
+                self.detokenizer_request = self._compile_model(
+                    self.detokenizer_model, self._device, {**self.ov_config}, self.model_save_dir
+                )
 
     def clear_requests(self):
         if self._compile_only:
@@ -854,62 +834,28 @@ class _OVModelForSenseVoice(OVModel):
         )
         return super()._from_pretrained(model_dir, config=config, **kwargs)
 
-    # The base _export() doesn't convert the tokenizer, while SenseVoice requires the detokenizer IR.
-    # SenseVoiceSmall also ships a SentencePiece BPE model instead of a transformers tokenizer,
-    # so the detokenizer must be built here (via `convert_tokenizer=True`) and
-    # saved next to the model IR; otherwise a freshly exported model would have no way to decode output.
     @classmethod
     def _export(cls, model_id, config, **kwargs):
-        save_dir = TemporaryDirectory()
-        save_dir_path = Path(save_dir.name)
-        # Keep one reference on the temporary directory so garbage collection does not remove the
-        # directory holding the exported OpenVINO IRs before they are reloaded.
-        cls._model_save_dir_tempdirectory_instance = save_dir
+        model = super()._export(model_id, config, **kwargs)
 
-        compile_only = kwargs.pop("compile_only", False)
-        if compile_only:
-            logger.warning(
-                "`compile_only` mode will be disabled because it does not support model export. "
-                "Please provide an OpenVINO model obtained using optimum-cli or saved on disk using `save_pretrained`."
-            )
-            compile_only = False
-
-        load_in_8bit = kwargs.pop("load_in_8bit", None)
-        quantization_config = kwargs.pop("quantization_config", None)
-        if load_in_8bit is None and not quantization_config:
-            ov_config = None
-        else:
-            ov_config = OVConfig(dtype="fp32")
-
-        variant = kwargs.pop("variant", None)
-
-        main_export(
-            model_name_or_path=model_id,
-            output=save_dir_path,
-            task=kwargs.pop("task", None) or cls.export_feature,
+        preprocessors = load_preprocessors(
+            model_id,
             subfolder=kwargs.pop("subfolder", ""),
-            revision=kwargs.pop("revision", None),
-            cache_dir=kwargs.pop("cache_dir", HUGGINGFACE_HUB_CACHE),
-            token=kwargs.pop("token", None),
-            local_files_only=kwargs.pop("local_files_only", False),
-            force_download=kwargs.pop("force_download", False),
             trust_remote_code=kwargs.pop("trust_remote_code", False),
-            ov_config=ov_config,
-            library_name=cls._library_name,
-            variant=variant,
-            # SenseVoiceSmall ships a SentencePiece BPE model instead of a transformers tokenizer. It has no
-            # text input, so only the detokenizer IR (needed to decode CTC ids) is generated at export time.
-            convert_tokenizer=True,
+            model_type=model.config.model_type,
         )
-
-        return super()._from_pretrained(
-            model_id=save_dir_path,
-            config=config,
-            load_in_8bit=load_in_8bit,
-            quantization_config=quantization_config,
-            compile_only=compile_only,
-            **kwargs,
+        model_hf = _SenseVoiceForCTC.from_pretrained(
+            model_id, cache_dir=kwargs.pop("cache_dir", HUGGINGFACE_HUB_CACHE), token=kwargs.pop("token", None)
         )
+        maybe_convert_tokenizers(
+            "funasr",
+            model.model_save_dir,
+            model_hf,
+            preprocessors,
+            task=kwargs.pop("task", None) or cls.export_feature,
+        )
+        model.set_detokenizer()
+        return model
 
     @staticmethod
     def _resolve_model_dir(
