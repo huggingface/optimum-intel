@@ -197,6 +197,12 @@ PREDEFINED_TEXT_IMAGE_ENCODER_DATASETS = {
 }
 
 PREDEFINED_VISUAL_LM_DATASETS = {
+    "gsm8k": {
+        "id": "openai/gsm8k",
+        "name": "main",
+        "split": "train",
+        "prompt_template": "Question: {question}\nAnswer: {answer}",
+    },
     # "contextual" deprecated: images now unreachable, "textvqa" should be used instead
     "contextual": {
         "id": "ucla-contextual/contextual_test",
