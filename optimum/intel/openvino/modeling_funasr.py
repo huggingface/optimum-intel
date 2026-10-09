@@ -33,7 +33,12 @@ from transformers.modeling_outputs import CausalLMOutput
 from optimum.exporters.openvino.__main__ import main_export
 from optimum.exporters.tasks import TasksManager
 
-from ..utils.import_utils import is_funasr_available, is_openvino_tokenizers_available, is_torchaudio_available
+from ..utils.import_utils import (
+    is_funasr_available,
+    is_openvino_tokenizers_available,
+    is_sentencepiece_available,
+    is_torchaudio_available,
+)
 from ..utils.modeling_utils import _find_files_matching_pattern
 from .configuration import OVConfig
 from .modeling import OVModel
@@ -46,6 +51,10 @@ if is_funasr_available():
 
 if is_openvino_tokenizers_available():
     import openvino_tokenizers  # noqa: F401
+    from openvino_tokenizers import convert_tokenizer
+
+if is_sentencepiece_available():
+    import sentencepiece as spm
 
 if is_torchaudio_available():
     import torchaudio
@@ -674,8 +683,6 @@ class _SenseVoiceSentencePieceTokenizer(PreTrainedTokenizer):
     vocab_files_names = {"vocab_file": "spiece.model"}
 
     def __init__(self, vocab_file, **kwargs):
-        import sentencepiece as spm
-
         self.vocab_file = vocab_file
         self.sp_model = spm.SentencePieceProcessor()
         self.sp_model.Load(vocab_file)
@@ -719,11 +726,6 @@ def export_sensevoice_tokenizers(source_model_id, output, cache_dir=HUGGINGFACE_
     transformers tokenizer, so it is wrapped in a SentencePiece-backed tokenizer (`_SenseVoiceSentencePieceTokenizer`)
     and converted with the SentencePiece backend.
     """
-    try:
-        from openvino_tokenizers import convert_tokenizer
-    except ModuleNotFoundError:
-        return
-
     bpe_path = _resolve_sensevoice_asset(source_model_id, SENSEVOICE_BPE_FILE, cache_dir=cache_dir, token=token)
     if bpe_path is None:
         return

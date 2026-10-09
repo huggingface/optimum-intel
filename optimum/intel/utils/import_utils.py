@@ -136,6 +136,14 @@ if _torchaudio_available:
     except importlib_metadata.PackageNotFoundError:
         _torchaudio_available = False
 
+_sentencepiece_available = importlib.util.find_spec("sentencepiece") is not None
+_sentencepiece_version = "N/A"
+if _sentencepiece_available:
+    try:
+        _sentencepiece_version = importlib_metadata.version("sentencepiece")
+    except importlib_metadata.PackageNotFoundError:
+        _sentencepiece_available = False
+
 _safetensors_version = "N/A"
 _safetensors_available = importlib.util.find_spec("safetensors") is not None
 if _safetensors_available:
@@ -334,6 +342,10 @@ def is_funasr_available():
 
 def is_torchaudio_available():
     return _torchaudio_available
+
+
+def is_sentencepiece_available():
+    return _sentencepiece_available
 
 
 def is_safetensors_available():
