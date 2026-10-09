@@ -592,6 +592,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "videochat_flash_qwen",
         "internvl_chat",
         "minicpmv",
+        "minicpm_v4_5",
         "minicpmo",
         "llava-qwen2",
         "phi3_v",
@@ -621,6 +622,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "qwen3_vl",
         "videochat_flash_qwen",
         "muse_glimmer",
+        "minicpm_v4_5",
         "gemma4",
         "gemma4_moe",
         "gemma4_unified",
@@ -754,7 +756,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 transformers_inputs["inputs"] = transformers_inputs.pop("input_ids")
             ov_outputs = ov_model.generate(**inputs, generation_config=generation_config)
             # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
-            if model_arch in ["minicpmv", "minicpmo", "internvl_chat", "videochat_flash_qwen"]:
+            if model_arch in ["minicpmv", "minicpm_v4_5", "minicpmo", "internvl_chat", "videochat_flash_qwen"]:
                 ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
             with torch.no_grad():
                 transformers_outputs = transformers_model.generate(
@@ -844,7 +846,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         self._check_device_and_request(ov_model, test_device, False)
 
         # pytorch minicpmv and internvl_chat are not designed to be used via forward
-        if model_arch not in ["minicpmv", "minicpmo", "internvl_chat", "videochat_flash_qwen"]:
+        if model_arch not in ["minicpmv", "minicpm_v4_5", "minicpmo", "internvl_chat", "videochat_flash_qwen"]:
             set_seed(SEED)
             ov_outputs = ov_model(**inputs)
             set_seed(SEED)
@@ -881,8 +883,8 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             transformers_inputs["past_key_values"] = DynamicCache()
 
         with torch.no_grad():
-            if model_arch in ["minicpmo"]:
-                # `generate` method for minicpmo requires tokenizer
+            if model_arch in ["minicpmo", "minicpm_v4_5"]:
+                # MiniCPM's custom generate method requires the tokenizer to resolve terminator IDs.
                 tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in REMOTE_CODE_MODELS)
                 additional_inputs["tokenizer"] = tokenizer
             transformers_outputs = transformers_model.generate(
@@ -893,7 +895,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 transformers_outputs = transformers_outputs[1].sequences
 
         # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
-        if model_arch in ["minicpmv", "minicpmo", "internvl_chat", "videochat_flash_qwen"]:
+        if model_arch in ["minicpmv", "minicpm_v4_5", "minicpmo", "internvl_chat", "videochat_flash_qwen"]:
             ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
         self.assertTrue(
             torch.equal(ov_outputs, transformers_outputs),
