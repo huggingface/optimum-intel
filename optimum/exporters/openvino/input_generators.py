@@ -236,7 +236,7 @@ class Eagle3DummyGenerator(DummyInputGenerator):
         self.batch_size = batch_size
         self.sequence_length = sequence_length
         self.hidden_size = normalized_config.hidden_size
-        dflash_config = getattr(normalized_config.config, "dflash_config", {}) or {}
+        dflash_config = getattr(normalized_config.config, "dflash_config", None) or normalized_config.config.to_dict()
         self.num_hidden_state_layers = len(dflash_config.get("target_layer_ids", [])) or 3
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
@@ -492,6 +492,67 @@ class DummyGemma4UnifiedVisionInputGenerator(DummyVisionInputGenerator):
                 grid = grid[:, : self.num_patches, :]
             return grid.expand(self.batch_size, -1, -1).clone()
         return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class DummyGemma4UnifiedAudioInputGenerator(DummyInputGenerator):
+    """Unified Gemma 4 has no separate audio encoder, so these input features are already audio embeddings;
+    the exported audio model projects them into language-model soft tokens that replace the prompt's audio tokens.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("input_features",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        self.task = task
+        self.normalized_config = normalized_config
+        self.batch_size = batch_size
+        self.sequence_length = sequence_length
+        self.audio_embed_dim = getattr(normalized_config, "audio_embed_dim", 640)
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        return self.random_float_tensor(
+            shape=[self.batch_size, self.sequence_length, self.audio_embed_dim],
+            framework=framework,
+            dtype=float_dtype,
+        )
+
+
+class DummyGemma4AudioInputGenerator(DummyInputGenerator):
+    """Gemma 4 audio preprocessing converts waveforms into padded frame-level acoustic features;
+    ``input_features_mask`` marks the valid, non-padding frames in ``input_features``.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("input_features", "input_features_mask")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        # Roughly one second of audio at the feature extractor's 10 ms hop
+        sequence_length: int = 100,
+        **kwargs,
+    ):
+        self.task = task
+        self.normalized_config = normalized_config
+        self.batch_size = batch_size
+        self.sequence_length = sequence_length
+        self.feature_size = getattr(normalized_config, "feature_size", 128)
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "input_features_mask":
+            return torch.ones((self.batch_size, self.sequence_length), dtype=torch.bool)
+        return self.random_float_tensor(
+            shape=[self.batch_size, self.sequence_length, self.feature_size],
+            framework=framework,
+            dtype=float_dtype,
+        )
 
 
 class DeciDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
@@ -1178,6 +1239,55 @@ class DummyMiniCPMVImageInputGenerator(DummyVisionInputGenerator):
             )
 
 
+class DummyMiniCPMV4_7VisionInputGenerator(DummyVisionInputGenerator):
+    """
+    Dummy inputs for the per-crop MiniCPM-V 4.7 vision graph: the NaViT-packed patches of one crop plus the host-side
+    index tensors (position embedding ids, 2x2 window order for the ViT merger and 2x2 order for the final merger).
+    """
+
+    SUPPORTED_INPUT_NAMES = ("pixel_values", "position_ids", "window_index", "merge_index")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"],
+        height: int = DEFAULT_DUMMY_SHAPES["height"],
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width, height)
+        config = normalized_config.config
+        self.patch_size = config.patch_size
+        self.num_positions = (config.image_size // config.patch_size) ** 2
+        # crop grid in patches, both sides divisible by 4 (2x2 window merge followed by 2x2 merge)
+        self.grid_height = max(4, self.height // self.patch_size // 4 * 4)
+        self.grid_width = max(4, self.width // self.patch_size // 4 * 4)
+
+    @staticmethod
+    def _block_order(height: int, width: int) -> torch.Tensor:
+        # row-major token indices regrouped so that every 2x2 block is contiguous
+        return torch.arange(height * width).view(height // 2, 2, width // 2, 2).permute(0, 2, 1, 3).reshape(-1)
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        num_patches = self.grid_height * self.grid_width
+        if input_name == "pixel_values":
+            return self.random_float_tensor(
+                shape=[1, self.num_channels, self.patch_size, num_patches * self.patch_size],
+                framework=framework,
+                dtype=float_dtype,
+            )
+        if input_name == "position_ids":
+            return self.random_int_tensor(
+                shape=[num_patches], max_value=self.num_positions, framework=framework, dtype=int_dtype
+            )
+        if input_name == "window_index":
+            return self._block_order(self.grid_height, self.grid_width)
+        if input_name == "merge_index":
+            return self._block_order(self.grid_height // 2, self.grid_width // 2)
+
+
 class DummyMiniCPMVResampleInputGenerator(DummyVisionInputGenerator):
     SUPPORTED_INPUT_NAMES = ("image_feature", "pos_embed", "key_padding_mask")
 
@@ -1385,6 +1495,24 @@ class DummyQwen2VLLMInputGenerator(DummyTextInputGenerator):
         if input_name == "position_ids":
             return generated_input.unsqueeze(0).expand(3, -1, -1)
         return generated_input
+
+
+class DummyMiniCPMV4_7LMInputGenerator(DummyQwen2VLLMInputGenerator):
+    """
+    (3, batch, seq) M-RoPE `position_ids` and an `attention_mask` that covers the past and the current tokens, the past
+    length being the dummy cache length (`sequence_length`) produced by `Qwen3_5DummyPastKeyValuesGenerator`.
+    """
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "attention_mask":
+            return self.random_int_tensor(
+                shape=[self.batch_size, 2 * self.sequence_length],
+                min_value=1,
+                max_value=2,
+                framework=framework,
+                dtype=int_dtype,
+            )
+        return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
 class DummyQwen3_5LMInputGenerator(DummyTextInputGenerator):

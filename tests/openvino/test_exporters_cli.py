@@ -81,6 +81,7 @@ from optimum.intel.openvino.configuration import (
 from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
 from optimum.intel.utils.import_utils import (
     compare_versions,
+    is_compressed_tensors_available,
     is_openvino_tokenizers_available,
     is_openvino_version,
     is_qwen_tts_available,
@@ -144,6 +145,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("feature-extraction", "qwen3_vl_embedding"),
         ("text-generation-with-past", "qwen3_eagle3"),
         ("text-generation-with-past", "qwen3_dflash"),
+        ("text-generation-with-past", "qwen3_deepspec_dflash"),
         ("text-generation-with-past", "zamba2"),
         ("text-generation-with-past", "exaone4"),
         ("text-generation-with-past", "ouro"),
@@ -155,8 +157,10 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "falcon_mamba"),
         ("text-to-image", "flux.2-klein"),
         ("image-text-to-text", "mistral3"),
+        ("image-text-to-text", "ministral3"),
         ("text-to-image", "z-image"),
         ("image-text-to-text", "muse_glimmer"),
+        ("image-text-to-text", "minicpmv4_7"),
     ]
     # filter architectures depending on min/max transformers supported versions
     SUPPORTED_ARCHITECTURES = [
@@ -203,6 +207,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "lfm2_moe": 2,
         "llava": 2,
         "mistral3": 2,
+        "ministral3": 2,
         "sana": 2,
         "ltx-video": 2,
         "ltx2": 2,
@@ -225,6 +230,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "qwen3_vl_eagle3": 0,
         "qwen3_vl_embedding": 2,
         "muse_glimmer": 2,
+        "minicpmv4_7": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
@@ -847,7 +853,69 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "vision_projection_model": {"int8": 2},
             },
         ),
+        (
+            "image-text-to-text",
+            "minicpmv4_7",
+            "int4 --group-size 8 --ratio 0.8",
+            {
+                "lm_model": {"int8": 48, "int4": 62},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 28},
+            },
+        ),
+        (
+            # data-aware: mixed precision (ratio < 1) is not used, its sensitivity metrics do not support the 3D
+            # MoE expert weights yet
+            "image-text-to-text",
+            "minicpmv4_7",
+            "int4 --group-size 8 --ratio 1.0 --dataset textvqa --num-samples 1 --scale-estimation",
+            {
+                "lm_model": {"int8": 8, "int4": 102},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 28},
+            },
+        ),
     ]
+
+    # Pre-quantized compressed-tensors (AWQ pack-quantized) model. It is already quantized, so
+    # it is exported without a `--weight-format`: the OpenVINO PyTorch frontend converts the
+    # packed weights directly into int4 constants. This relies on the frontend compressed-tensors
+    # patcher (OpenVINO 2026.3+) and on the `compressed_tensors` package. The latter is installed
+    # by the dedicated preview-models validation job, which is the only CI job that exercises it.
+    if (
+        is_openvino_version(">=", "2026.3")
+        and is_transformers_version(">=", "4.57.6")
+        and is_compressed_tensors_available()
+    ):
+        TRANSFORMERS_4BIT_CONFIGURATIONS.append(
+            (
+                "text-generation-with-past",
+                "llama_compressed_tensors",
+                None,
+                {"model": {"int4": 14}},
+            )
+        )
+
+    # Same as above, but for a Qwen3.5 (VLM) checkpoint, mirroring the ignore pattern of the
+    # real-world cyankiwi/Qwen3.5-4B-AWQ-4bit checkpoint that motivated this feature: only the
+    # language-model linears are pack-quantized, the vision tower is untouched. Qwen3.5 is only
+    # registered for transformers 5.2.0-5.2.99 (see Qwen3_5OpenVINOConfig), so this config is only
+    # exercised by the `preview_models` workflow, which pins that narrow transformers range.
+    if is_openvino_version(">=", "2026.3") and is_compressed_tensors_available():
+        TRANSFORMERS_4BIT_CONFIGURATIONS.append(
+            (
+                "image-text-to-text",
+                "qwen3_5_compressed_tensors",
+                None,
+                {
+                    "lm_model": {"int4": 25},
+                    "text_embeddings_model": {},
+                    "vision_embeddings_model": {},
+                    "vision_embeddings_merger_model": {},
+                    "vision_embeddings_pos_model": {},
+                },
+            )
+        )
 
     # filter models type depending on min max transformers version
     SUPPORTED_4BIT_CONFIGURATIONS = [
@@ -918,11 +986,23 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "qwen2_vl",
                 "qwen2_5_vl",
                 "qwen3_vl",
+                "minicpmv4_7",
             )
             if not is_model_type_transformers_compatible(model_type)
         }
         if is_transformers_version(">=", "5"):
-            expected.update({"videochat_flash_qwen", "llama4", "llava_next_video", "minicpmv", "internvl_chat"})
+            expected.update({"videochat_flash_qwen", "llama4", "llava_next_video", "minicpmv"})
+        expected.update({"internvl_chat"})
+
+        # qwen3_5_compressed_tensors is available with OpenVINO >= 2026.3 and compressed-tensors.
+        # Qwen3_5OpenVINOConfig only supports transformers 5.2.0-5.2.99, so outside that narrow
+        # window it is present but filtered out of SUPPORTED.
+        if (
+            is_openvino_version(">=", "2026.3")
+            and is_compressed_tensors_available()
+            and not (is_transformers_version(">=", "5.2.0") and is_transformers_version("<=", "5.2.99"))
+        ):
+            expected.add("qwen3_5_compressed_tensors")
 
         all_model_type = {config[1] for config in cls.TRANSFORMERS_4BIT_CONFIGURATIONS}
         filtered_model_type = {config[1] for config in cls.SUPPORTED_4BIT_CONFIGURATIONS}
@@ -1201,15 +1281,19 @@ class OVCLIExportTestCase(unittest.TestCase):
     def test_exporters_cli_4bit(
         self, task: str, model_type: str, option: str, expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]]
     ):
+        # option=None means the model is already quantized (e.g. compressed-tensors) and is
+        # exported as-is, without an NNCF weight-compression `--weight-format`.
+        is_prequantized = option is None
         with TemporaryDirectory() as tmpdir:
+            weight_format = "" if is_prequantized else f"--weight-format {option}"
             result = subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} --weight-format {option} {tmpdir}",
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {weight_format} {tmpdir}",
                 shell=True,
                 check=True,
                 capture_output=True,
             )
             model_kwargs = {"use_cache": task.endswith("with-past")} if "generation" in task else {}
-            if "--trust-remote-code" in option:
+            if not is_prequantized and "--trust-remote-code" in option:
                 model_kwargs["trust_remote_code"] = True
             model = eval(
                 _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
@@ -1217,7 +1301,21 @@ class OVCLIExportTestCase(unittest.TestCase):
                 else _HEAD_TO_AUTOMODELS[model_type.replace("-refiner", "")]
             ).from_pretrained(tmpdir, **model_kwargs)
 
-            check_compression_state_per_model(self, model.ov_models, expected_num_weight_nodes_per_model)
+            # Already-quantized models keep the default f16 KV cache precision, unlike models
+            # whose weights are compressed by NNCF during export.
+            check_compression_state_per_model(
+                self,
+                model.ov_models,
+                expected_num_weight_nodes_per_model,
+                check_kv_cache_precision=not is_prequantized,
+            )
+
+            if is_prequantized:
+                # Already-quantized models (e.g. compressed-tensors) are exported as-is, without
+                # going through NNCF weight compression, so none of the `--awq`/`--gptq`/
+                # `--scale-estimation`/`--lora-correction` NNCF algorithms below ever run for
+                # them; there is nothing to check.
+                return
 
             # Starting from NNCF 2.17 there is a support for data-free AWQ
             awq_str = b"Applying data-aware AWQ" if "--dataset" in option else b"Applying data-free AWQ"

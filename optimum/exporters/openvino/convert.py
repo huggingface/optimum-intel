@@ -153,7 +153,11 @@ def _save_model(
     if getattr(config, "eagle3", False):
         model = _add_eagle3_mode_to_rt_info(model)
     if getattr(config, "dflash", False):
-        model = _add_dflash_mode_to_rt_info(model, config._config)
+        model = _add_dflash_mode_to_rt_info(
+            model,
+            config._config,
+            candidate_position_offset=getattr(config, "candidate_position_offset", 1),
+        )
     if source_model is not None and getattr(getattr(source_model, "config", None), "model_type", None) in {
         "qwen3",
         "qwen3_moe",
@@ -1016,20 +1020,21 @@ def _add_eagle3_mode_to_rt_info(model: Model):
     return model
 
 
-def _add_dflash_mode_to_rt_info(model: Model, hf_config: "PretrainedConfig") -> Model:
+def _add_dflash_mode_to_rt_info(model: Model, hf_config: "PretrainedConfig", candidate_position_offset: int) -> Model:
     """
     Add DFlash metadata to DFlash draft model.
 
     Marks model as DFlash draft model and adds DFlash configuration to the model including
-    mask token id and target layer ids.
+    mask token id, target layer ids, and candidate position offset.
     """
     try:
         model.set_rt_info("True", ["dflash_mode"])
-        dflash_config = getattr(hf_config, "dflash_config", {})
+        dflash_config = getattr(hf_config, "dflash_config", None) or hf_config.to_dict()
         if "mask_token_id" in dflash_config:
             model.set_rt_info(str(dflash_config["mask_token_id"]), ["dflash", "mask_token_id"])
         if "target_layer_ids" in dflash_config:
             model.set_rt_info(",".join(map(str, dflash_config["target_layer_ids"])), ["dflash", "target_layer_ids"])
+        model.set_rt_info(str(candidate_position_offset), ["dflash", "candidate_position_offset"])
     except Exception:
         pass
 
@@ -1293,7 +1298,9 @@ def get_zimage_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     transformer_export_config = export_config_constructor(
         transformer.config, int_dtype=int_dtype, float_dtype=float_dtype
     )
-    transformer_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    # The feed-forward silu(w1(x)) * w3(x) product reaches ~4.5e4, next to the fp16 limit, and
+    # overflows on GPU with a factor of 8 at later denoising steps (larger timesteps).
+    transformer_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "32.0"}
     models_for_export["transformer"] = (transformer, transformer_export_config)
 
     # ── VAE Encoder ────────────────────────────────────────────────────────

@@ -30,6 +30,8 @@ from transformers.utils.hub import cached_file
 from optimum.exporters.base import ExportConfig
 from optimum.exporters.openvino import export, main_export
 from optimum.intel.openvino.configuration import (
+    _DEFAULT_2BIT_WQ_CONFIG,
+    _DEFAULT_3BIT_WQ_CONFIG,
     _DEFAULT_4BIT_WQ_CONFIG,
     OVConfig,
     OVQuantizationConfigBase,
@@ -679,8 +681,9 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             quantization_config (`OVQuantizationConfigBase` or `Dict`):
                 The quantization config to resolve.
         """
-        if quantization_config == {"bits": 4} or quantization_config == {"bits": 8}:
-            # If config is given as {"bits": N}, use the default N-bit quantization config
+
+        # # If the config is specified as {"bits": N}, use the default N-bit quantization configuration.
+        if quantization_config in ({"bits": 2}, {"bits": 3}, {"bits": 4}, {"bits": 8}):
             if quantization_config == {"bits": 4} and model_name_or_path in [
                 "openai/gpt-oss-20b",
                 "openai/gpt-oss-120b",
@@ -693,14 +696,22 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             default_config = get_default_quantization_config(
                 model_name_or_path, weight_format=f"int{quantization_config['bits']}"
             )
-            quantization_config = default_config or (
-                _DEFAULT_4BIT_WQ_CONFIG if quantization_config == {"bits": 4} else quantization_config
-            )
+            if default_config:
+                quantization_config = default_config
+            else:
+                quantization_config = {
+                    2: _DEFAULT_2BIT_WQ_CONFIG,
+                    3: _DEFAULT_3BIT_WQ_CONFIG,
+                    4: _DEFAULT_4BIT_WQ_CONFIG,
+                    8: {"bits": 8},
+                }[quantization_config["bits"]]
         else:
-            # Notify a user if 4 or 8 bit quantization is requested and there is a recommended config for the model
+            # Notify a user if {2, 3, 4, 8} - bit quantization is requested and there is a recommended config for the model
             if isinstance(quantization_config, dict):
                 quantization_config = _quantization_config_from_dict(quantization_config)
             if isinstance(quantization_config, OVWeightQuantizationConfig) and quantization_config.dtype in [
+                "int2",
+                "int3",
                 "int4",
                 "int8",
             ]:
@@ -1018,6 +1029,16 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         Returns whether this model can generate sequences with `.generate()`.
         """
         return isinstance(self, GenerationMixin)
+
+    def get_experts_implementation(self):
+        # transformers>=5.15 `generate` queries the experts implementation to decide
+        # on a decode-time MoE kernel swap; that swap is a no-op for OpenVINO models,
+        # since any MoE kernel is baked into the exported graph.
+        return {}
+
+    def set_experts_implementation(self, experts_implementation):
+        # No-op: the MoE kernel (if any) is baked into the exported OpenVINO graph.
+        return
 
     def _inference(self, inputs):
         try:

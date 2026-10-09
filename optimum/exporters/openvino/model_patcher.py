@@ -876,9 +876,9 @@ class MistralModelPatcher(OVDecoderModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
-        if hasattr(self._model.model, "model") and hasattr(self._model.model.model, "layers"):
+        if hasattr(self._model, "model") and hasattr(self._model.model, "layers"):
             for layer in self._model.model.layers:
-                if hasattr(layer.self_attn, "rotary_emb"):
+                if hasattr(layer.self_attn, "rotary_emb") and hasattr(layer.self_attn.rotary_emb, "_orig_forward"):
                     layer.self_attn.rotary_emb.forward = layer.self_attn.rotary_emb._orig_forward
                     del layer.self_attn.rotary_emb._orig_forward
 
@@ -9197,7 +9197,7 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
         self.layers = nn.ModuleList(
             [Qwen3DFlashDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
-        dflash_config = getattr(config, "dflash_config", {})
+        dflash_config = getattr(config, "dflash_config", None) or config.to_dict()
         self.target_layer_ids = dflash_config.get("target_layer_ids", [])
         self.norm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.rotary_emb = Qwen3RotaryEmbedding(config)
@@ -9293,6 +9293,43 @@ class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
         # candidate tokens that the grafted lm_head will score.
         if logits_to_keep is None:
             last_hidden_state = outputs.last_hidden_state[:, 1:, :]
+        else:
+            last_hidden_state = outputs.last_hidden_state[:, -logits_to_keep:, :]
+        return BaseModelOutputWithPast(
+            last_hidden_state=last_hidden_state,
+            past_key_values=outputs.past_key_values,
+        )
+
+
+# adopted from https://github.com/deepseek-ai/DeepSpec/blob/main/deepspec/modeling/dspark/qwen3/modeling.py#L201
+class Qwen3DSparkForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
+    """DeepSpec Qwen3 DSpark draft head exported as embeddings-in / hidden-states-out.
+
+    Unlike z-lab DFlash, DeepSpec does not prune the first (seed) hidden state.
+    """
+
+    def forward(
+        self,
+        inputs_embeds: torch.FloatTensor,
+        hidden_states: torch.Tensor,
+        position_ids: torch.LongTensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        past_key_values: Optional[Cache] = None,
+        use_cache: Optional[bool] = None,
+        logits_to_keep: Optional[int] = None,
+        **kwargs,
+    ) -> BaseModelOutputWithPast:
+        outputs = super().forward(
+            hidden_states=hidden_states,
+            noise_embedding=inputs_embeds,
+            position_ids=position_ids,
+            attention_mask=attention_mask,
+            past_key_values=past_key_values,
+            use_cache=use_cache,
+            **kwargs,
+        )
+        if logits_to_keep is None:
+            last_hidden_state = outputs.last_hidden_state
         else:
             last_hidden_state = outputs.last_hidden_state[:, -logits_to_keep:, :]
         return BaseModelOutputWithPast(
@@ -10152,6 +10189,8 @@ class Gemma4UnifiedImageEmbeddingsModelPatcher(ModelPatcher):
 # Patches the MoE block with a vectorized implementation.
 # The vectorized form is required to ensure correct torch.jit tracing for this component.
 # Original implementation: https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/models/lfm2_moe/modeling_lfm2_moe.py#L167
+# Also used for Qwen3_5MoeExperts (MiniCPM-V 4.7), which has the same interface and weight layout:
+# https://github.com/huggingface/transformers/blob/6da3313a6f89fb3fe0d51c02fe06e3664cd436b0/src/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py#L857
 def lfm2_moe_experts_forward(
     self,
     hidden_states: torch.Tensor,
@@ -10174,18 +10213,52 @@ def lfm2_moe_experts_forward(
         num_experts, -1, hidden_dim
     )  # (num_experts, num_tokens, hidden_dim)
 
-    gate_proj, up_proj = self.gate_up_proj.chunk(2, dim=-2)
+    if hasattr(self, "ov_gate_proj"):
+        # 16-bit export, see `prepare_minicpmv4_7_moe_weights`: `.to()` comes first so that the decompression Convert sits
+        # right on the 16-bit constant and is not constant-folded together with the Transpose into an f32 constant
+        dtype = hidden_states.dtype
+        gate = torch.bmm(hidden_states_expanded, self.ov_gate_proj.to(dtype).transpose(1, 2))
+        up = torch.bmm(hidden_states_expanded, self.ov_up_proj.to(dtype).transpose(1, 2))
+        next_states = self.act_fn(gate) * up
+        next_states = torch.bmm(next_states, self.down_proj.to(dtype).transpose(1, 2))
+    else:
+        gate_proj, up_proj = self.gate_up_proj.chunk(2, dim=-2)
 
-    gate = torch.bmm(hidden_states_expanded, gate_proj.transpose(1, 2))
-    up = torch.bmm(hidden_states_expanded, up_proj.transpose(1, 2))
-    next_states = self.act_fn(gate) * up
-    next_states = torch.bmm(next_states, self.down_proj.transpose(1, 2))
+        gate = torch.bmm(hidden_states_expanded, gate_proj.transpose(1, 2))
+        up = torch.bmm(hidden_states_expanded, up_proj.transpose(1, 2))
+        next_states = self.act_fn(gate) * up
+        next_states = torch.bmm(next_states, self.down_proj.transpose(1, 2))
 
     next_states = next_states.view(num_experts, num_tokens, hidden_dim)
     next_states = next_states * dense_routing_weights.transpose(0, 1).view(num_experts, num_tokens)[..., None]
     next_states = next_states.sum(dim=0)
 
     return next_states
+
+
+def prepare_minicpmv4_7_moe_weights(experts: nn.Module):
+    """
+    Prepares 16-bit experts (`gate_up_proj` / `down_proj` 3D weights) for `lfm2_moe_experts_forward` in a 16-bit
+    export, so that they stay 16-bit constants in the `(num_experts, out, in)` layout instead of being upcast to f32:
+    - the experts module is marked, so OpenVINO's 16-bit tracing helper does not cast its parameters to f32;
+    - the gate / up halves are copied into contiguous parameters, as a `chunk` (Slice) between the constant and its
+      decompression Convert would be constant-folded into new f32 constants.
+    Undo with `restore_minicpmv4_7_moe_weights`.
+    """
+    gate_proj, up_proj = experts.gate_up_proj.detach().chunk(2, dim=-2)
+    experts.ov_gate_proj = nn.Parameter(gate_proj.contiguous(), requires_grad=False)
+    experts.ov_up_proj = nn.Parameter(up_proj.contiguous(), requires_grad=False)
+    # OpenVINO's 16-bit helper skips the modules carrying this attribute (name hard-coded in the OpenVINO PyTorch
+    # frontend) and restores `forward` from it when unpatching
+    # TODO: remove it when OpenVINO's 16-bit tracing helper is fixed PyTorch Frontend
+    # Currently, without the mark, OpenVINO's 16-bit tracing helper runs param.data = param.data.float()
+    setattr(experts, "_openvino_module_extension_patch_orig_forward", experts.forward)
+
+
+def restore_minicpmv4_7_moe_weights(experts: nn.Module):
+    for name in ("ov_gate_proj", "ov_up_proj", "_openvino_module_extension_patch_orig_forward"):
+        if hasattr(experts, name):
+            delattr(experts, name)
 
 
 class Lfm2MoeModelPatcher(Lfm2ModelPatcher):
@@ -10251,6 +10324,7 @@ def qwen3_5_gated_delta_net_forward(
     cache_params=None,
     cache_position: Optional[torch.LongTensor] = None,
     attention_mask: Optional[torch.Tensor] = None,
+    **kwargs,
 ):
     def apply_mask_to_padding_states(hidden_states, attention_mask):
         """
@@ -10272,9 +10346,16 @@ def qwen3_5_gated_delta_net_forward(
     layer_idx = None
     recurrent_state = None
     if cache_params is not None:
-        layer_idx = cache_params.linear_attn_mapping[self.layer_idx]
-        conv_state = cache_params.conv_states[layer_idx]
-        recurrent_state = cache_params.recurrent_states[layer_idx]
+        if hasattr(cache_params, "linear_attn_mapping"):
+            # Qwen3_5DynamicCache: states of all linear-attention layers in flat lists
+            layer_idx = cache_params.linear_attn_mapping[self.layer_idx]
+            state_holder = cache_params
+        else:
+            # transformers `DynamicCache` (Qwen3_5DynamicCache was removed): per-layer LinearAttentionLayer
+            layer_idx = 0
+            state_holder = cache_params.layers[self.layer_idx]
+        conv_state = state_holder.conv_states[layer_idx]
+        recurrent_state = state_holder.recurrent_states[layer_idx]
 
     mixed_qkv = self.in_proj_qkv(hidden_states)
     mixed_qkv = mixed_qkv.transpose(1, 2)
@@ -10288,7 +10369,7 @@ def qwen3_5_gated_delta_net_forward(
     if cache_params is not None:
         new_mixed_qkv, new_conv_state = ov_causal_conv1d(conv_state, mixed_qkv, self.conv1d.weight, self.conv1d.bias)
         mixed_qkv = F.silu(new_mixed_qkv)
-        cache_params.conv_states[layer_idx] = new_conv_state
+        state_holder.conv_states[layer_idx] = new_conv_state
     else:
         mixed_qkv = F.silu(self.conv1d(mixed_qkv)[:, :, :seq_len])
 
@@ -10327,7 +10408,7 @@ def qwen3_5_gated_delta_net_forward(
 
     # Update cache
     if cache_params is not None:
-        cache_params.recurrent_states[layer_idx] = last_recurrent_state
+        state_holder.recurrent_states[layer_idx] = last_recurrent_state
 
     # reshape input data into 2D tensor
     core_attn_out = core_attn_out.reshape(-1, self.head_v_dim)
@@ -12169,6 +12250,15 @@ class MuseGlimmerLanguageModelPatcher(OVDecoderModelPatcher):
 ZIMAGE_CAP_SEQ = 128
 
 
+def _z_image_precompute_rope_tables(rope_embedder):
+    """Compute the real (cos, sin) RoPE lookup tables eagerly, in float32."""
+    raw_freqs = rope_embedder.precompute_freqs_cis(
+        rope_embedder.axes_dims, rope_embedder.axes_lens, theta=rope_embedder.theta
+    )
+    rope_embedder._ov_freqs_cos = [f.real.float() for f in raw_freqs]
+    rope_embedder._ov_freqs_sin = [f.imag.float() for f in raw_freqs]
+
+
 def _z_image_rope_embedder_call(self, ids: "torch.Tensor"):
     """
     Patched RopeEmbedder.__call__ for OV export.
@@ -12179,12 +12269,12 @@ def _z_image_rope_embedder_call(self, ids: "torch.Tensor"):
     """
     device = ids.device
 
-    # Lazily precompute real (cos, sin) lookup tables
-    if not hasattr(self, "_ov_freqs_cos") or self._ov_freqs_cos is None:
-        raw_freqs = self.precompute_freqs_cis(self.axes_dims, self.axes_lens, theta=self.theta)
-        self._ov_freqs_cos = [f.real.float() for f in raw_freqs]
-        self._ov_freqs_sin = [f.imag.float() for f in raw_freqs]
-        self.freqs_cis = raw_freqs  # keep original for non-export use
+    # The (cos, sin) lookup tables are precomputed by ZImageTransformerModelPatcher.__enter__,
+    # outside tracing, so they land in the IR as constants. Computing them here instead would
+    # trace precompute_freqs_cis's float64 arange/pow/outer into the graph, and the GPU plugin
+    # evaluates that float64 subgraph incorrectly, corrupting RoPE in every attention layer.
+    if getattr(self, "_ov_freqs_cos", None) is None:
+        _z_image_precompute_rope_tables(self)
 
     # Move to the correct device
     if self._ov_freqs_cos[0].device != device:
@@ -12221,22 +12311,23 @@ def _z_image_attn_proc_call(
     """
 
     def apply_rotary_emb_real(x_in, freqs_cis_real):
-        """Real-number RoPE: avoids view_as_complex/view_as_real."""
+        """Real-number RoPE: avoids view_as_complex/view_as_real.
+
+        Written in the interleaved form of diffusers' Flux apply_rotary_emb,
+        x * cos + rotate_pairs(x) * sin, which OpenVINO's RoPEFusionFlux fuses into a single
+        RoPE op. The complex product is identical, but spelling it out per half
+        (x0 * cos - x1 * sin, x0 * sin + x1 * cos) matches no RoPE fusion pattern.
+        """
         # x_in:          [batch, seq, heads, head_dim]
         # freqs_cis_real:[batch, seq, head_dim//2, 2]  (last dim: [cos, sin])
-        cos = freqs_cis_real[..., 0]  # [batch, seq, head_dim//2]
-        sin = freqs_cis_real[..., 1]  # [batch, seq, head_dim//2]
+        # Full-width tables, broadcast over the heads dimension: [batch, seq, 1, head_dim]
+        cos = freqs_cis_real[..., 0].repeat_interleave(2, dim=-1).unsqueeze(2)
+        sin = freqs_cis_real[..., 1].repeat_interleave(2, dim=-1).unsqueeze(2)
 
         x_float = x_in.float()
-        x_pairs = x_float.reshape(*x_float.shape[:-1], -1, 2)  # [batch, seq, heads, head_dim//2, 2]
-
-        # Broadcast cos/sin over the heads dimension
-        cos = cos.unsqueeze(2)  # [batch, seq, 1, head_dim//2]
-        sin = sin.unsqueeze(2)
-
-        out_real = x_pairs[..., 0] * cos - x_pairs[..., 1] * sin  # [batch, seq, heads, head_dim//2]
-        out_imag = x_pairs[..., 0] * sin + x_pairs[..., 1] * cos
-        out = torch.stack([out_real, out_imag], dim=-1).flatten(-2)  # [batch, seq, heads, head_dim]
+        x_real, x_imag = x_float.reshape(*x_float.shape[:-1], -1, 2).unbind(-1)  # [batch, seq, heads, head_dim//2]
+        x_rotated = torch.stack([-x_imag, x_real], dim=-1).flatten(3)  # [batch, seq, heads, head_dim]
+        out = x_float * cos + x_rotated * sin
         return out.type_as(x_in)
 
     query = attn.to_q(hidden_states)
@@ -12454,6 +12545,10 @@ class ZImageTransformerModelPatcher(ModelPatcher):
         #    img_ids:                [B, img_seq_len, 3]
         _model_ref = self._model
 
+        # 3. Precompute the RoPE tables before tracing so they are exported as constants
+        #    (see _z_image_rope_embedder_call)
+        _z_image_precompute_rope_tables(self._model.rope_embedder)
+
         def patched_forward(hidden_states, timestep, encoder_hidden_states, encoder_attention_mask, txt_ids, img_ids):
             return _patched_z_image_batched_forward(
                 _model_ref, hidden_states, timestep, encoder_hidden_states, encoder_attention_mask, txt_ids, img_ids
@@ -12463,6 +12558,9 @@ class ZImageTransformerModelPatcher(ModelPatcher):
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
+
+        rope_embedder = self._model.rope_embedder
+        del rope_embedder._ov_freqs_cos, rope_embedder._ov_freqs_sin
 
         # Restore ZSingleStreamAttnProcessor class-level patch
         try:
@@ -12761,3 +12859,230 @@ class Qwen3TTSCodecPatcher(OVDecoderModelPatcher):
         for conv_cls, orig in self._orig_extra_padding.items():
             conv_cls._get_extra_padding_for_conv1d = orig
         self._orig_extra_padding = {}
+
+
+class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
+    """
+    Exports the Qwen3.5 / Qwen3.5-MoE (hybrid Gated DeltaNet + full attention) language model of MiniCPM-V 4.7.
+    """
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        from transformers.cache_utils import LinearAttentionCacheLayerMixin
+
+        from openvino.frontend.pytorch import ConversionExtension, ModuleExtension
+
+        super().__init__(config, model, model_kwargs)
+
+        text_model = model.model.language_model
+        text_config = model.config.text_config
+        layer_types = text_config.layer_types
+        num_linear_attn_layers = layer_types.count("linear_attention")
+
+        # Packs the flat model inputs into a transformers `DynamicCache` and unpacks it into the outputs, so that the
+        # KV-cache, conv and recurrent states are graph inputs / outputs. `cache_params` is grouped by layer type:
+        # all linear-attention layers first (conv, recurrent), then all full-attention layers (key, value).
+        def patched_forward(inputs_embeds, attention_mask, position_ids, cache_params):
+            conv_states = iter(cache_params[0 : 2 * num_linear_attn_layers : 2])
+            recurrent_states = iter(cache_params[1 : 2 * num_linear_attn_layers : 2])
+            key_states = iter(cache_params[2 * num_linear_attn_layers :: 2])
+            value_states = iter(cache_params[2 * num_linear_attn_layers + 1 :: 2])
+            cache = DynamicCache(config=text_config)
+            for layer in cache.layers:
+                if isinstance(layer, LinearAttentionCacheLayerMixin):
+                    layer.conv_states[0] = next(conv_states)
+                    layer.recurrent_states[0] = next(recurrent_states)
+                else:
+                    layer.keys, layer.values = next(key_states), next(value_states)
+                    layer.is_initialized = True
+
+            # (3, batch, seq) M-RoPE positions [T, H, W]
+            outputs = text_model(
+                inputs_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=cache,
+                use_cache=True,
+            )
+            logits = self._model.lm_head(outputs.last_hidden_state)
+
+            linear_attn_outputs, full_attn_outputs = [], []
+            for layer in outputs.past_key_values.layers:
+                if isinstance(layer, LinearAttentionCacheLayerMixin):
+                    linear_attn_outputs += [layer.conv_states[0], layer.recurrent_states[0]]
+                else:
+                    full_attn_outputs += [layer.keys, layer.values]
+            return {"logits": logits, "present_key_values": linear_attn_outputs + full_attn_outputs}
+
+        self._text_model = text_model
+        self._layer_types = layer_types
+        self.patched_forward = patched_forward
+        # the export orders the example inputs by the signature of `orig_forward`
+        self.model_orig_forward = self.orig_forward
+        self.orig_forward = patched_forward
+
+        self.module_extensions = {
+            RecurrentAttentionCell: ModuleExtension(RecurrentAttentionCell, "RecurrentAttentionCellOp"),
+        }
+        self.conversion_extensions = [
+            ConversionExtension("RecurrentAttentionCellOp", convert_recurrent_attention_cell),
+        ]
+
+    def __enter__(self):
+        super().__enter__()
+        for layer_idx, decoder_layer in enumerate(self._text_model.layers):
+            if self._layer_types[layer_idx] == "linear_attention":
+                # Patches Qwen3_5GatedDeltaNet.forward / Qwen3_5MoeGatedDeltaNet.forward:
+                # https://github.com/huggingface/transformers/blob/6da3313a6f89fb3fe0d51c02fe06e3664cd436b0/src/transformers/models/qwen3_5/modeling_qwen3_5.py#L550
+                # https://github.com/huggingface/transformers/blob/6da3313a6f89fb3fe0d51c02fe06e3664cd436b0/src/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py#L552
+                # Why: it reads states via the transformers Cache (`cache_params.layers`) and switches chunked / recurrent
+                # paths on the input length; the recurrent-cell form traces and is fused into GatedDeltaNet by OpenVINO.
+                linear_attn = decoder_layer.linear_attn
+                linear_attn._orig_forward = linear_attn.forward
+                linear_attn.forward = types.MethodType(qwen3_5_gated_delta_net_forward, linear_attn)
+                linear_attn.recurrent_gated_delta_rule = patched_recurrent_gated_delta_rule
+                linear_attn.recurrent_attention_cell = RecurrentAttentionCell()
+            experts = getattr(decoder_layer.mlp, "experts", None)
+            if experts is not None:
+                # Patches Qwen3_5MoeExperts.forward:
+                # https://github.com/huggingface/transformers/blob/6da3313a6f89fb3fe0d51c02fe06e3664cd436b0/src/transformers/models/qwen3_5_moe/modeling_qwen3_5_moe.py#L857
+                # Why: the per-expert loop does not trace; the `torch.bmm` form is fused into OpenVINO's MoE op.
+                # 16-bit weights also need `prepare_minicpmv4_7_moe_weights` to stay 16-bit (not upcast to f32) in the graph.
+                experts._orig_forward = experts.forward
+                if experts.gate_up_proj.dtype in (torch.float16, torch.bfloat16):
+                    prepare_minicpmv4_7_moe_weights(experts)
+                experts.forward = types.MethodType(lfm2_moe_experts_forward, experts)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        setattr(self._model, self.orig_forward_name, self.model_orig_forward)
+        for layer_idx, decoder_layer in enumerate(self._text_model.layers):
+            if self._layer_types[layer_idx] == "linear_attention":
+                linear_attn = decoder_layer.linear_attn
+                linear_attn.forward = linear_attn._orig_forward
+                del linear_attn.recurrent_gated_delta_rule, linear_attn.recurrent_attention_cell
+            experts = getattr(decoder_layer.mlp, "experts", None)
+            if experts is not None:
+                experts.forward = experts._orig_forward
+                restore_minicpmv4_7_moe_weights(experts)
+
+
+# Patches MiniCPMV4_7VisionAttention.forward:
+# https://github.com/huggingface/transformers/blob/6da3313a6f89fb3fe0d51c02fe06e3664cd436b0/src/transformers/models/minicpmv4_7/modeling_minicpmv4_7.py#L114
+# Why: the export encodes one crop (or a batch of equal windows), so the data-dependent `cu_seqlens` split is dropped
+# and plain SDPA is used, which OpenVINO fuses.
+def _minicpmv4_7_vision_attention_forward(
+    self, hidden_states, cu_seqlens=None, max_seqlen=None, attention_mask=None, **kwargs
+):
+    batch_size, seq_len, _ = hidden_states.shape
+    query = self.q_proj(hidden_states).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+    key = self.k_proj(hidden_states).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+    value = self.v_proj(hidden_states).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
+    attn_output = F.scaled_dot_product_attention(query, key, value, scale=self.scaling)
+    attn_output = attn_output.transpose(1, 2).reshape(batch_size, seq_len, -1)
+    return self.out_proj(attn_output), None
+
+
+# Patches MiniCPMV4_7ViTWindowAttentionMerger.forward:
+# https://github.com/huggingface/transformers/blob/6da3313a6f89fb3fe0d51c02fe06e3664cd436b0/src/transformers/models/minicpmv4_7/modeling_minicpmv4_7.py#L237
+# Why: `get_window_index` builds indices from the grid size in Python; the host passes `window_index` instead and the
+# window attention runs as a batch of windows, not through `cu_seqlens`.
+def _minicpmv4_7_window_merger_forward(self, hidden_states, window_index):
+    window_size = self.window_kernel_size[0] * self.window_kernel_size[1]
+    embed_dim = hidden_states.shape[-1]
+
+    residual = hidden_states[:, window_index, :].reshape(-1, window_size, embed_dim)
+    hidden_states = self.layer_norm1(hidden_states)[:, window_index, :].reshape(-1, window_size, embed_dim)
+    hidden_states, _ = self.self_attn(hidden_states)
+    patch = residual + hidden_states
+
+    flat = patch.flatten(1)
+    patch_residual = patch.mean(dim=1)
+    hidden_state = self.linear_2(self.act(self.linear_1(self.pre_norm(flat))))
+    return (hidden_state + patch_residual).unsqueeze(0)
+
+
+# Vision tower + merger of MiniCPM-V 4.7 without the language model.
+# Why: OpenVINO's 16-bit tracing helper casts all weights of the exported module to f32; exporting the full model
+# would upcast the (35B) language model weights too.
+class MiniCPMV4_7VisionEmbeddingsModule(nn.Module):
+    def __init__(self, model: "PreTrainedModel"):
+        super().__init__()
+        self.config = model.config
+        self.vision_tower = model.model.vision_tower
+        self.merger = model.model.merger
+
+    def forward(self, *args, **kwargs):
+        raise NotImplementedError("Replaced by MiniCPMV4_7VisionEmbeddingsPatcher during the export.")
+
+
+class MiniCPMV4_7VisionEmbeddingsPatcher(ModelPatcher):
+    """
+    Exports the MiniCPM-V 4.7 vision tower, ViT window merger and MLP merger as one graph encoding one crop.
+    Crops never interact, so the host runs it per crop and passes the grid-dependent indices: `position_ids`,
+    `window_index` and `merge_index`.
+    """
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any] = None,
+    ):
+        vision_config = model.config.vision_config
+        if model.config.merger_times != 1:
+            raise NotImplementedError(
+                f"MiniCPM-V 4.7 export supports merger_times == 1, got {model.config.merger_times}."
+            )
+
+        # Replaces MiniCPMV4_7VisionModel.forward (with MiniCPMV4_7VisionEmbeddings.forward) + MiniCPMV4_7Merger.forward:
+        # https://github.com/huggingface/transformers/blob/6da3313a6f89fb3fe0d51c02fe06e3664cd436b0/src/transformers/models/minicpmv4_7/modeling_minicpmv4_7.py#L450
+        # https://github.com/huggingface/transformers/blob/6da3313a6f89fb3fe0d51c02fe06e3664cd436b0/src/transformers/models/minicpmv4_7/modeling_minicpmv4_7.py#L308
+        # https://github.com/huggingface/transformers/blob/6da3313a6f89fb3fe0d51c02fe06e3664cd436b0/src/transformers/models/minicpmv4_7/modeling_minicpmv4_7.py#L531
+        # Why: position ids, `cu_seqlens` and the per-crop merge loop are computed from `target_sizes` in Python; the
+        # host passes `position_ids` / `merge_index` instead, so the graph is not tied to the example grid size.
+        def vision_embed_forward(self, pixel_values, position_ids, window_index, merge_index):
+            vision_tower = self.vision_tower
+            embeddings = vision_tower.embeddings
+            patch_embeds = embeddings.patch_embedding(pixel_values.to(embeddings.patch_embedding.weight.dtype))
+            hidden_states = patch_embeds.flatten(2).transpose(1, 2)
+            hidden_states = hidden_states + embeddings.position_embedding(position_ids).unsqueeze(0)
+
+            for layer_idx, encoder_layer in enumerate(vision_tower.encoder.layers):
+                hidden_states = encoder_layer(hidden_states, attention_mask=None)
+                if layer_idx == vision_config.insert_layer_id:
+                    hidden_states = vision_tower.vit_merger(hidden_states, window_index)
+            hidden_states = vision_tower.post_layernorm(hidden_states)
+
+            merge_h, merge_w = self.merger.merge_kernel_size
+            hidden_states = hidden_states[0, merge_index, :].reshape(-1, merge_h * merge_w * hidden_states.shape[-1])
+            return self.merger.mlp[0](hidden_states)
+
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(vision_embed_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __enter__(self):
+        super().__enter__()
+        vision_tower = self._model.vision_tower
+        attention_modules = [layer.self_attn for layer in vision_tower.encoder.layers]
+        attention_modules.append(vision_tower.vit_merger.self_attn)
+        for attn in attention_modules:
+            attn._orig_forward = attn.forward
+            attn.forward = types.MethodType(_minicpmv4_7_vision_attention_forward, attn)
+        merger = vision_tower.vit_merger
+        merger._orig_forward = merger.forward
+        merger.forward = types.MethodType(_minicpmv4_7_window_merger_forward, merger)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+        vision_tower = self._model.vision_tower
+        for layer in vision_tower.encoder.layers:
+            layer.self_attn.forward = layer.self_attn._orig_forward
+        vision_tower.vit_merger.self_attn.forward = vision_tower.vit_merger.self_attn._orig_forward
+        vision_tower.vit_merger.forward = vision_tower.vit_merger._orig_forward
