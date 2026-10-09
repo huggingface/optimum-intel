@@ -282,6 +282,7 @@ HUB_MODEL_NAMES = {
     "mpt": "optimum-intel-internal-testing/tiny-random-MptForCausalLM",
     "mpnet": "optimum-intel-internal-testing/tiny-random-MPNetModel",
     "muse_glimmer": "optimum-intel-internal-testing/tiny-random-muse-glimmer",
+    "muse_glimmer_assistant": "optimum-intel-internal-testing/tiny-random-muse-glimmer-assistant",
     "mt5": "optimum-intel-internal-testing/mt5-tiny-random",
     "llava-qwen2": "optimum-intel-internal-testing/tiny-random-nanollava",
     "nanollava_vision_tower": "optimum-intel-internal-testing/tiny-random-siglip",
@@ -422,6 +423,9 @@ def _resolve_cached_model_paths(model_names: dict) -> dict:
 
 
 MODEL_NAMES = _resolve_cached_model_paths(HUB_MODEL_NAMES)
+MODEL_NAMES["muse_glimmer_assistant"] = str(
+    Path(__file__).resolve().parents[3] / "models" / "tiny-random-muse-glimmer-assistant"
+)
 
 EAGLE3_MODELS = {"qwen3_eagle3": ("qwen3_eagle3", "qwen3_eagle3_target")}
 
@@ -434,6 +438,7 @@ DFLASH_VLM_MODELS = {
     "qwen3_5_dflash": ("qwen3_5_dflash", "qwen3_5"),
     "qwen3_5_moe_dflash": ("qwen3_5_moe_dflash", "qwen3_5_moe"),
     "gemma4_dflash": ("gemma4_dflash", "gemma4"),
+    "muse_glimmer": ("muse_glimmer_assistant", "muse_glimmer"),
 }
 
 # VLM-based Eagle3 draft models (AngelSlim Eagle3LlamaForCausalLM architecture).
@@ -717,6 +722,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "qwen3_eagle3": {"model": 20},
     "qwen3_dflash": {"model": 30},
     "qwen3_deepspec_dflash": {"model": 30},
+    "muse_glimmer_assistant": {"model": 30},
     "qwen3_vl_eagle3": {"model": 18},
     "qwen3_next": {"model": 100},
     "gemma3n": {
@@ -780,11 +786,6 @@ REMOTE_CODE_MODELS = (
     "decilm",
     "minicpm3",
     "deepseek",
-    "qwen3_dflash",
-    "qwen3_deepspec_dflash",
-    "qwen3_5_dflash",
-    "qwen3_5_moe_dflash",
-    "gemma4_dflash",
     "qwen3_eagle3",
     "qwen3_vl_eagle3",
     "qwen3_asr",

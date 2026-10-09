@@ -27,7 +27,7 @@ from requests.exceptions import ConnectionError as RequestsConnectionError
 from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
 from transformers.utils import is_torch_available
 
-from openvino import Core, Type, save_model
+from openvino import Core, Model, Type, save_model
 from optimum.exporters.openvino.base import OpenVINOConfig
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
@@ -167,6 +167,8 @@ def infer_task(
                     raise e
             else:
                 raise
+        if original_task == "auto" and (config.architectures or [None])[0] in _NATIVE_DRAFT_MODEL_CLASSES:
+            task = "text-generation-with-past"
         if hasattr(config, "export_model_type"):
             model_type = config.export_model_type
         else:
@@ -223,9 +225,26 @@ def _ensure_qwen3_omni_rope_scaling(config):
 _CUSTOM_DRAFT_MODEL_MAP = {
     "LlamaForCausalLMEagle3": ("LlamaEagle3Model", "LlamaEagle3ForCausalLM"),
     "Eagle3LlamaForCausalLM": ("LlamaEagle3Model", "LlamaEagle3ForCausalLM"),
-    "DFlashDraftModel": ("Qwen3DFlashDraftModel", "Qwen3DFlashForCausalLM"),
-    "Qwen3DSparkModel": ("Qwen3DFlashDraftModel", "Qwen3DSparkForCausalLM"),
 }
+
+# Maps config.architectures[0] to the model_patcher export class of DFlash draft models, or to a
+# function building that class. They are loaded directly, so unlike `_CUSTOM_DRAFT_MODEL_MAP` they
+# need no `auto_map` indirection (and no `trust_remote_code`).
+_NATIVE_DRAFT_MODEL_CLASSES = {
+    "DFlashDraftModel": "Qwen3DFlashForCausalLM",
+    "Qwen3DSparkModel": "Qwen3DSparkForCausalLM",
+    "MuseGlimmerAssistantModel": "get_muse_glimmer_assistant_draft_model_class",
+}
+
+
+def load_native_draft_model(architecture: str, model_name_or_path: str, **kwargs):
+    from optimum.exporters.openvino import model_patcher
+
+    model_class = getattr(model_patcher, _NATIVE_DRAFT_MODEL_CLASSES[architecture])
+    # The MuseGlimmer drafter class is built lazily because it needs transformers >= 5.15.
+    if not isinstance(model_class, type):
+        model_class = model_class()
+    return model_class.from_pretrained(model_name_or_path, **kwargs)
 
 
 def update_config_for_custom_draft_model(config, auto_model, auto_model_for_causal_lm):
@@ -634,6 +653,21 @@ def main_export(
             from optimum.intel.openvino.modeling_funasr import _FunASRForSpeechSeq2Seq
 
             model = _FunASRForSpeechSeq2Seq.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
+        elif (
+            library_name == "transformers"
+            and (getattr(config, "architectures", None) or [None])[0] in _NATIVE_DRAFT_MODEL_CLASSES
+        ):
+            model = load_native_draft_model(
+                config.architectures[0],
+                model_name_or_path,
+                subfolder=subfolder,
+                revision=revision,
+                cache_dir=cache_dir,
+                token=token,
+                local_files_only=local_files_only,
+                force_download=force_download,
+                **loading_kwargs,
+            )
         elif library_name == "qwen3_tts":
             # Without an explicit request the checkpoint's own precision is kept, so the IRs
             # come out at the precision the model was published in rather than upcast. A
@@ -803,6 +837,8 @@ def _main_quantize(
             `model_kwargs={"output_attentions": True}` is passed).
 
     """
+    from optimum.intel.openvino.configuration import OVWeightQuantizationConfig
+    from optimum.intel.openvino.modeling_dflash import is_dflash_draft_model
     from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
 
     # Step 0. Infer task and library name if needed
@@ -883,6 +919,16 @@ def _main_quantize(
     )
 
     # Step 3. Apply quantization and save the quantized model
+    if (
+        isinstance(quantization_config, OVWeightQuantizationConfig)
+        and quantization_config.bits == 4
+        and quantization_config.all_layers is None
+        and isinstance(getattr(model, "model", None), Model)
+        and is_dflash_draft_model(model.model)
+    ):
+        # DFlash drafts have no embeddings or lm_head, so NNCF's "last MatMul stays int8" rule would hit a decoder layer.
+        quantization_config = quantization_config.clone()
+        quantization_config.all_layers = True
     model._apply_quantization(
         quantization_config,
         compile_only=False,

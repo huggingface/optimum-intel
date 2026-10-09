@@ -185,6 +185,7 @@ from optimum.exporters.openvino.model_patcher import (
     ModelPatcher,
     MPTModelPatcher,
     MuseGlimmerLanguageModelPatcher,
+    MuseGlimmerTextEmbeddingsModelPatcher,
     MuseGlimmerVisionEmbeddingsModelPatcher,
     OVDecoderModelPatcher,
     OVSeq2SeqModelPatcher,
@@ -2449,16 +2450,117 @@ class MuseGlimmerTextOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     _MODEL_PATCHER = MuseGlimmerLanguageModelPatcher
 
 
+@register_in_tasks_manager(
+    "muse_glimmer_assistant",
+    *["text-generation", "text-generation-with-past"],
+    library_name="transformers",
+)
+class MuseGlimmerAssistantOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
+    """Export config for the MuseGlimmer DFlash drafter (``Muse-Glimmer-30B-assistant``).
+
+    Follows the same I/O contract as the Qwen3 DFlash draft export: ``inputs_embeds``
+    carries the diffusion window (the anchor token plus ``block_size - 1`` mask tokens)
+    embedded with the target's raw lookup table, ``hidden_states`` carries the target's
+    hidden states at ``target_layer_ids`` concatenated on the last axis, and the model
+    emits ``last_hidden_state`` for the drafted positions only. Neither the embedding
+    table nor the lm_head is part of the export - the drafter borrows the target's.
+
+    Unlike the Qwen3 drafters this is a native transformers architecture, so no
+    re-implementation is needed; only the KV-cache handling is restructured for export
+    (see ``MuseGlimmerAssistantDFlashForCausalLM``).
+    """
+
+    DEFAULT_ONNX_OPSET = 14
+    MIN_TRANSFORMERS_VERSION = "5.15.0"
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        DummyTextInputGenerator,
+        Eagle3VLMDummyGenerator,
+        Eagle3DummyGenerator,
+        MistralDummyPastKeyValuesGenerator,
+    )
+    DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    _MODEL_PATCHER = OVDecoderModelPatcher
+    PAD_ATTENTION_MASK_TO_PAST = False
+    # Tells `convert.py` to stamp the DFlash RT-info block onto the exported graph.
+    dflash = True
+
+    def __init__(self, config: PretrainedConfig, *args, **kwargs):
+        # The drafter has neither an embedding table nor an lm_head, so its config carries
+        # no `vocab_size`. `DummyTextInputGenerator` requires one at construction even
+        # though `input_ids` is dropped from the exported inputs, so supply a value that
+        # is guaranteed to cover the drafter's own mask token.
+        if getattr(config, "vocab_size", None) is None:
+            config.vocab_size = int(getattr(config, "mask_token_id", 0)) + 1
+        super().__init__(config, *args, **kwargs)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = super().inputs
+        common_inputs.pop("input_ids", None)
+        common_inputs["inputs_embeds"] = {0: "batch_size", 1: "block_size"}
+        common_inputs["hidden_states"] = {0: "batch_size", 1: "context_length"}
+        common_inputs["position_ids"] = {0: "batch_size", 1: "context_length + block_size"}
+        if self.use_past_in_inputs:
+            mask_length = "past_sequence_length + context_length + block_size"
+        else:
+            mask_length = "context_length + block_size"
+        common_inputs["attention_mask"] = {0: "batch_size", 1: mask_length}
+        return common_inputs
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        common_outputs = super().outputs
+        common_outputs.pop("logits", None)
+        return {
+            "last_hidden_state": {0: "batch_size", 1: "draft_sequence_length"},
+            **common_outputs,
+        }
+
+    def overwrite_shape_and_generate_input(
+        self, dummy_input_gen: DummyInputGenerator, input_name: str, framework: str, input_shapes: dict
+    ):
+        if input_name in {"inputs_embeds", "hidden_states", "position_ids", "attention_mask"}:
+            sequence_length = dummy_input_gen.sequence_length
+            block_length = sequence_length + 1
+            if input_name == "inputs_embeds":
+                dummy_input_gen.sequence_length = block_length
+            elif input_name == "hidden_states":
+                dummy_input_gen.sequence_length = sequence_length
+            elif input_name == "position_ids":
+                dummy_input_gen.sequence_length = sequence_length + block_length
+            else:
+                if self.use_past_in_inputs:
+                    dummy_input_gen.sequence_length = sequence_length * 2 + block_length
+                else:
+                    dummy_input_gen.sequence_length = sequence_length + block_length
+            dummy_input = dummy_input_gen.generate(
+                input_name, framework=framework, int_dtype=self.int_dtype, float_dtype=self.float_dtype
+            )
+            dummy_input_gen.sequence_length = sequence_length
+            return dummy_input
+        return super().overwrite_shape_and_generate_input(dummy_input_gen, input_name, framework, input_shapes)
+
+    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        super().add_past_key_values(inputs_or_outputs, direction)
+        if direction == "outputs":
+            # Only the target context is written to the cache; the diffusion window's
+            # K/V is local to the forward, so the cache grows by `context_length`.
+            for axes in inputs_or_outputs.values():
+                for axis, name in axes.items():
+                    if name == "past_sequence_length + sequence_length":
+                        axes[axis] = "past_sequence_length + context_length"
+
+
 @register_in_tasks_manager("muse_glimmer", *["image-text-to-text"], library_name="transformers")
 class MuseGlimmerOpenVINOConfig(BaseVLMOpenVINOConfig):
     """Multi-part OpenVINO export config for the native MuseGlimmer VLM.
 
-    Splits the model into three IR files: the language model (consumes merged
-    ``inputs_embeds``), the token-embedding table, and the vision stack (vision
-    tower -> adapter -> projection -> perception norm). MuseGlimmer has a nested
-    config (``text_config`` / ``vision_config``), so the standard nested-VLM
-    ``with_behavior`` handles the language / text-embeddings parts; only the vision
-    part is customised for the native flattened-patch + ``image_grid_thw`` inputs.
+    Splits the model into three IR files: a raw token-embedding table, a raw projected
+    vision stack (vision tower -> adapter -> projection), and a language model that
+    normalizes their merged ``inputs_embeds``. MuseGlimmer has a nested config
+    (``text_config`` / ``vision_config``); only its raw text embeddings and flattened
+    vision inputs require custom behavior.
     """
 
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyMuseGlimmerVisionInputGenerator,)
@@ -2487,6 +2589,19 @@ class MuseGlimmerOpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+    def with_behavior(
+        self,
+        behavior: Union[str, VLMConfigBehavior],
+    ):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        export_config = super().with_behavior(behavior)
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            export_config._MODEL_PATCHER = MuseGlimmerTextEmbeddingsModelPatcher
+            export_config.MIN_TRANSFORMERS_VERSION = self.MIN_TRANSFORMERS_VERSION
+        return export_config
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:

@@ -165,6 +165,8 @@ def _save_model(
         "qwen3_5_text",
         "qwen3_5_moe_text",
         "gemma4",
+        "muse_glimmer",
+        "muse_glimmer_text",
     }:
         add_hidden_states_rt_info(source_model, model, config)
 
@@ -1031,7 +1033,7 @@ def _add_dflash_mode_to_rt_info(model: Model, hf_config: "PretrainedConfig", can
     Add DFlash metadata to DFlash draft model.
 
     Marks model as DFlash draft model and adds DFlash configuration to the model including
-    mask token id, target layer ids, and candidate position offset.
+    mask token id, block size, target layer ids, and candidate position offset.
     """
     try:
         model.set_rt_info("True", ["dflash_mode"])
@@ -1040,6 +1042,8 @@ def _add_dflash_mode_to_rt_info(model: Model, hf_config: "PretrainedConfig", can
             model.set_rt_info(str(dflash_config["mask_token_id"]), ["dflash", "mask_token_id"])
         if "target_layer_ids" in dflash_config:
             model.set_rt_info(",".join(map(str, dflash_config["target_layer_ids"])), ["dflash", "target_layer_ids"])
+        if "block_size" in dflash_config:
+            model.set_rt_info(str(dflash_config["block_size"]), ["dflash", "block_size"])
         model.set_rt_info(str(candidate_position_offset), ["dflash", "candidate_position_offset"])
     except Exception:
         pass
