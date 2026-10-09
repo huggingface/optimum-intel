@@ -1185,6 +1185,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForVisualCausalLM, "minicpmv", True),
         (OVModelForSpeechSeq2Seq, "qwen3_asr", True),
         (OVModelForSpeechSeq2Seq, "fun_asr", True),
+        (OVModelForSpeechSeq2Seq, "sense_voice", False),
         (OVModelForVisualCausalLM, "videochat_flash_qwen", True),
         (OVModelForVisualCausalLM, "qwen3_5", False),
         (OVModelForVisualCausalLM, "qwen3_5_mtp", False),
@@ -1521,6 +1522,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             stateful=False,
             trust_remote_code=trust_remote_code,
         )
+
         ref_config = OVWeightQuantizationConfig(bits=8, sym=isinstance(model, OVModelForVisualCausalLM)).to_dict()
 
         if model_type == "open-clip":

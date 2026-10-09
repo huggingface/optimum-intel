@@ -98,7 +98,15 @@ def infer_task(
             # Use the with-past task so the encoder-decoder export is stateful (KV cache hidden in
             # OpenVINO state). Without the `-with-past` suffix the decoder is exported stateless and
             # incremental generation breaks (only the first token is correct).
-            task = "automatic-speech-recognition-with-past"
+            from optimum.intel.openvino.modeling_funasr import _is_sensevoice_source
+
+            if _is_sensevoice_source(
+                model_name_or_path, cache_dir=cache_dir, token=token, subfolder=subfolder, revision=revision
+            ):
+                # SenseVoiceSmall is a non-autoregressive (CTC encoder-only) model exported as a single stateless graph.
+                task = "automatic-speech-recognition"
+            else:
+                task = "automatic-speech-recognition-with-past"
         else:
             try:
                 task = TasksManager._infer_task_from_model_name_or_path(
@@ -631,9 +639,18 @@ def main_export(
         elif library_name == "kokoro":
             model = _KokoroForTextToSpeech.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
         elif library_name == "funasr":
-            from optimum.intel.openvino.modeling_funasr import _FunASRForSpeechSeq2Seq
+            from optimum.intel.openvino.modeling_funasr import (
+                _FunASRForSpeechSeq2Seq,
+                _is_sensevoice_source,
+                _SenseVoiceForCTC,
+            )
 
-            model = _FunASRForSpeechSeq2Seq.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
+            if _is_sensevoice_source(
+                model_name_or_path, cache_dir=cache_dir, token=token, subfolder=subfolder, revision=revision
+            ):
+                model = _SenseVoiceForCTC.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
+            else:
+                model = _FunASRForSpeechSeq2Seq.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
         elif library_name == "qwen3_tts":
             # Without an explicit request the checkpoint's own precision is kept, so the IRs
             # come out at the precision the model was published in rather than upcast. A
@@ -913,7 +930,28 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
     from optimum.exporters.openvino.convert import export_tokenizer
 
     if is_openvino_tokenizers_available():
-        if library_name != "diffusers" and preprocessors:
+        if (
+            library_name == "funasr"
+            and model is not None
+            and getattr(model.config, "export_model_type", None) == "sense_voice"
+        ):
+            # SenseVoiceSmall ships a SentencePiece BPE model rather than a transformers tokenizer, so it
+            # is not among ``preprocessors``. It has no text input, so build only the OV detokenizer IR from
+            # that BPE model.
+            from optimum.intel.openvino.modeling_funasr import export_sensevoice_tokenizers
+
+            source = getattr(model, "_sensevoice_source", None)
+            if source is None:
+                logger.warning("SenseVoice source path unknown; OpenVINO detokenizer model won't be generated.")
+            else:
+                try:
+                    export_sensevoice_tokenizers(source, output)
+                except Exception as exception:
+                    logger.warning(
+                        "Could not convert the SenseVoice tokenizer. OpenVINO detokenizer "
+                        f"model won't be generated. Exception: {exception}"
+                    )
+        elif library_name != "diffusers" and preprocessors:
             processor_chat_template = None
             tokenizer = next(filter(lambda it: isinstance(it, PreTrainedTokenizerBase), preprocessors), None)
             if len(preprocessors) > 1:

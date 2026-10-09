@@ -116,6 +116,7 @@ from optimum.exporters.openvino.input_generators import (
     Qwen3NextDummyPastKeyValuesGenerator,
     QwenDummyPastKeyValuesGenerator,
     QwenImage21VaeDummyInputGenerator,
+    SenseVoiceDummyInputGenerator,
     Zamba2DummyPastKeyValuesGenerator,
 )
 from optimum.exporters.openvino.model_patcher import (
@@ -5092,6 +5093,40 @@ class FunASROpenVINOConfig(AudioToTextOpenVINOConfig):
         for i in range(self._normalized_config.decoder_num_layers):
             inputs_or_outputs[f"{name}.{i}.decoder.key"] = {0: "batch_size", 2: decoder_sequence_name}
             inputs_or_outputs[f"{name}.{i}.decoder.value"] = {0: "batch_size", 2: decoder_sequence_name}
+
+
+@register_in_tasks_manager(
+    "sense_voice",
+    *["automatic-speech-recognition"],
+    library_name="funasr",
+)
+class SenseVoiceOpenVINOConfig(AudioOpenVINOConfig):
+    """OpenVINO export config for SenseVoiceSmall.
+
+    SenseVoiceSmall is encoder-only: fbank features (batch, num_frames, feature_size), the per-sample valid
+    frame counts (`speech_lengths`) and two integer prefix-query selectors (`language`, `textnorm`) are
+    consumed by a SANM encoder + CTC head, producing per-frame token logits and the per-sample encoder
+    output lengths. `speech_lengths` drives the SANM padding mask, so a padded batch decodes correctly.
+    """
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (SenseVoiceDummyInputGenerator,)
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(feature_size="num_mel_bins", allow_new=True)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "input_features": {0: "batch_size", 1: "encoder_sequence_length"},
+            "speech_lengths": {0: "batch_size"},
+            "language": {0: "batch_size"},
+            "textnorm": {0: "batch_size"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "logits": {0: "batch_size", 1: "logits_sequence_length"},
+            "encoder_out_lens": {0: "batch_size"},
+        }
 
 
 @register_in_tasks_manager(
