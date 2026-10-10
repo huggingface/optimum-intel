@@ -984,8 +984,9 @@ def export_tokenizer(
         logger.debug(f"OpenVINO Tokenizer export for {type(tokenizer).__name__} is not supported.")
         return
     except Exception as exception:
-        logger.debug(
-            f"OpenVINO Tokenizer export for {type(tokenizer).__name__} is not supported. Exception: {exception}"
+        logger.warning(
+            f"OpenVINO tokenizer/detokenizer models won't be generated for {type(tokenizer).__name__}. "
+            f"Exception: {exception}"
         )
         return
 
