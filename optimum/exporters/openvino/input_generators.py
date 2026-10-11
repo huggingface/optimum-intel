@@ -249,6 +249,37 @@ class Eagle3DummyGenerator(DummyInputGenerator):
         return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
 
 
+class DSparkMarkovDummyGenerator(DummyInputGenerator):
+    """Dummy inputs for the DSpark Markov step and Top-K candidate scorer graphs."""
+
+    SUPPORTED_INPUT_NAMES = ("prev_token_ids", "draft_logits", "anchor_token_ids")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        self.batch_size = batch_size
+        self.num_draft_tokens = sequence_length
+        self.vocab_size = normalized_config.vocab_size
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name in ("prev_token_ids", "anchor_token_ids"):
+            return self.random_int_tensor(
+                (self.batch_size,),
+                max_value=self.vocab_size,
+                framework=framework,
+                dtype=int_dtype,
+            )
+        if input_name == "draft_logits":
+            shape = (self.batch_size, self.num_draft_tokens, self.vocab_size)
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        raise ValueError(f"Unsupported DSpark Markov input: {input_name}")
+
+
 class Eagle3VLMDummyGenerator(DummyInputGenerator):
     """
     Dummy input generator for VLM Eagle-3 speculative decoding.

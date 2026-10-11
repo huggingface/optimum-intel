@@ -29,6 +29,7 @@ from transformers.utils import is_torch_available
 
 from openvino import Core, Type, save_model
 from optimum.exporters.openvino.base import OpenVINOConfig
+from optimum.exporters.openvino.dflash_utils import DSPARK_ARCHITECTURES, validate_dspark_top_k
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
     DIFFUSERS_IMPORT_ERROR,
@@ -295,6 +296,7 @@ def main_export(
     library_name: Optional[str] = None,
     model_loading_kwargs: Optional[Dict[str, Any]] = None,
     variant: Optional[str] = None,
+    dspark_top_k: Optional[int] = None,
     **kwargs_shapes,
 ):
     """
@@ -350,6 +352,13 @@ def main_export(
             especially useful when exporting a custom architecture that needs to be splitted in multiple components (e.g. encoder-decoder). If unspecified with custom models, optimum will try to use the default submodels used for the given task, with no guarantee of success.
         stateful (`bool`, defaults to `True`):
             Produce stateful model where all kv-cache inputs and outputs are hidden in the model and are not exposed as model inputs and outputs. Applicable only for decoder models.
+        dspark_top_k (`Optional[int]`, defaults to `None`):
+            DSpark drafts only. Export the Markov head as a Top-K candidate scorer
+            (`openvino_candidate_scorer_model.xml`) instead of the dense Markov step (`openvino_markov_step_model.xml`).
+            The candidate scorer keeps the `dspark_top_k` most likely draft tokens at every position and scores them
+            with the Markov head in one inference, which is usually much faster than the token-by-token walk over the
+            dense step. The drafted tokens differ only where the dense walk would pick a token outside the
+            `dspark_top_k` candidates.
         **kwargs_shapes (`Dict`):
             Shapes to use during inference. This argument allows to override the default shapes used during the OpenVINO export.
 
@@ -415,6 +424,9 @@ def main_export(
 
         # update config to load custom draft models (eagle3 text-only/VLM variants, dflash)
         archs = getattr(config, "architectures", None)
+        if dspark_top_k is not None:
+            # Validated here to fail before the weights are loaded.
+            validate_dspark_top_k(config, dspark_top_k)
         if isinstance(archs, list) and archs:
             draft_classes = _CUSTOM_DRAFT_MODEL_MAP.get(archs[0])
             if draft_classes is not None:
@@ -739,6 +751,7 @@ def main_export(
             device=device,
             trust_remote_code=trust_remote_code,
             patch_16bit_model=patch_16bit,
+            dspark_top_k=dspark_top_k,
             **kwargs_shapes,
         )
 
