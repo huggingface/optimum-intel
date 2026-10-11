@@ -75,13 +75,13 @@ jobs:
           uv pip install "transformers>=5.18"
           pytest tests/openvino/${{ matrix.test-pattern }} -k "minicpmv4_7" --durations=0
 
-      # test_quantization and test_cb_compatible are not matched by the matrix test-pattern glob, so run them
-      # explicitly and only once (the export job).
-      - name: MiniCPM-V-4.7 Quantization and Continuous Batching Validation
+      # test_quantization, test_cb_compatible and test_dflash are not matched by the matrix test-pattern glob, so run
+      # them explicitly and only once (the export job).
+      - name: MiniCPM-V-4.7 Quantization, Continuous Batching and DFlash Validation
         if: ${{ matrix.test-pattern == '*export*' }}
         run: |
           uv pip install "transformers>=5.18"
-          pytest tests/openvino/test_quantization.py tests/openvino/test_cb_compatible.py -k "minicpmv4_7" --durations=0
+          pytest tests/openvino/test_quantization.py tests/openvino/test_cb_compatible.py tests/openvino/test_dflash.py -k "minicpmv4_7" --durations=0
 
       - name: MiniCPM-OCR Validation
         run: |
