@@ -38,10 +38,18 @@ from optimum.exporters.openvino.config import (
     TextSeq2SeqOpenVINOConfig,
     VisionOpenVINOConfig,
 )
+from optimum.exporters.openvino.dflash_utils import (
+    DSPARK_ARCHITECTURES,
+    DSPARK_CANDIDATE_SCORER_INTERFACE,
+    DSPARK_MARKOV_STEP_INTERFACE,
+    parse_and_validate_dspark_config,
+    validate_dspark_top_k,
+)
 from optimum.exporters.openvino.input_generators import (
     AquilaDummyPastKeyValuesGenerator,
     ChatGLM2DummyPastKeyValuesGenerator,
     DeciDummyPastKeyValuesGenerator,
+    DSparkMarkovDummyGenerator,
     DummyAudioPhi4MMInputGenerator,
     DummyDeepseekOCR2VisionInputGenerator,
     DummyDeepseekOCR2VisionTilesInputGenerator,
@@ -508,14 +516,9 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
             if "dflash" in archs[0].lower():
                 self.dflash = True
                 self.candidate_position_offset = 1
-            elif archs[0] == "Qwen3DSparkModel":
-                if getattr(config, "markov_rank", 0) != 0:
-                    raise ValueError(
-                        "Exporting Qwen3DSparkModel is only supported for DFlash mode (markov_rank == 0). "
-                        "DSpark export is not supported yet (got markov_rank != 0)."
-                    )
+            elif archs[0] in DSPARK_ARCHITECTURES:
                 self.dflash = True
-                self.candidate_position_offset = 0
+                self.candidate_position_offset = parse_and_validate_dspark_config(config).candidate_position_offset
         if self.dflash:
             model_type = getattr(config, "model_type", "")
             if model_type != "qwen3":
@@ -598,6 +601,74 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
                 for axis, name in axes.items():
                     if name == "past_sequence_length + sequence_length":
                         axes[axis] = "past_sequence_length + context_length"
+
+
+class DSparkMarkovHeadOpenVINOConfig(OpenVINOConfig):
+    """A DSpark Markov-head model, exported next to the draft backbone."""
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (DSparkMarkovDummyGenerator,)
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    # Written to dflash/interface; names the input/output contract the runtime expects.
+    dflash_interface: str
+
+    def __init__(
+        self,
+        config: PretrainedConfig,
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        preprocessors: list[Any] | None = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        if parse_and_validate_dspark_config(config).markov_rank == 0:
+            raise ValueError("The DSpark Markov head models require a draft with a Markov head (markov_rank > 0).")
+
+
+class DSparkMarkovStepOpenVINOConfig(DSparkMarkovHeadOpenVINOConfig):
+    """Dense DSpark Markov step: previous token ids in, full-vocabulary logit bias out."""
+
+    dflash_interface = DSPARK_MARKOV_STEP_INTERFACE
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {"prev_token_ids": {0: "batch_size"}}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {"markov_bias": {0: "batch_size"}}
+
+
+class DSparkMarkovCandidateScorerOpenVINOConfig(DSparkMarkovHeadOpenVINOConfig):
+    """Opt-in Top-K lattice over the DSpark Markov head.
+
+    edge_scores already include each candidate's draft logit, so the runtime must not add it again.
+    """
+
+    dflash_interface = DSPARK_CANDIDATE_SCORER_INTERFACE
+
+    def __init__(self, config: PretrainedConfig, top_k: int, **kwargs):
+        super().__init__(config, **kwargs)
+        self.dspark_top_k = validate_dspark_top_k(config, top_k)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "draft_logits": {0: "batch_size", 1: "draft_sequence_length"},
+            "anchor_token_ids": {0: "batch_size"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "edge_scores": {0: "batch_size", 1: "draft_sequence_length"},
+            "candidate_ids": {0: "batch_size", 1: "draft_sequence_length"},
+        }
 
 
 @register_in_tasks_manager(
