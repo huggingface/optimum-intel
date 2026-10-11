@@ -2455,7 +2455,6 @@ class MuseGlimmerAssistantOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfi
     (see ``MuseGlimmerAssistantDFlashForCausalLM``).
     """
 
-    DEFAULT_ONNX_OPSET = 14
     MIN_TRANSFORMERS_VERSION = "5.15.0"
     DUMMY_INPUT_GENERATOR_CLASSES = (
         DummyTextInputGenerator,
