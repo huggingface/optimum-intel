@@ -19,6 +19,7 @@ from typing import Any, Optional
 from transformers import PretrainedConfig
 
 
+DFLASH_ARCHITECTURES = {"DFlashDraftModel"}
 DSPARK_ARCHITECTURES = {"Qwen3DSparkModel"}
 DSPARK_SUPPORTED_MARKOV_HEAD_TYPES = ("vanilla",)
 DSPARK_MARKOV_STEP_INTERFACE = "markov_step_v1"

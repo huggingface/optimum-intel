@@ -29,7 +29,11 @@ from transformers.utils import is_torch_available
 
 from openvino import Core, Type, save_model
 from optimum.exporters.openvino.base import OpenVINOConfig
-from optimum.exporters.openvino.dflash_utils import DSPARK_ARCHITECTURES, validate_dspark_top_k
+from optimum.exporters.openvino.dflash_utils import (
+    DFLASH_ARCHITECTURES,
+    DSPARK_ARCHITECTURES,
+    validate_dspark_top_k,
+)
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
     DIFFUSERS_IMPORT_ERROR,
@@ -737,6 +741,11 @@ def main_export(
         preprocessors = load_preprocessors(
             model_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code, model_type=model_type
         )
+        architectures = getattr(model.config, "architectures", None) or []
+        if architectures and architectures[0] in DFLASH_ARCHITECTURES | DSPARK_ARCHITECTURES:
+            # These drafts always run with the target model's tokenizer. Most are published without one, and
+            # transformers 5 then builds a placeholder tokenizer from the config.
+            preprocessors = [p for p in preprocessors if not isinstance(p, PreTrainedTokenizerBase)]
 
         submodel_paths = export_from_model(
             model=model,

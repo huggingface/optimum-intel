@@ -1776,3 +1776,24 @@ class OVCLIExportTestCase(unittest.TestCase):
                     self.assertLessEqual(markov_types, float_types)
                     checkpoint_types = checkpoint_types or markov_types
                     self.assertEqual(markov_types, checkpoint_types)
+
+    def test_exporters_cli_dspark_does_not_export_tokenizer(self):
+        for with_tokenizer in (True, False):
+            model_path = get_dspark_model_path(with_tokenizer=with_tokenizer)
+            with self.subTest(with_tokenizer=with_tokenizer), TemporaryDirectory() as tmpdir:
+                subprocess.run(
+                    [
+                        "optimum-cli",
+                        "export",
+                        "openvino",
+                        "--model",
+                        model_path,
+                        "--task",
+                        "text-generation-with-past",
+                        "--trust-remote-code",
+                        tmpdir,
+                    ],
+                    check=True,
+                )
+                self.assertTrue((Path(tmpdir) / "openvino_markov_step_model.xml").exists())
+                self.assertEqual(sorted(path.name for path in Path(tmpdir).glob("*tokenizer*")), [])
