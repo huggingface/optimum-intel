@@ -142,11 +142,13 @@ class ExportModelTest(unittest.TestCase):
         "gemma4_unified": OVModelForVisualCausalLM,
         "gemma3n": OVModelForVisualCausalLM,
         "mistral3": OVModelForVisualCausalLM,
+        "ministral3": OVModelForVisualCausalLM,
         "flux.2-klein": OVFlux2KleinPipeline,
         "z-image": OVZImagePipeline,
         "qwen3_omni_moe": OVModelForMultimodalLM,
         "muse_glimmer": OVModelForVisualCausalLM,
         "deepseek_ocr2": OVModelForVisualCausalLM,
+        "minicpmv4_7": OVModelForVisualCausalLM,
     }
 
     if is_diffusers_version(">=", "0.41.0.dev0"):
@@ -172,7 +174,8 @@ class ExportModelTest(unittest.TestCase):
         "stable-diffusion-3": {"text_encoder_3": "8.0"},
         "flux": {"text_encoder_2": "8.0", "transformer": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
         "flux.2-klein": {"transformer": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
-        "z-image": {"text_encoder": "8.0", "transformer": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
+        # 8.0 lets the transformer feed-forward overflow fp16 on GPU at later denoising steps
+        "z-image": {"text_encoder": "8.0", "transformer": "32.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
         "qwenimage21": {"text_encoder": "8.0", "transformer": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
         "stable-diffusion-xl-refiner": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
         "ltx-video": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
@@ -297,7 +300,7 @@ class ExportModelTest(unittest.TestCase):
                     self.assertTrue(
                         ov_model.language_model.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
                     )
-                    if model_type == "gemma4_unified":
+                    if model_type in {"gemma3n", "gemma4_unified"}:
                         vision_model = ov_model.vision_embeddings.model
                         self.assertTrue(vision_model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"]))
                         self.assertEqual(

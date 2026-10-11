@@ -356,6 +356,7 @@ _GENAI_VLM_UNSUPPORTED_ARCHITECTURES = (
     "videochat_flash_qwen",  # GenAI requires video input; image-only not supported
     "qwen3_omni_moe",
     "mistral3",
+    "ministral3",
 )
 
 # Gemma 4 version requirements for OpenVINO GenaAI are documented at:

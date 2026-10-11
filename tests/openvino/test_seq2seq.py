@@ -607,8 +607,10 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "qwen3_5_moe_mtp",
         "qwen3_omni_moe",
         "mistral3",
+        "ministral3",
         "muse_glimmer",
         "deepseek_ocr2",
+        "minicpmv4_7",
     ]
     if is_openvino_version(">=", "2026.3") and is_compressed_tensors_available():
         SUPPORTED_ARCHITECTURES.append("qwen3_5_compressed_tensors")
@@ -623,6 +625,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "gemma4_moe",
         "gemma4_unified",
         "gemma4_unified-it",
+        "minicpmv4_7",
     ]
     SUPPORT_AUDIO = ["gemma4", "gemma4_unified-it", "qwen3_omni_moe"]
     # "llama" is registered for image-text-to-text
@@ -662,6 +665,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "llava_next",
             "llava_next_mistral",
             "mistral3",
+            "ministral3",
             "qwen2_vl",
             "qwen2_5_vl",
             "got_ocr2",
@@ -678,6 +682,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "gemma4_unified",
             "gemma4_unified-it",
             "muse_glimmer",
+            "minicpmv4_7",
         ]:
             from transformers import AutoModelForImageTextToText
 
