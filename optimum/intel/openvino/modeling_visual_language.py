@@ -381,6 +381,12 @@ class OVResampler(OVModelPart):
 
     def forward(self, image_feature, pos_embed, key_padding_mask):
         self.compile()
+        if key_padding_mask.dtype == torch.bool and self.input_dtypes.get("key_padding_mask") != "boolean":
+            # the resampler is exported with a floating point key_padding_mask, which nn.MultiheadAttention adds to
+            # the attention scores, so padded positions must be -inf instead of True (which would become 1.0)
+            key_padding_mask = torch.zeros(key_padding_mask.shape, dtype=torch.float32).masked_fill_(
+                key_padding_mask, float("-inf")
+            )
         result = self.request(
             {"image_feature": image_feature, "pos_embed": pos_embed, "key_padding_mask": key_padding_mask}
         )[0]
