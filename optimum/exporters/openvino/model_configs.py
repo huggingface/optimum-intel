@@ -245,7 +245,6 @@ from optimum.utils.input_generators import (
     ASTDummyAudioInputGenerator,
     BartDummyTextInputGenerator,
     BloomDummyPastKeyValuesGenerator,
-    DummyAudioInputGenerator,
     DummyDecoderTextInputGenerator,
     DummyInputGenerator,
     DummyPastKeyValuesGenerator,
