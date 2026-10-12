@@ -832,7 +832,9 @@ class _OVModelForSenseVoice(OVModel):
             subfolder=subfolder,
             local_files_only=kwargs.get("local_files_only", False),
         )
-        return super()._from_pretrained(model_dir, config=config, **kwargs)
+        model = super()._from_pretrained(model_dir, config=config, **kwargs)
+        model.set_detokenizer()
+        return model
 
     @classmethod
     def _export(cls, model_id, config, **kwargs):
