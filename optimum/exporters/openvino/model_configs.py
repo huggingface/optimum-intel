@@ -70,6 +70,8 @@ from optimum.exporters.openvino.input_generators import (
     DummyQwen3TTSDecoderStackInputGenerator,
     DummyQwen3VLLMInputGenerator,
     DummyQwen3VLVisionEmbedInputGenerator,
+    DummyQwen4ExpLMInputGenerator,
+    DummyQwen4ExpNGramInputGenerator,
     DummyQwenImage21I2ITextInputGenerator,
     DummyQwenImage21TransformerInputGenerator,
     DummyQwenImage21VisionInputGenerator,
@@ -112,6 +114,7 @@ from optimum.exporters.openvino.input_generators import (
     Qwen3_5MTPDummyInputGenerator,
     Qwen3ASRDummySeq2SeqPastKeyValuesGenerator,
     Qwen3NextDummyPastKeyValuesGenerator,
+    Qwen4ExpDummyPastKeyValuesGenerator,
     QwenDummyPastKeyValuesGenerator,
     QwenImage21VaeDummyInputGenerator,
     Zamba2DummyPastKeyValuesGenerator,
@@ -216,6 +219,9 @@ from optimum.exporters.openvino.model_patcher import (
     Qwen3TTSSpeakerEncoderPatcher,
     Qwen3VLLanguageModelPatcher,
     Qwen3VLVisionEmbMergerPatcher,
+    Qwen4ExpLanguageModelPatcher,
+    Qwen4ExpNGramEmbeddings,
+    Qwen4ExpNGramEmbeddingsPatcher,
     QwenImage21I2ITextEncoderModelPatcher,
     QwenImage21TextEncoderModelPatcher,
     QwenImage21TransformerModelPatcher,
@@ -7816,6 +7822,174 @@ class Qwen3_5MoeOpenVINOConfig(Qwen3_5OpenVINOConfig):
         if self._behavior == QwenVLConfigBehavior.LANGUAGE:
             return get_vlm_internal_text_generation_config(
                 "qwen3_5_moe_text", self._orig_config.text_config, self.int_dtype, self.float_dtype
+            ).outputs
+        return super().outputs
+
+
+@register_in_tasks_manager(
+    "qwen4_exp_text",
+    *["text-generation-with-past"],
+    library_name="transformers",
+)
+class Qwen4ExpTextOpenVINOConfig(Qwen3_5TextOpenVINOConfig):
+    """
+    Language model of Qwen3.8-Flash-Next, exported as part of `qwen4_exp` (image-text-to-text) with the hashed
+    n-gram embeddings of its PLE layers provided by the separate `ngram_embeddings` model.
+    """
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen4ExpLMInputGenerator, Qwen4ExpDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = Qwen4ExpDummyPastKeyValuesGenerator
+    MIN_TRANSFORMERS_VERSION = "5.17.0"
+    MAX_TRANSFORMERS_VERSION = None
+    _MODEL_PATCHER = Qwen4ExpLanguageModelPatcher
+
+    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        if direction not in ["inputs", "outputs"]:
+            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+
+        if direction == "inputs":
+            decoder_sequence_name = "past_sequence_length"
+            cache_name_prefix = "cache_params.past"
+        else:
+            decoder_sequence_name = "past_sequence_length + sequence_length"
+            cache_name_prefix = "cache_params.present"
+
+        layer_types = self._normalized_config.layer_types
+        num_linear_attn_layers = layer_types.count("linear_attention")
+        num_qsa_layers = len(layer_types) - num_linear_attn_layers
+        num_ple_layers = len(self._normalized_config.ple_layer_ids or [])
+
+        for i in range(num_linear_attn_layers):
+            inputs_or_outputs[f"{cache_name_prefix}.conv.{i}"] = {0: "batch_size"}
+            inputs_or_outputs[f"{cache_name_prefix}.ssm.{i}"] = {0: "batch_size"}
+        for i in range(num_qsa_layers):
+            inputs_or_outputs[f"{cache_name_prefix}.key.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
+            inputs_or_outputs[f"{cache_name_prefix}.value.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
+        for i in range(num_qsa_layers):
+            # raw (not normalized, not rotated) QSA index keys of all tokens
+            inputs_or_outputs[f"{cache_name_prefix}.index_key.{i}"] = {0: "batch_size", 1: decoder_sequence_name}
+        for i in range(num_ple_layers):
+            inputs_or_outputs[f"{cache_name_prefix}.ple_conv.{i}"] = {0: "batch_size"}
+        # M-RoPE (T, H, W) positions of all tokens
+        inputs_or_outputs[f"{cache_name_prefix}.rope_positions"] = {0: "batch_size", 1: decoder_sequence_name}
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "past_sequence_length + sequence_length"},
+            "position_ids": {1: "batch_size", 2: "sequence_length"},
+            "ngram_embeddings": {0: "batch_size", 1: "sequence_length"},
+        }
+        if self.use_past_in_inputs:
+            self.add_past_key_values(common_inputs, direction="inputs")
+        return common_inputs
+
+
+class Qwen4ExpConfigBehavior(str, enum.Enum):
+    LANGUAGE = "language"
+    VISION_EMBEDDINGS = "vision_embeddings"
+    VISION_EMBEDDINGS_MERGER = "vision_embeddings_merger"
+    TEXT_EMBEDDINGS = "text_embeddings"
+    VISION_EMBEDDINGS_POS = "vision_embeddings_pos"
+    NGRAM_EMBEDDINGS = "ngram_embeddings"
+
+
+@register_in_tasks_manager("qwen4_exp", *["image-text-to-text"], library_name="transformers")
+class Qwen4ExpOpenVINOConfig(Qwen3_5OpenVINOConfig):
+    """
+    Qwen3.8-Flash-Next. Besides the Qwen3.5-like vision and text embeddings models and the language model, the
+    hashed n-gram table of the PLE layers together with its hash function is exported as the separate
+    `ngram_embeddings` model.
+    """
+
+    SUPPORTED_BEHAVIORS = [behavior.value for behavior in Qwen4ExpConfigBehavior]
+    MIN_TRANSFORMERS_VERSION = "5.17.0"
+    MAX_TRANSFORMERS_VERSION = None
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: Qwen4ExpConfigBehavior = Qwen4ExpConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            behavior=behavior,
+            preprocessors=preprocessors,
+        )
+        # the MTP head is not exported
+        self.SUPPORTED_BEHAVIORS = list(type(self).SUPPORTED_BEHAVIORS)
+        if self._behavior == Qwen4ExpConfigBehavior.NGRAM_EMBEDDINGS:
+            self._config = config.text_config
+            self._normalized_config = NormalizedTextConfig(self._config)
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen4ExpNGramInputGenerator,)
+
+    def with_behavior(self, behavior: Union[str, Qwen4ExpConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, Qwen4ExpConfigBehavior):
+            behavior = Qwen4ExpConfigBehavior(behavior)
+
+        if behavior == Qwen4ExpConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config(
+                "qwen4_exp_text", self._orig_config.text_config, self.int_dtype, self.float_dtype
+            )
+
+        if behavior == Qwen4ExpConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                "qwen4_exp_text",
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=Qwen4ExpLanguageModelPatcher,
+                inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+            )
+
+        return self.__class__(
+            self._orig_config,
+            task=self.task,
+            int_dtype=self.int_dtype,
+            float_dtype=self.float_dtype,
+            behavior=behavior,
+            preprocessors=self._preprocessors,
+        )
+
+    @staticmethod
+    def get_model_for_behavior(model, behavior: Union[str, Qwen4ExpConfigBehavior]):
+        if behavior == Qwen4ExpConfigBehavior.NGRAM_EMBEDDINGS:
+            return Qwen4ExpNGramEmbeddings(_get_model_attribute(model, "language_model"))
+        return Qwen3_5OpenVINOConfig.get_model_for_behavior(model, behavior)
+
+    def patch_model_for_export(self, model: Union["PreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior == Qwen4ExpConfigBehavior.NGRAM_EMBEDDINGS:
+            return Qwen4ExpNGramEmbeddingsPatcher(self, model, model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == Qwen4ExpConfigBehavior.NGRAM_EMBEDDINGS:
+            return {
+                "input_ids": {0: "batch_size", 1: "sequence_length"},
+                "ngram_history": {0: "batch_size"},
+            }
+        return super().inputs
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == Qwen4ExpConfigBehavior.NGRAM_EMBEDDINGS:
+            return {
+                "ngram_embeddings": {0: "batch_size", 1: "sequence_length"},
+                "new_ngram_history": {0: "batch_size"},
+            }
+        if self._behavior == Qwen4ExpConfigBehavior.LANGUAGE:
+            return get_vlm_internal_text_generation_config(
+                "qwen4_exp_text", self._orig_config.text_config, self.int_dtype, self.float_dtype
             ).outputs
         return super().outputs
 

@@ -13,9 +13,11 @@
 # limitations under the License.
 
 
+import math
 import unittest
 from pathlib import Path
 
+import numpy as np
 import openvino as ov
 import torch
 from parameterized import parameterized
@@ -31,6 +33,13 @@ from utils_tests import (
 )
 
 from optimum.exporters.openvino import export_from_model, main_export
+from optimum.exporters.openvino._ov_ops import (
+    BlockSparseAttention,
+    QSAHashFunction,
+    QSAIndexer,
+    QSAPrepare,
+    get_openvino_extensions,
+)
 from optimum.exporters.openvino.model_configs import (
     BertOpenVINOConfig,
     LTX2TextEncoderOpenVINOConfig,
@@ -139,6 +148,7 @@ class ExportModelTest(unittest.TestCase):
         "qwen3_5_mtp": OVModelForVisualCausalLM,
         "qwen3_5_moe": OVModelForVisualCausalLM,
         "qwen3_5_moe_mtp": OVModelForVisualCausalLM,
+        "qwen4_exp": OVModelForVisualCausalLM,
         "gemma4_unified": OVModelForVisualCausalLM,
         "gemma3n": OVModelForVisualCausalLM,
         "mistral3": OVModelForVisualCausalLM,
@@ -572,3 +582,134 @@ class CustomExportModelTest(unittest.TestCase):
         ov_outputs = ov_model(**tokens)
         self.assertTrue(torch.allclose(ov_outputs.token_embeddings, model_outputs.token_embeddings, atol=1e-4))
         self.assertTrue(torch.allclose(ov_outputs.sentence_embedding, model_outputs.sentence_embedding, atol=1e-4))
+
+
+class QSAOperationsTest(unittest.TestCase):
+    """
+    The QSA operation modules of `_ov_ops.py` (analogues of the QSAPrepare, QSAIndexer, BlockSparseAttention and
+    QSAHashFunction operations): the OpenVINO conversion of every module must match its reference `forward`.
+    """
+
+    @staticmethod
+    def _convert_and_infer(module, inputs):
+        from openvino.frontend.pytorch.ts_decoder import TorchScriptPythonDecoder
+
+        class Wrapper(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.op = module
+
+            def forward(self, *args):
+                return self.op(*args)
+
+        module_extensions, conversion_extensions = get_openvino_extensions([module])
+        decoder = TorchScriptPythonDecoder(Wrapper(), example_input=inputs, module_extensions=module_extensions)
+        ov_model = ov.convert_model(decoder, example_input=inputs, extension=conversion_extensions)
+        op_types = {op.get_type_name() for op in ov_model.get_ops()}
+        assert not any("Python" in t or "Framework" in t for t in op_types), op_types
+        return ov.compile_model(ov_model, OPENVINO_DEVICE, {"INFERENCE_PRECISION_HINT": "f32"})(list(inputs))[0]
+
+    @parameterized.expand([(3,), (4,), (17,)])
+    def test_qsa_prepare(self, key_length):
+        torch.manual_seed(0)
+        module = QSAPrepare(compress_ratio=4)
+        inputs = (torch.randn(2, key_length, 16), torch.randn(2, key_length, 8), torch.randn(2, key_length, 8))
+        inputs += (torch.randn(16),)
+        expected = module(*inputs).numpy()
+        self.assertEqual(expected.shape, (2, key_length // 4, 16))
+        np.testing.assert_allclose(self._convert_and_infer(module, inputs), expected, atol=1e-5)
+
+    @parameterized.expand([(3, 3, 1, False), (38, 1, 1, False), (37, 37, 2, False), (40, 5, 1, True)])
+    def test_qsa_indexer(self, key_length, query_length, num_selection_heads, with_ties):
+        torch.manual_seed(0)
+        index_query = torch.randn(2, 4, query_length, 16)
+        block_index_keys = torch.randn(2, key_length // 4, 16)
+        if with_ties:
+            index_query, block_index_keys = index_query.round(), block_index_keys.round()
+        module = QSAIndexer(compress_ratio=4, token_budget=16, num_selection_heads=num_selection_heads)
+        inputs = (index_query, block_index_keys, torch.tensor(key_length))
+        expected = module(*inputs).numpy()
+        np.testing.assert_array_equal(self._convert_and_infer(module, inputs), expected)
+
+        block_indices, block_count = QSAIndexer.unpack(module(*inputs))
+        positions = key_length - query_length + torch.arange(query_length)
+        expected_count = torch.clamp((positions + 1) // 4, max=module.block_topk)
+        self.assertTrue(torch.equal(block_count, expected_count.expand_as(block_count).to(block_count.dtype)))
+        self.assertTrue(bool((block_indices < ((positions + 1) // 4)[:, None]).all()))
+
+    @parameterized.expand([(11, 11, 1, 2), (38, 1, 1, 2), (37, 37, 2, 1)])
+    def test_block_sparse_attention(self, key_length, query_length, num_selection_heads, num_kv_heads):
+        torch.manual_seed(0)
+        indexer = QSAIndexer(compress_ratio=4, token_budget=8, num_selection_heads=num_selection_heads)
+        selection = indexer(torch.randn(2, 4, query_length, 16), torch.randn(2, key_length // 4, 16), key_length)
+        block_indices, block_count = QSAIndexer.unpack(selection)
+        module = BlockSparseAttention(compress_ratio=4)
+        inputs = (
+            torch.randn(2, 4, query_length, 8),
+            torch.randn(2, num_kv_heads, key_length, 8),
+            torch.randn(2, num_kv_heads, key_length, 8),
+            block_indices.contiguous(),
+            block_count.contiguous(),
+        )
+        expected = module(*inputs).numpy()
+        np.testing.assert_allclose(self._convert_and_infer(module, inputs), expected, atol=1e-5)
+
+    @staticmethod
+    def _reference_hash(token_ids, history, ngram_size, heads_per_ngram, multipliers, sizes, offsets, eos):
+        rows, new_history = [], []
+        for tokens, previous in zip(token_ids.tolist(), history.tolist()):
+            sequence, context = previous + tokens, ngram_size - 1
+            last_eos, prev_eos = -1, []
+            for i, token in enumerate(sequence):
+                prev_eos.append(last_eos)
+                last_eos = i if token == eos else last_eos
+            for i in range(context, len(sequence)):
+                back = [sequence[i - k] if i - k > prev_eos[i] else eos for k in range(ngram_size)]
+                mix, row = back[0] * multipliers[0], []
+                for order in range(2, ngram_size + 1):
+                    mix ^= back[order - 1] * multipliers[order - 1]
+                    for e in range(heads_per_ngram):
+                        head = (order - 2) * heads_per_ngram + e
+                        row.append(mix % sizes[head] + offsets[head])
+                rows.append(row)
+            new_history.append(sequence[-context:])
+        return np.concatenate([np.array(rows).ravel(), np.array(new_history).ravel()])
+
+    def test_qsa_hash_function(self):
+        # Qwen3.8-Flash-Next sizes: prime head vocabularies of ~2^24.3, multipliers close to 2^63 / vocab_size
+        def is_prime(value):
+            return value % 2 == 1 and all(value % d for d in range(3, math.isqrt(value) + 1, 2))
+
+        sizes, offsets, prime = [], [], 20000000 - 1
+        for _ in range(16):
+            prime += 1
+            while not is_prime(prime):
+                prime += 1
+            offsets.append(sum(sizes))
+            sizes.append(prime)
+        attributes = {
+            "ngram_size": 3,
+            "heads_per_ngram": 8,
+            "multipliers": [23703573157769, 20109073645365, 8052911324071],
+            "head_vocab_sizes": sizes,
+            "head_offsets": offsets,
+            "eos_token_id": 248044,
+        }
+        generator = torch.Generator().manual_seed(0)
+        token_ids = torch.randint(0, 248320, (2, 9), generator=generator)
+        history = torch.randint(0, 248320, (2, 2), generator=generator)
+        token_ids[0, 3] = history[1, 1] = attributes["eos_token_id"]
+
+        module = QSAHashFunction(**attributes)
+        expected = self._reference_hash(
+            token_ids,
+            history,
+            3,
+            8,
+            attributes["multipliers"],
+            sizes,
+            offsets,
+            attributes["eos_token_id"],
+        )
+        np.testing.assert_array_equal(module(token_ids, history).numpy(), expected)
+        np.testing.assert_array_equal(self._convert_and_infer(module, (token_ids, history)), expected)
