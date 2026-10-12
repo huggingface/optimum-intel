@@ -35,9 +35,19 @@ ARCH_TO_CB_COMPATIBLE_SUBMODELS = {
         "task": "automatic-speech-recognition",
         "submodels": ("language_model",),
     },
+    "ministral3": {
+        "task": "image-text-to-text",
+        "submodels": ("language_model",),
+    },
     "qwen3_tts": {
         "task": "text-to-audio",
         "submodels": ("talker_model", "code_predictor_model"),
+    },
+    # hybrid Gated DeltaNet + full attention language model with MoE: besides SDPA -> PagedAttention, the linear
+    # attention layers become PagedGatedDeltaNet / PagedCausalConv1D
+    "minicpmv4_7": {
+        "task": "image-text-to-text",
+        "submodels": ("language_model",),
     },
 }
 
