@@ -127,12 +127,11 @@ def _set_runtime_options(
             or getattr(sub_export_config, "stateful", False)
         ):
             sub_export_config.runtime_options["KV_CACHE_PRECISION"] = "f16"
-        # The gemma4_unified vision embedder produces activations large enough to overflow in
+        # Gemma vision embedders produce activations large enough to overflow in
         # fp16, so scale them down at runtime the same way the language model does.
-        if (
-            model_name == "vision_embeddings_model"
-            and getattr(getattr(sub_export_config, "_orig_config", None), "model_type", None) == "gemma4_unified"
-        ):
+        if model_name == "vision_embeddings_model" and getattr(
+            getattr(sub_export_config, "_orig_config", None), "model_type", None
+        ) in {"gemma3n", "gemma4_unified"}:
             sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "8.0"
 
 
@@ -1329,7 +1328,9 @@ def get_zimage_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     transformer_export_config = export_config_constructor(
         transformer.config, int_dtype=int_dtype, float_dtype=float_dtype
     )
-    transformer_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
+    # The feed-forward silu(w1(x)) * w3(x) product reaches ~4.5e4, next to the fp16 limit, and
+    # overflows on GPU with a factor of 8 at later denoising steps (larger timesteps).
+    transformer_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "32.0"}
     models_for_export["transformer"] = (transformer, transformer_export_config)
 
     # ── VAE Encoder ────────────────────────────────────────────────────────
