@@ -771,8 +771,9 @@ class _OVModelForSenseVoice(OVModel):
         if detokenizer_path is not None and detokenizer_path.is_file():
             if self._compile_only:
                 # In compile_only mode the IR is compiled eagerly and reused as its inference request.
+                # CPU is set, as detokenizer/tokenizers are supported on CPU only.
                 self.detokenizer_model = self._compile_model(
-                    detokenizer_path, self._device, self.ov_config, self.model_save_dir
+                    detokenizer_path, "CPU", self.ov_config, self.model_save_dir
                 )
             else:
                 self.detokenizer_model = Core().read_model(detokenizer_path)
@@ -783,8 +784,9 @@ class _OVModelForSenseVoice(OVModel):
 
         if not self._compile_only:
             if self.detokenizer_model is not None and self.detokenizer_request is None:
+                # Detokenizer/tokenizers are supported on CPU only
                 self.detokenizer_request = self._compile_model(
-                    self.detokenizer_model, self._device, {**self.ov_config}, self.model_save_dir
+                    self.detokenizer_model, "CPU", {**self.ov_config}, self.model_save_dir
                 )
 
     def clear_requests(self):
