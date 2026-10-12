@@ -1241,10 +1241,6 @@ class OVPipelinePart(OVModelHostMixin, ConfigMixin, CacheMixin):
     def device(self) -> torch.device:
         return self.parent_pipeline.device
 
-    # diffusers (>=0.41) calls `module.modules()`
-    def modules(self):
-        return iter(())
-
     @property
     def dtype(self) -> torch.dtype:
         return OV_TO_PT_TYPE[self.ov_config.get("dtype", "f32")]
@@ -2168,7 +2164,7 @@ class OVModelVae(OVModelHostMixin):
 
     # diffusers (>=0.41) calls `module.modules()`
     def modules(self):
-        return iter(())
+        return []
 
     def decode(self, *args, **kwargs):
         return self.decoder(*args, **kwargs)
