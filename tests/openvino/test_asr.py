@@ -94,6 +94,46 @@ class OVASRTest(unittest.TestCase):
         del ov_model
         gc.collect()
 
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.skipif(
+        is_transformers_version("<", "4.57") or is_transformers_version(">=", "4.58"),
+        reason="Currently, we support Qwen3-ASR and FunASR only for transformers==4.57 since they are trust-remote-code models.",
+    )
+    def test_compile_false(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+
+        ref = self._get_pt_reference(model_arch)
+
+        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
+            model_id,
+            export=True,
+            trust_remote_code=True,
+            ov_config=F32_CONFIG,
+            device=OPENVINO_DEVICE,
+            compile=False,
+        )
+
+        ov_gen_kwargs = {"input_features": ref["input_features"], **ref["gen_kwargs"]}
+        if ref.get("decoder_input_ids") is not None:
+            ov_gen_kwargs["decoder_input_ids"] = ref["decoder_input_ids"]
+        if ref.get("speech_lengths") is not None:
+            ov_gen_kwargs["speech_lengths"] = ref["speech_lengths"]
+        if ref["attention_mask"] is not None:
+            ov_gen_kwargs["attention_mask"] = ref["attention_mask"]
+
+        ov_generated_ids = ov_model.generate(**ov_gen_kwargs)
+        if hasattr(ov_generated_ids, "sequences"):
+            ov_generated_ids = ov_generated_ids.sequences
+
+        prompt_len = ref["decoder_input_ids"].shape[1] if ref.get("decoder_input_ids") is not None else None
+        ov_text = ref["decode_fn"](ov_generated_ids, prompt_len)
+        self.assertEqual(ref["pt_text"], ov_text)
+
+        del ref["pt_model"]
+        del ov_model
+        gc.collect()
+
     def _get_pt_reference(self, model_arch):
         if model_arch == "fun_asr":
             return self._get_pt_reference_funasr()

@@ -903,6 +903,7 @@ class _OVModelForSenseVoice(OVModel):
                     shutil.copyfile(src, save_directory / name)
 
     def forward(self, input_features=None, speech_lengths=None, language=None, textnorm=None, **kwargs):
+        self.compile()
         np_inputs = isinstance(input_features, np.ndarray)
         if speech_lengths is None:
             n_frames = input_features.shape[1]
