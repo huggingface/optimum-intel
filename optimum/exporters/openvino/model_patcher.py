@@ -9309,15 +9309,11 @@ def _muse_glimmer_assistant_attention_mask(
 ) -> Optional[torch.Tensor]:
     """Bidirectional (optionally windowed) additive mask for the MuseGlimmer drafter.
 
-    The drafter's queries are the diffusion window; they attend bidirectionally to each
-    other and to every cached target-context key. Transformers builds this with
-    ``create_bidirectional_sliding_window_mask``, whose window test is
-    ``abs(q_idx - kv_idx) <= sliding_window`` - note the inclusive bound, which differs
-    from the exclusive one the Qwen3 DFlash reference uses.
-
-    ``key_states`` may already have been trimmed to the last ``sliding_window`` context
-    entries. Distances survive a uniform shift of both position frames, so a 0-based
-    frame over the kept keys gives the same mask as absolute positions would.
+    Replaces the per-model ``mask_mapping``, which assumes keys are cache + context + window in every layer:
+    https://github.com/huggingface/transformers/blob/v5.15.1/src/transformers/models/muse_glimmer_assistant/modeling_muse_glimmer_assistant.py#L428-L441
+    The patched attention keeps the window out of the cache and trims sliding layers, so the mask is built per layer
+    from the actual ``key_states``. The window bound stays inclusive, as in transformers:
+    https://github.com/huggingface/transformers/blob/v5.15.1/src/transformers/masking_utils.py#L146-L149
     """
     q_len = query_states.shape[-2]
     kv_len = key_states.shape[-2]
@@ -12440,7 +12436,14 @@ class LTX2VocoderPatcher(ModelPatcher):
 # so the graph is resolution-agnostic and free of the untraceable grid ops.
 # ------------------------------------------------------------------------------
 class MuseGlimmerTextEmbeddingsModelPatcher(ModelPatcher):
-    """Export the MuseGlimmer token lookup without its output RMS normalization."""
+    """Export the raw token lookup.
+
+    The original ``MuseGlimmerTextNormedEmbedding.forward`` applies a weightless
+    RMS norm after the lookup. That step is moved into the language model, which
+    runs it after text and vision embeddings are merged.     The DFlash assistant
+    needs the same raw table:
+    https://github.com/huggingface/transformers/blob/v5.15.1/src/transformers/models/muse_glimmer/modeling_muse_glimmer.py#L436-L444
+    """
 
     def __init__(
         self,
