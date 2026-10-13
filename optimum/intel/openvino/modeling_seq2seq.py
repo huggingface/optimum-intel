@@ -563,9 +563,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
                     "configurations for this model, they will not be applied."
                 )
             quantization_config = cls._resolve_default_quantization_config(model_id, quantization_config)
-            model._apply_quantization(
-                quantization_config, compile_only, compile_model, model_id, trust_remote_code
-            )
+            model._apply_quantization(quantization_config, compile_only, compile_model, model_id, trust_remote_code)
 
         return model
 
