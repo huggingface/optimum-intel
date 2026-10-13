@@ -9414,16 +9414,30 @@ class DFlash2CandidateSelector(nn.Module):
         draft_hidden_states: torch.Tensor,
         anchor_token_ids: torch.LongTensor,
     ) -> torch.Tensor:
+        predecessor_ids = self.predecessor_ids(candidate_ids, anchor_token_ids)
+        return self.score(
+            F.embedding(predecessor_ids, self.predecessor_codebook),
+            F.embedding(candidate_ids, self.successor_codebook),
+            unary_logits,
+            draft_hidden_states,
+        )
+
+    def predecessor_ids(self, candidate_ids: torch.LongTensor, anchor_token_ids: torch.LongTensor) -> torch.LongTensor:
         batch_size = candidate_ids.shape[0]
         anchor_ids = anchor_token_ids.reshape(batch_size, 1, 1).expand(-1, 1, self.selector_top_k)
-        predecessor_ids = torch.cat([anchor_ids, candidate_ids[:, :-1, :]], dim=1)
+        return torch.cat([anchor_ids, candidate_ids[:, :-1, :]], dim=1)
 
-        predecessor_codes = F.embedding(predecessor_ids, self.predecessor_codebook).to(torch.float32)
-        successor_codes = F.embedding(candidate_ids, self.successor_codebook).to(torch.float32)
+    def score(
+        self,
+        predecessor_codes: torch.Tensor,
+        successor_codes: torch.Tensor,
+        unary_logits: torch.Tensor,
+        draft_hidden_states: torch.Tensor,
+    ) -> torch.Tensor:
         projection_input = draft_hidden_states.to(self.hidden_projection.weight.dtype)
         projected_hidden = self.hidden_projection(projection_input).to(torch.float32)
-        gated_predecessors = predecessor_codes * projected_hidden.unsqueeze(2)
-        transition_scores = torch.matmul(gated_predecessors, successor_codes.transpose(-1, -2))
+        gated_predecessors = predecessor_codes.to(torch.float32) * projected_hidden.unsqueeze(2)
+        transition_scores = torch.matmul(gated_predecessors, successor_codes.to(torch.float32).transpose(-1, -2))
         return transition_scores + unary_logits.to(torch.float32).unsqueeze(-2)
 
 
@@ -9483,6 +9497,9 @@ class Qwen3DFlash2SelectorForExport(nn.Module):
         super().__init__()
         self.candidate_selector = candidate_selector
         self.config = config
+        # 16-bit export keeps module weights in checkpoint precision but casts bare parameters to float32.
+        self.predecessor_lookup = nn.Embedding.from_pretrained(candidate_selector.predecessor_codebook, freeze=True)
+        self.successor_lookup = nn.Embedding.from_pretrained(candidate_selector.successor_codebook, freeze=True)
 
     def forward(
         self,
@@ -9491,7 +9508,13 @@ class Qwen3DFlash2SelectorForExport(nn.Module):
         draft_hidden_states: torch.Tensor,
         anchor_token_ids: torch.LongTensor,
     ) -> torch.Tensor:
-        return self.candidate_selector(candidate_ids, unary_logits, draft_hidden_states, anchor_token_ids)
+        predecessor_ids = self.candidate_selector.predecessor_ids(candidate_ids, anchor_token_ids)
+        return self.candidate_selector.score(
+            self.predecessor_lookup(predecessor_ids),
+            self.successor_lookup(candidate_ids),
+            unary_logits,
+            draft_hidden_states,
+        )
 
 
 # adopted from https://github.com/deepseek-ai/DeepSpec/blob/main/deepspec/modeling/dspark/qwen3/modeling.py#L201

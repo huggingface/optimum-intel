@@ -1111,7 +1111,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 self.assertFalse(selector_model.has_rt_info(["dflash_selector", "quantization_status"]))
 
     @unittest.skipUnless(is_transformers_version(">=", "4.57"), "DFlash-2 requires Transformers 4.57 or newer")
-    def test_exporters_cli_dflash2_selector_skips_fp16_compression(self):
+    def test_exporters_cli_dflash2_fp16_applies_to_selector(self):
         model_path = get_dflash2_model_path()
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
@@ -1150,7 +1150,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 if op.get_type_name() == "Constant" and list(op.get_output_shape(0)) == codebook_shape
             ]
             self.assertGreaterEqual(len(selector_codebooks), 2)
-            self.assertTrue(all(op.get_element_type() == ov.Type.f32 for op in selector_codebooks))
+            self.assertTrue(all(op.get_element_type() == ov.Type.f16 for op in selector_codebooks))
 
     @parameterized.expand(
         [

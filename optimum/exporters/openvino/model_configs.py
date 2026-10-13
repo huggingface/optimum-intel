@@ -595,9 +595,6 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
 class DFlash2SelectorOpenVINOConfig(OpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DFlash2SelectorDummyGenerator,)
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-    # The selector is accuracy-sensitive and excluded from draft-backbone
-    # compression until quantized selector quality is characterized.
-    PRESERVE_CHECKPOINT_PRECISION = True
 
     def __init__(
         self,

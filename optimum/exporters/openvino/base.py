@@ -72,7 +72,6 @@ GENERATE_DUMMY_DOCSTRING = r"""
 class OpenVINOConfig(ExporterConfig, ABC):
     VARIANTS: ClassVar[dict[str, str]] = {"default": "The default OpenVINO variant."}
     DEFAULT_VARIANT = "default"
-    PRESERVE_CHECKPOINT_PRECISION: ClassVar[bool] = False
     PATCHING_SPECS: list[PatchingSpec] | None = None
     _MODEL_PATCHER = ModelPatcher
     MIN_TRANSFORMERS_VERSION = "4.57"

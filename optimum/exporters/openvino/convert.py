@@ -146,11 +146,7 @@ def _save_model(
     config: "OpenVINOConfig" = None,
     source_model=None,
 ):
-    compress_to_fp16 = (
-        ov_config is not None
-        and ov_config.dtype == "fp16"
-        and not getattr(config, "PRESERVE_CHECKPOINT_PRECISION", False)
-    )
+    compress_to_fp16 = ov_config is not None and ov_config.dtype == "fp16"
     model = _add_version_info_to_model(model, library_name)
 
     runtime_options = config.runtime_options if hasattr(config, "runtime_options") else {}
@@ -498,43 +494,31 @@ def export_models(
         list of input_names and output_names from OpenVINO configuration
     """
 
-    outputs = [None] * len(models_and_export_configs)
+    outputs = []
 
     if output_names is not None and len(output_names) != len(models_and_export_configs):
         raise ValueError(
             f"Provided custom names {output_names} for the export of {len(models_and_export_configs)} models. Please provide the same number of names as models to export."
         )
 
-    model_names = list(models_and_export_configs)
-    # The 16-bit traceability patch mutates shared PyTorch modules. Export
-    # opt-out components first so a later component cannot change their
-    # checkpoint precision before conversion.
-    export_order = sorted(
-        model_names,
-        key=lambda name: not getattr(
-            models_and_export_configs[name][1],
-            "PRESERVE_CHECKPOINT_PRECISION",
-            False,
-        ),
-    )
-    for model_name in export_order:
-        i = model_names.index(model_name)
+    for i, model_name in enumerate(models_and_export_configs.keys()):
         submodel, sub_export_config = models_and_export_configs[model_name]
         output_name = output_names[i] if output_names is not None else Path(model_name + ".xml")
         output_path = output_dir / output_name
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        outputs[i] = export(
-            model=submodel,
-            config=sub_export_config,
-            output=output_path,
-            device=device,
-            input_shapes=input_shapes,
-            model_kwargs=model_kwargs,
-            ov_config=ov_config,
-            stateful=stateful[i] if isinstance(stateful, (list, tuple)) else stateful,
-            patch_16bit_model=patch_16bit_model
-            and not getattr(sub_export_config, "PRESERVE_CHECKPOINT_PRECISION", False),
-            library_name=library_name,
+        outputs.append(
+            export(
+                model=submodel,
+                config=sub_export_config,
+                output=output_path,
+                device=device,
+                input_shapes=input_shapes,
+                model_kwargs=model_kwargs,
+                ov_config=ov_config,
+                stateful=stateful[i] if isinstance(stateful, (list, tuple)) else stateful,
+                patch_16bit_model=patch_16bit_model,
+                library_name=library_name,
+            )
         )
 
     outputs = list(map(list, zip(*outputs)))
