@@ -1518,6 +1518,11 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
             return _OVModelForFunAsr._from_pretrained(model_id, config, **kwargs)
         if getattr(config, "model_type", None) == "qwen3_asr":
             if not _OVModelForQwen3ASR._is_split_export(model_id, **kwargs):
+                logger.warning(
+                    "The Qwen3-ASR encoder/decoder export format is deprecated. Re-export the model with the "
+                    "current version of Optimum Intel to use the audio_encoder, text_embeddings, and "
+                    "language_model format. Loading the legacy export for backward compatibility."
+                )
                 config.is_encoder_decoder = True
                 return super()._from_pretrained(model_id, config, **kwargs)
             return _OVModelForQwen3ASR._from_pretrained(model_id, config, **kwargs)
