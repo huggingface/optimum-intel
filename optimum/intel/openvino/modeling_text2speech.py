@@ -16,6 +16,7 @@ import gc
 import logging
 import os
 import re
+import shutil
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -1978,6 +1979,8 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
         if source.is_dir() and self._is_complete_export(source) and source.resolve() != save_directory.resolve():
             self._copy_assets(source, save_directory)
         elif not self._is_complete_export(save_directory):
+            # Fallback to main_export when there is no complete export to copy from.
+            # This happens when an instance is loaded with `export=False`.
             from optimum.exporters.openvino import main_export
 
             main_export(
@@ -1988,8 +1991,6 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
 
     def _copy_assets(self, source: Path, destination: Path) -> None:
         """Copy the non-IR assets of a complete export into ``destination``."""
-        import shutil
-
         ir_files = set()
         for ir_name in self._all_ov_model_paths.values():
             ir_files.add(ir_name)
