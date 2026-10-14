@@ -1086,8 +1086,8 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
         if self.text_encoder is not None:
             self.text_encoder.model = self._reshape_text_encoder(
-                # GemmaTokenizer uses inf as model_max_length; LTX, QwenImage and Z-Image text
-                # encoders do not pad their input to model_max_length (Z-Image pads to its own
+                # GemmaTokenizer uses inf as model_max_length; LTX, QwenImage, Z-Image and FLUX.2 text
+                # encoders do not pad their input to model_max_length (Z-Image and FLUX.2 pad to their own
                 # max_sequence_length), so their sequence dimension must stay dynamic
                 self.text_encoder.model,
                 batch_size,
@@ -1097,6 +1097,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
                     and not self.__class__.__name__.startswith("OVLTX")
                     and not self.__class__.__name__.startswith("OVQwenImage")
                     and not self.__class__.__name__.startswith("OVZImage")
+                    and not self.__class__.__name__.startswith("OVFlux2")
                     and not getattr(self, "_is_ltx_pipeline", False)
                     else -1
                 ),
@@ -2202,6 +2203,10 @@ class OVModelVae(OVModelHostMixin):
     @property
     def device(self):
         return self.decoder.device
+
+    # diffusers (>=0.41) calls `module.modules()`
+    def modules(self):
+        return []
 
     def decode(self, *args, **kwargs):
         return self.decoder(*args, **kwargs)
