@@ -1208,6 +1208,22 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
             diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).frames
             np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
 
+    @unittest.skipUnless(is_diffusers_version(">=", "0.33.0"), "LTX Video 0.9.5 requires diffusers >= 0.33")
+    @require_diffusers
+    def test_ltx_video_0_9_5_batched_decoder_timesteps(self):
+        model_arch = "ltx-video-0.9.5"
+        inputs = self.generate_inputs(height=64, width=64, batch_size=3, num_frames=9, model_arch=model_arch)
+        inputs["prompt"] = ["a sailboat", "a lighthouse", "a mountain"]
+        inputs["decode_timestep"] = [0.0, 0.5, 1.0]
+        inputs["decode_noise_scale"] = 0.0
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
+        diffusers_pipeline = self.AUTOMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch])
+
+        ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).frames
+        diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).frames
+        self.assertEqual(ov_output.shape, (3, 9, 64, 64, 3))
+        np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
     def test_compare_spatio_temporal_guidance_to_diffusers_pipeline(self, model_arch: str):
@@ -1433,6 +1449,22 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
             ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).frames
             diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).frames
             np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
+
+    @unittest.skipUnless(is_diffusers_version(">=", "0.33.0"), "LTX Video 0.9.5 requires diffusers >= 0.33")
+    @require_diffusers
+    def test_ltx_video_0_9_5_batched_images(self):
+        model_arch = "ltx-video-0.9.5"
+        inputs = self.generate_inputs(height=64, width=96, batch_size=3, num_frames=9, model_arch=model_arch)
+        inputs["image"] = [inputs["image"][0].rotate(angle) for angle in (0, 90, 180)]
+        inputs["prompt"] = ["a sailboat", "a lighthouse", "a mountain"]
+        inputs["output_type"] = "np"
+        ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
+        diffusers_pipeline = self._auto_cls(model_arch).from_pretrained(MODEL_NAMES[model_arch])
+
+        ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).frames
+        diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).frames
+        self.assertEqual(np.asarray(ov_output).shape, (3, 9, 64, 96, 3))
+        np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
