@@ -41,6 +41,7 @@ from transformers.file_utils import add_start_docstrings
 from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.utils import ModelOutput
 
+from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import model_has_state
 from . import OV_DECODER_NAME, OV_ENCODER_NAME
 from .configuration import OVConfig, OVWeightQuantizationConfig
@@ -1436,8 +1437,6 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
         :meth:`_resolve_ir_dir` resolves for this model, so a second load finds the IRs already
         there instead of converting again.
         """
-        from optimum.exporters.openvino import main_export
-
         source = Path(str(model_id))
         if source.is_dir() and cls._is_complete_export(source):
             return source  # already an exported directory
@@ -1981,8 +1980,6 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
         elif not self._is_complete_export(save_directory):
             # Fallback to main_export when there is no complete export to copy from.
             # This happens when an instance is loaded with `export=False`.
-            from optimum.exporters.openvino import main_export
-
             main_export(
                 model_name_or_path=str(self.model_save_dir),
                 output=save_directory,
