@@ -879,6 +879,8 @@ class LTXVaeDummyInputGenerator(DummyVisionInputGenerator):
         self.num_frames = num_frames
         config = normalized_config.config
         down_block_types = getattr(config, "down_block_types", ())
+        # LTX Video 0.9.5 encoder blocks require an initial frame followed by one full temporal
+        # compression window; decoder latents keep the requested number of frames.
         self.sample_num_frames = (
             getattr(config, "temporal_compression_ratio", 8) + 1
             if "LTXVideo095DownBlock3D" in down_block_types
