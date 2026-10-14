@@ -1655,6 +1655,8 @@ class TestLoadAfterSaving(OVModelForVisualCausalLMIntegrationTest):
     def test_model_can_be_loaded_after_saving(self, model_arch):
         if model_arch == "speecht5":
             self.skipTest("SpeechT5 requires a vocoder, so the test needs updating to test this model.")
+        if model_arch == "qwen3_tts" and not is_qwen_tts_available():
+            self.skipTest("qwen_tts package is not installed")
         model_id = MODEL_NAMES[model_arch]
         model_class = self.OVMODEL_CLASS
         if model_arch in OVModelForTextToSpeechSeq2SeqIntegrationTest.TTS_SUPPORTED_ARCHITECTURES:
