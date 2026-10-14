@@ -133,6 +133,11 @@ def _set_runtime_options(
             getattr(sub_export_config, "_orig_config", None), "model_type", None
         ) in {"gemma3n", "gemma4_unified"}:
             sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "8.0"
+        # Qwen3-TTS decoder stacks are stateful, but that is decided per model in
+        # `_get_submodels_and_export_configs` rather than on the export config, so the check above
+        # misses them. Without the scale the code predictor logits overflow fp16 on GPU.
+        if library_name == "qwen3_tts" and model_name in ("talker_model", "code_predictor_model"):
+            sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "8.0"
 
 
 def _save_model(
