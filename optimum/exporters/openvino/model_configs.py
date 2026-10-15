@@ -40,10 +40,9 @@ from optimum.exporters.openvino.config import (
 )
 from optimum.exporters.openvino.dflash_utils import (
     DSPARK_ARCHITECTURES,
-    DSPARK_CANDIDATE_SCORER_INTERFACE,
-    DSPARK_MARKOV_STEP_INTERFACE,
+    MARKOV_HEAD_INTERFACE,
+    markov_head_default_top_k,
     parse_and_validate_dspark_config,
-    validate_dspark_top_k,
 )
 from optimum.exporters.openvino.input_generators import (
     AquilaDummyPastKeyValuesGenerator,
@@ -595,12 +594,18 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
 
 
 class DSparkMarkovHeadOpenVINOConfig(OpenVINOConfig):
-    """A DSpark Markov-head model, exported next to the draft backbone."""
+    """The DSpark Markov-head model, exported next to the draft backbone.
+
+    It holds the dense Markov step and the Top-K lattice as two independent computations over the
+    same weights (see `MarkovHeadForExport`). The lattice takes the draft rows of several blocks packed
+    back to back. edge_scores already include each candidate's draft logit, so the runtime must not
+    add it again.
+    """
 
     DUMMY_INPUT_GENERATOR_CLASSES = (DSparkMarkovDummyGenerator,)
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     # Written to dflash/interface; names the input/output contract the runtime expects.
-    dflash_interface: str
+    dflash_interface = MARKOV_HEAD_INTERFACE
 
     def __init__(
         self,
@@ -618,47 +623,24 @@ class DSparkMarkovHeadOpenVINOConfig(OpenVINOConfig):
             preprocessors=preprocessors,
         )
         if parse_and_validate_dspark_config(config).markov_rank == 0:
-            raise ValueError("The DSpark Markov head models require a draft with a Markov head (markov_rank > 0).")
-
-
-class DSparkMarkovStepOpenVINOConfig(DSparkMarkovHeadOpenVINOConfig):
-    """Dense DSpark Markov step: previous token ids in, full-vocabulary logit bias out."""
-
-    dflash_interface = DSPARK_MARKOV_STEP_INTERFACE
-
-    @property
-    def inputs(self) -> Dict[str, Dict[int, str]]:
-        return {"prev_token_ids": {0: "batch_size"}}
-
-    @property
-    def outputs(self) -> Dict[str, Dict[int, str]]:
-        return {"markov_bias": {0: "batch_size"}}
-
-
-class DSparkMarkovCandidateScorerOpenVINOConfig(DSparkMarkovHeadOpenVINOConfig):
-    """Opt-in Top-K lattice over the DSpark Markov head.
-
-    edge_scores already include each candidate's draft logit, so the runtime must not add it again.
-    """
-
-    dflash_interface = DSPARK_CANDIDATE_SCORER_INTERFACE
-
-    def __init__(self, config: PretrainedConfig, top_k: int, **kwargs):
-        super().__init__(config, **kwargs)
-        self.dspark_top_k = validate_dspark_top_k(config, top_k)
+            raise ValueError("The DSpark Markov head model requires a draft with a Markov head (markov_rank > 0).")
+        self.markov_head_top_k = markov_head_default_top_k(config)
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         return {
-            "draft_logits": {0: "batch_size", 1: "draft_sequence_length"},
-            "anchor_token_ids": {0: "batch_size"},
+            "prev_token_ids": {0: "num_prev_tokens"},
+            "draft_logits": {0: "num_draft_rows"},
+            "anchor_token_ids": {0: "num_draft_blocks"},
+            "subsequence_begins": {0: "num_draft_blocks + 1"},
         }
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
         return {
-            "edge_scores": {0: "batch_size", 1: "draft_sequence_length"},
-            "candidate_ids": {0: "batch_size", 1: "draft_sequence_length"},
+            "markov_bias": {0: "num_prev_tokens"},
+            "edge_scores": {0: "num_draft_rows"},
+            "candidate_ids": {0: "num_draft_rows"},
         }
 
 

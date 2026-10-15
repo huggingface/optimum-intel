@@ -30,15 +30,14 @@ from optimum.exporters.openvino import export_from_model
 from optimum.exporters.openvino.__main__ import main_export
 from optimum.exporters.openvino.convert import _get_submodels_and_export_configs, export_models
 from optimum.exporters.openvino.dflash_utils import (
+    MARKOV_HEAD_DEFAULT_TOP_K,
     DSparkConfig,
     parse_and_validate_dspark_config,
-    validate_dspark_top_k,
 )
 from optimum.exporters.openvino.model_configs import Qwen3OpenVINOConfig
 from optimum.exporters.openvino.model_patcher import (
-    DSparkMarkovCandidateScorerForExport,
-    DSparkMarkovStepForExport,
     DSparkVanillaMarkovHead,
+    DSparkVanillaMarkovHeadForExport,
     Qwen3DSparkForCausalLM,
 )
 from optimum.intel.openvino.utils import TemporaryDirectory
@@ -179,6 +178,26 @@ class DSparkExportTest(unittest.TestCase):
         return torch.stack(tokens, dim=1)
 
     @staticmethod
+    def _packed_blocks(block_lengths, vocab_size):
+        """Draft logits of several blocks packed back to back, one anchor per block, and the block offsets."""
+        draft_logits = torch.randn(sum(block_lengths), vocab_size) * 4
+        anchor_token_ids = torch.randint(vocab_size, (len(block_lengths),))
+        subsequence_begins = torch.tensor([0, *block_lengths]).cumsum(dim=0)
+        return {
+            "draft_logits": draft_logits,
+            "anchor_token_ids": anchor_token_ids,
+            "subsequence_begins": subsequence_begins,
+        }
+
+    @staticmethod
+    def _reference_edges(markov_w1, markov_w2, draft_logits, anchor_token_id, top_k):
+        """Top-K lattice of one draft block: the anchor precedes its first row."""
+        unary_logits, candidate_ids = draft_logits.topk(top_k, dim=-1)
+        predecessor_ids = torch.cat([torch.full((1, top_k), int(anchor_token_id)), candidate_ids[:-1]])
+        edge_scores = markov_w1[predecessor_ids] @ markov_w2[candidate_ids].transpose(-1, -2)
+        return edge_scores + unary_logits.unsqueeze(-2), candidate_ids
+
+    @staticmethod
     def _markov_weights(model, config, element_type=None):
         shapes = ([config.vocab_size, config.markov_rank], [config.markov_rank, config.vocab_size])
         return [
@@ -190,7 +209,7 @@ class DSparkExportTest(unittest.TestCase):
         ]
 
     @staticmethod
-    def _export(model, output_dir, patch_16bit_model=False, dspark_top_k=None):
+    def _export(model, output_dir, patch_16bit_model=False):
         _, parts, stateful = _get_submodels_and_export_configs(
             model,
             task="text-generation",
@@ -200,7 +219,6 @@ class DSparkExportTest(unittest.TestCase):
             _variant="default",
             library_name="transformers",
             stateful=False,
-            dspark_top_k=dspark_top_k,
         )
         export_models(
             parts,
@@ -247,34 +265,11 @@ class DSparkExportTest(unittest.TestCase):
                 parse_and_validate_dspark_config(self._dspark_config(**fields))
 
         config = self._dspark_config(markov_rank=8)
-        self.assertEqual(validate_dspark_top_k(config, self.TOP_K), self.TOP_K)
-        self.assertEqual(validate_dspark_top_k(config, config.vocab_size), config.vocab_size)
-        for top_k in (0, config.vocab_size + 1, True, 2.0):
-            with self.subTest(top_k=top_k), self.assertRaises(ValueError):
-                validate_dspark_top_k(config, top_k)
-        with self.assertRaisesRegex(ValueError, "markov_rank > 0"):
-            validate_dspark_top_k(self._dspark_config(), self.TOP_K)
-        for non_dspark in (None, Qwen3Config(vocab_size=32)):
-            with self.subTest(config=non_dspark), self.assertRaisesRegex(ValueError, "only supported for DSpark"):
-                validate_dspark_top_k(non_dspark, self.TOP_K)
-
         self.assertEqual(Qwen3OpenVINOConfig(config).candidate_position_offset, 0)
         masked_anchor_config = self._dspark_config(markov_rank=8, sample_from_anchor=False)
         self.assertEqual(Qwen3OpenVINOConfig(masked_anchor_config).candidate_position_offset, 1)
         with self.assertRaisesRegex(ValueError, "not supported"):
             Qwen3OpenVINOConfig(self._dspark_config(markov_rank=8, markov_head_type="rnn"))
-
-    def test_top_k_option_requires_a_dspark_markov_draft(self):
-        with TemporaryDirectory() as tmpdirname:
-            with self.assertRaisesRegex(ValueError, "only supported for DSpark"):
-                main_export(MODEL_NAMES["qwen3"], output=tmpdirname, task="text-generation", dspark_top_k=self.TOP_K)
-            with self.assertRaisesRegex(ValueError, "markov_rank > 0"):
-                main_export(
-                    MODEL_NAMES["qwen3_deepspec_dflash"],
-                    output=tmpdirname,
-                    task="text-generation",
-                    dspark_top_k=self.TOP_K,
-                )
 
     def test_markov_rank_zero_draft_exports_a_plain_dflash_package(self):
         # DeepSpec publishes its DFlash drafts as DSpark checkpoints with markov_rank=0.
@@ -327,100 +322,132 @@ class DSparkExportTest(unittest.TestCase):
         )
         self.assertEqual(parts["model"][1].candidate_position_offset, 1)
 
-    def test_dense_export_package_and_markov_step_parity(self):
+    def test_export_package_and_markov_head_parity(self):
         model = self._model()
         config = model.config
         with TemporaryDirectory() as tmpdirname:
             output_dir = Path(tmpdirname)
             parts = self._export(model, output_dir)
-            self.assertEqual(list(parts), ["model", "markov_step_model"])
-            self.assertFalse((output_dir / "openvino_candidate_scorer_model.xml").exists())
+            self.assertEqual(list(parts), ["model", "markov_head_model"])
 
             core = ov.Core()
             draft_ir = core.read_model(output_dir / "openvino_model.xml")
-            markov_step_ir = core.read_model(output_dir / "openvino_markov_step_model.xml")
+            markov_head_ir = core.read_model(output_dir / "openvino_markov_head_model.xml")
             draft_rt_info = draft_ir.get_rt_info()["dflash"]
             self.assertEqual(draft_rt_info["candidate_position_offset"].value, "0")
             self.assertEqual(draft_rt_info["markov_rank"].value, str(config.markov_rank))
             self.assertEqual(draft_rt_info["markov_head_type"].value, "vanilla")
             self.assertEqual(self._markov_weights(draft_ir, config), [])
 
-            markov_rt_info = markov_step_ir.get_rt_info()["dflash"]
+            markov_rt_info = markov_head_ir.get_rt_info()["dflash"]
             expected_rt_info = {
-                "interface": "markov_step_v1",
+                "interface": "markov_head_v1",
+                "top_k": str(MARKOV_HEAD_DEFAULT_TOP_K),
                 "markov_rank": str(config.markov_rank),
                 "markov_head_type": "vanilla",
                 "vocab_size": str(config.vocab_size),
             }
             self.assertEqual({name: markov_rt_info[name].value for name in markov_rt_info}, expected_rt_info)
-            self.assertFalse(markov_step_ir.has_rt_info(["dflash_mode"]))
-            self.assertFalse(markov_step_ir.has_rt_info(["hidden_states_decoder_layers"]))
+            self.assertFalse(markov_head_ir.has_rt_info(["dflash_mode"]))
+            self.assertFalse(markov_head_ir.has_rt_info(["hidden_states_decoder_layers"]))
             self.assertEqual(
-                {item.any_name: item.element_type for item in markov_step_ir.inputs},
-                {"prev_token_ids": ov.Type.i64},
+                {item.any_name: item.element_type for item in markov_head_ir.inputs},
+                {
+                    "prev_token_ids": ov.Type.i64,
+                    "draft_logits": ov.Type.f32,
+                    "anchor_token_ids": ov.Type.i64,
+                    "subsequence_begins": ov.Type.i64,
+                },
             )
             self.assertEqual(
-                {item.any_name: item.element_type for item in markov_step_ir.outputs},
-                {"markov_bias": ov.Type.f32},
+                {item.any_name: item.element_type for item in markov_head_ir.outputs},
+                {"markov_bias": ov.Type.f32, "edge_scores": ov.Type.f32, "candidate_ids": ov.Type.i64},
             )
-            self.assertGreaterEqual(len(self._markov_weights(markov_step_ir, config)), 2)
+            self.assertEqual(len([op for op in markov_head_ir.get_ops() if op.get_type_name() == "TopK"]), 1)
+            # Both computations read the same two Markov tables, and the serialized weights hold each once.
+            table_bytes = config.vocab_size * config.markov_rank * ov.Type.f32.size
+            self.assertGreaterEqual(len(self._markov_weights(markov_head_ir, config)), 2)
+            self.assertLess((output_dir / "openvino_markov_head_model.bin").stat().st_size, 3 * table_bytes)
 
-            compiled_markov_step = core.compile_model(markov_step_ir, "CPU")
-            for prev_token_ids in (torch.tensor([7]), torch.tensor([0, 5, config.vocab_size - 1])):
-                with self.subTest(batch_size=prev_token_ids.numel()):
+            compiled_markov_head = core.compile_model(markov_head_ir, "CPU")
+            for prev_token_ids, block_lengths in ((torch.tensor([7]), [1]), (torch.tensor([0, 5, 9]), [4, 2])):
+                with self.subTest(num_prev_tokens=prev_token_ids.numel(), block_lengths=block_lengths):
+                    markov_head_inputs = {
+                        "prev_token_ids": prev_token_ids,
+                        **self._packed_blocks(block_lengths, config.vocab_size),
+                    }
                     with torch.no_grad():
-                        reference = model.markov_head(prev_token_ids)
-                    ov_bias = compiled_markov_step({"prev_token_ids": prev_token_ids.numpy()})[0]
-                    torch.testing.assert_close(torch.from_numpy(np.array(ov_bias)), reference, rtol=1e-4, atol=1e-4)
+                        reference = parts["markov_head_model"][0](**markov_head_inputs)
+                    ov_outputs = compiled_markov_head(
+                        {name: value.numpy() for name, value in markov_head_inputs.items()}
+                    )
+                    for name in ("markov_bias", "edge_scores"):
+                        ov_output = torch.from_numpy(np.array(ov_outputs[compiled_markov_head.output(name)]))
+                        torch.testing.assert_close(ov_output, reference[name], rtol=1e-4, atol=1e-4)
+                    ov_candidate_ids = np.array(ov_outputs[compiled_markov_head.output("candidate_ids")])
+                    self.assertTrue(torch.equal(torch.from_numpy(ov_candidate_ids), reference.candidate_ids))
 
-    def test_top_k_export_replaces_markov_step_with_candidate_scorer(self):
+    @staticmethod
+    def _keep_computation(markov_head_ir, input_names, output_names, top_k=None):
+        """Keep one computation of the Markov head model and optionally replace K, as runtimes do at load time."""
+        markov_head_ir = markov_head_ir.clone()
+        computation = ov.Model(
+            [markov_head_ir.output(name).get_node() for name in output_names],
+            [markov_head_ir.input(name).get_node() for name in input_names],
+        )
+        if top_k is not None:
+            (topk,) = [op for op in computation.get_ops() if op.get_type_name() == "TopK"]
+            k_type = topk.input_value(1).get_element_type()
+            topk.input(1).replace_source_output(
+                ov.opset13.constant(np.array(top_k, dtype=k_type.to_dtype())).output(0)
+            )
+            computation.validate_nodes_and_infer_types()
+        return computation
+
+    def test_markov_head_model_splits_into_dense_step_and_packed_top_k_lattice(self):
         model = self._model()
         config = model.config
         with TemporaryDirectory() as tmpdirname:
             output_dir = Path(tmpdirname)
-            parts = self._export(model, output_dir, dspark_top_k=self.TOP_K)
-            self.assertEqual(list(parts), ["model", "candidate_scorer_model"])
-            self.assertFalse((output_dir / "openvino_markov_step_model.xml").exists())
-
+            markov_head = self._export(model, output_dir)["markov_head_model"][0]
             core = ov.Core()
-            candidate_scorer_ir = core.read_model(output_dir / "openvino_candidate_scorer_model.xml")
-            candidate_scorer_rt_info = candidate_scorer_ir.get_rt_info()["dflash"]
-            expected_rt_info = {
-                "interface": "topk_lattice_v1",
-                "top_k": str(self.TOP_K),
-                "markov_rank": str(config.markov_rank),
-                "markov_head_type": "vanilla",
-                "vocab_size": str(config.vocab_size),
-            }
-            self.assertEqual(
-                {name: candidate_scorer_rt_info[name].value for name in candidate_scorer_rt_info}, expected_rt_info
-            )
-            self.assertFalse(candidate_scorer_ir.has_rt_info(["dflash_mode"]))
-            self.assertEqual(
-                {item.any_name: item.element_type for item in candidate_scorer_ir.inputs},
-                {"draft_logits": ov.Type.f32, "anchor_token_ids": ov.Type.i64},
-            )
-            self.assertEqual({item.any_name for item in candidate_scorer_ir.outputs}, {"edge_scores", "candidate_ids"})
-            self.assertEqual(candidate_scorer_ir.output("edge_scores").element_type, ov.Type.f32)
-            self.assertEqual(candidate_scorer_ir.output("candidate_ids").element_type, ov.Type.i64)
-            self.assertTrue(any(op.get_type_name() == "TopK" for op in candidate_scorer_ir.get_ops()))
+            markov_head_ir = core.read_model(output_dir / "openvino_markov_head_model.xml")
 
-            compiled_candidate_scorer = core.compile_model(candidate_scorer_ir, "CPU")
-            for num_draft_tokens in (1, 4):
-                with self.subTest(num_draft_tokens=num_draft_tokens):
-                    candidate_scorer_inputs = {
-                        "draft_logits": torch.randn(1, num_draft_tokens, config.vocab_size) * 4,
-                        "anchor_token_ids": torch.tensor([11]),
-                    }
-                    with torch.no_grad():
-                        reference = parts["candidate_scorer_model"][0](**candidate_scorer_inputs)
-                    ov_outputs = compiled_candidate_scorer(
-                        {name: value.numpy() for name, value in candidate_scorer_inputs.items()}
+            markov_step_ir = self._keep_computation(markov_head_ir, ["prev_token_ids"], ["markov_bias"])
+            self.assertFalse(any(op.get_type_name() == "TopK" for op in markov_step_ir.get_ops()))
+            prev_token_ids = torch.tensor([0, 5, config.vocab_size - 1])
+            ov_bias = core.compile_model(markov_step_ir, "CPU")({"prev_token_ids": prev_token_ids.numpy()})[0]
+            with torch.no_grad():
+                reference_bias = markov_head.markov_bias(prev_token_ids)
+            torch.testing.assert_close(torch.from_numpy(np.array(ov_bias)), reference_bias, rtol=1e-4, atol=1e-4)
+
+            # Blocks of different lengths in one call match the lattices of the blocks scored one by one.
+            block_lengths = [3, 1, 4]
+            lattice_inputs = self._packed_blocks(block_lengths, config.vocab_size)
+            markov_w1 = markov_head.markov_head.markov_w1.weight.detach()
+            markov_w2 = markov_head.markov_head.markov_w2.weight.detach()
+            for top_k in (None, self.TOP_K):
+                with self.subTest(top_k=top_k):
+                    lattice_ir = self._keep_computation(
+                        markov_head_ir, list(lattice_inputs), ["edge_scores", "candidate_ids"], top_k
                     )
-                    ov_candidate_ids = np.array(ov_outputs[compiled_candidate_scorer.output("candidate_ids")])
-                    ov_edges = np.array(ov_outputs[compiled_candidate_scorer.output("edge_scores")])
-                    self.assertTrue(torch.equal(torch.from_numpy(ov_candidate_ids), reference.candidate_ids))
-                    torch.testing.assert_close(torch.from_numpy(ov_edges), reference.edge_scores, rtol=1e-4, atol=1e-4)
+                    expected_top_k = top_k or MARKOV_HEAD_DEFAULT_TOP_K
+                    self.assertEqual(lattice_ir.output("candidate_ids").partial_shape[1], expected_top_k)
+                    compiled_lattice = core.compile_model(lattice_ir, "CPU")
+                    ov_outputs = compiled_lattice({name: value.numpy() for name, value in lattice_inputs.items()})
+                    ov_candidate_ids = torch.from_numpy(np.array(ov_outputs[compiled_lattice.output("candidate_ids")]))
+                    ov_edges = torch.from_numpy(np.array(ov_outputs[compiled_lattice.output("edge_scores")]))
+                    begins = lattice_inputs["subsequence_begins"].tolist()
+                    for block, (begin, end) in enumerate(zip(begins[:-1], begins[1:])):
+                        expected_edges, expected_ids = self._reference_edges(
+                            markov_w1,
+                            markov_w2,
+                            lattice_inputs["draft_logits"][begin:end],
+                            lattice_inputs["anchor_token_ids"][block],
+                            expected_top_k,
+                        )
+                        self.assertTrue(torch.equal(ov_candidate_ids[begin:end], expected_ids))
+                        torch.testing.assert_close(ov_edges[begin:end], expected_edges, rtol=1e-4, atol=1e-4)
 
     def test_dense_walk_and_lattice_reproduce_deepspec_markov_sampling(self):
         torch.manual_seed(4)
@@ -436,21 +463,21 @@ class DSparkExportTest(unittest.TestCase):
             reference_tokens = self._reference_greedy_block(markov_head, base_logits, anchor_token_ids)
             self.assertFalse(torch.equal(base_logits.argmax(dim=-1), reference_tokens))
 
-            # Dense runtime walk: one step-graph call per draft position on the previously drafted token.
-            markov_step = DSparkMarkovStepForExport(markov_head, config)
+            # Dense runtime walk: one dense-step call per draft position on the previously drafted token.
+            markov_head_for_export = DSparkVanillaMarkovHeadForExport(markov_head, config, top_k=vocab_size)
             previous_token_ids = anchor_token_ids
             dense_tokens = []
             for position in range(num_draft_tokens):
-                step_logits = base_logits[:, position] + markov_step(previous_token_ids).markov_bias
+                step_logits = base_logits[:, position] + markov_head_for_export.markov_bias(previous_token_ids)
                 previous_token_ids = step_logits.argmax(dim=-1)
                 dense_tokens.append(previous_token_ids)
             self.assertTrue(torch.equal(torch.stack(dense_tokens, dim=1), reference_tokens))
 
             for top_k in (vocab_size, 7):
                 with self.subTest(top_k=top_k):
-                    candidate_scorer = DSparkMarkovCandidateScorerForExport(markov_head, config, top_k)
-                    lattice = candidate_scorer(base_logits, anchor_token_ids)
-                    edge_scores, candidate_ids = lattice.edge_scores[0], lattice.candidate_ids[0]
+                    edge_scores, candidate_ids = markov_head_for_export.score_candidates(
+                        base_logits[0], anchor_token_ids, torch.tensor([0, num_draft_tokens]), top_k
+                    )
                     predecessor_ids = torch.cat([anchor_token_ids.expand(1, top_k), candidate_ids[:-1]])
                     for position in range(num_draft_tokens):
                         corrected_logits = base_logits[0, position] + markov_head(predecessor_ids[position])
@@ -467,40 +494,41 @@ class DSparkExportTest(unittest.TestCase):
                     if top_k == vocab_size:
                         self.assertEqual(lattice_tokens, reference_tokens[0].tolist())
 
-    def test_bf16_markov_head_models_keep_checkpoint_weights_and_fp32_outputs(self):
+    def test_bf16_markov_head_model_keeps_checkpoint_weights_and_fp32_outputs(self):
         model = self._model().to(torch.bfloat16)
         config = model.config
-        top_k_model = self._model().to(torch.bfloat16)
         with TemporaryDirectory() as tmpdirname:
             output_dir = Path(tmpdirname)
-            self._export(model, output_dir / "dense", patch_16bit_model=True)
-            self._export(top_k_model, output_dir / "top_k", patch_16bit_model=True, dspark_top_k=self.TOP_K)
+            self._export(model, output_dir, patch_16bit_model=True)
             core = ov.Core()
-            markov_step_ir = core.read_model(output_dir / "dense" / "openvino_markov_step_model.xml")
-            candidate_scorer_ir = core.read_model(output_dir / "top_k" / "openvino_candidate_scorer_model.xml")
-            self.assertEqual(markov_step_ir.output("markov_bias").element_type, ov.Type.f32)
-            self.assertEqual(candidate_scorer_ir.input("draft_logits").element_type, ov.Type.f32)
-            self.assertEqual(candidate_scorer_ir.output("edge_scores").element_type, ov.Type.f32)
-            for markov_model in (markov_step_ir, candidate_scorer_ir):
-                self.assertEqual(self._markov_weights(markov_model, config, ov.Type.f32), [])
-                self.assertGreaterEqual(len(self._markov_weights(markov_model, config, ov.Type.bf16)), 2)
+            markov_head_ir = core.read_model(output_dir / "openvino_markov_head_model.xml")
+            self.assertEqual(markov_head_ir.output("markov_bias").element_type, ov.Type.f32)
+            self.assertEqual(markov_head_ir.input("draft_logits").element_type, ov.Type.f32)
+            self.assertEqual(markov_head_ir.output("edge_scores").element_type, ov.Type.f32)
+            self.assertEqual(self._markov_weights(markov_head_ir, config, ov.Type.f32), [])
+            self.assertGreaterEqual(len(self._markov_weights(markov_head_ir, config, ov.Type.bf16)), 2)
 
             markov_w1 = model.markov_head.markov_w1.weight.float()
             markov_w2 = model.markov_head.markov_w2.weight.float()
-            compiled_markov_step = core.compile_model(markov_step_ir, "CPU")
-            ov_bias = np.array(compiled_markov_step({"prev_token_ids": np.array([3], dtype=np.int64)})[0])
-            torch.testing.assert_close(torch.from_numpy(ov_bias), markov_w1[[3]] @ markov_w2.T, rtol=1e-4, atol=1e-4)
-
-            compiled_candidate_scorer = core.compile_model(candidate_scorer_ir, "CPU")
-            draft_logits = torch.randn(1, 3, config.vocab_size) * 4
-            anchor_token_ids = torch.tensor([11])
-            ov_outputs = compiled_candidate_scorer(
-                {"draft_logits": draft_logits.numpy(), "anchor_token_ids": anchor_token_ids.numpy()}
+            compiled_markov_head = core.compile_model(markov_head_ir, "CPU")
+            lattice_inputs = self._packed_blocks([3], config.vocab_size)
+            ov_outputs = compiled_markov_head(
+                {
+                    "prev_token_ids": np.array([3], dtype=np.int64),
+                    **{name: value.numpy() for name, value in lattice_inputs.items()},
+                }
             )
-            candidate_ids = torch.from_numpy(np.array(ov_outputs[compiled_candidate_scorer.output("candidate_ids")]))
-            self.assertTrue(torch.equal(candidate_ids, draft_logits.topk(self.TOP_K, dim=-1).indices))
-            predecessor_ids = torch.cat([anchor_token_ids.expand(1, 1, self.TOP_K), candidate_ids[:, :-1]], dim=1)
-            expected_edges = markov_w1[predecessor_ids] @ markov_w2[candidate_ids].transpose(-1, -2)
-            expected_edges += draft_logits.gather(-1, candidate_ids).unsqueeze(-2)
-            ov_edges = torch.from_numpy(np.array(ov_outputs[compiled_candidate_scorer.output("edge_scores")]))
+            ov_bias = torch.from_numpy(np.array(ov_outputs[compiled_markov_head.output("markov_bias")]))
+            torch.testing.assert_close(ov_bias, markov_w1[[3]] @ markov_w2.T, rtol=1e-4, atol=1e-4)
+
+            expected_edges, expected_ids = self._reference_edges(
+                markov_w1,
+                markov_w2,
+                lattice_inputs["draft_logits"],
+                lattice_inputs["anchor_token_ids"][0],
+                MARKOV_HEAD_DEFAULT_TOP_K,
+            )
+            candidate_ids = torch.from_numpy(np.array(ov_outputs[compiled_markov_head.output("candidate_ids")]))
+            self.assertTrue(torch.equal(candidate_ids, expected_ids))
+            ov_edges = torch.from_numpy(np.array(ov_outputs[compiled_markov_head.output("edge_scores")]))
             torch.testing.assert_close(ov_edges, expected_edges, rtol=1e-4, atol=1e-4)

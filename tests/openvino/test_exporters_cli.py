@@ -1725,14 +1725,14 @@ class OVCLIExportTestCase(unittest.TestCase):
         config = json.loads((Path(model_path) / "config.json").read_text())
         float_types = {ov.Type.f32, ov.Type.bf16, ov.Type.f16}
         cases = (
-            (None, []),
-            (None, ["--weight-format", "int8"]),
-            (4, ["--weight-format", "int4", "--group-size", "16"]),
-            (4, ["--weight-format", "fp16"]),
+            [],
+            ["--weight-format", "int8"],
+            ["--weight-format", "int4", "--group-size", "16"],
+            ["--weight-format", "fp16"],
         )
         checkpoint_types = None
-        for top_k, weight_args in cases:
-            with self.subTest(top_k=top_k, weight_args=weight_args), TemporaryDirectory() as tmpdir:
+        for weight_args in cases:
+            with self.subTest(weight_args=weight_args), TemporaryDirectory() as tmpdir:
                 command = [
                     "optimum-cli",
                     "export",
@@ -1744,10 +1744,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                     "--trust-remote-code",
                     *weight_args,
                 ]
-                if top_k is not None:
-                    command.extend(["--dspark-top-k", str(top_k)])
                 subprocess.run([*command, tmpdir], check=True)
-                self.assertNotIn("dspark_top_k", json.loads((Path(tmpdir) / "config.json").read_text()))
 
                 core = ov.Core()
                 draft_model = core.read_model(Path(tmpdir) / "openvino_model.xml")
@@ -1755,19 +1752,16 @@ class OVCLIExportTestCase(unittest.TestCase):
                 weight_format = weight_args[1] if weight_args else None
                 self.assertEqual(draft_model.has_rt_info(["nncf"]), weight_format in ("int8", "int4"))
 
-                markov_step_path = Path(tmpdir) / "openvino_markov_step_model.xml"
-                candidate_scorer_path = Path(tmpdir) / "openvino_candidate_scorer_model.xml"
-                self.assertEqual(markov_step_path.exists(), top_k is None)
-                self.assertEqual(candidate_scorer_path.exists(), top_k is not None)
-                markov_model = core.read_model(markov_step_path if top_k is None else candidate_scorer_path)
+                self.assertEqual(
+                    sorted(path.name for path in Path(tmpdir).glob("openvino_*model.xml")),
+                    ["openvino_markov_head_model.xml", "openvino_model.xml"],
+                )
+                markov_model = core.read_model(Path(tmpdir) / "openvino_markov_head_model.xml")
                 markov_rt_info = markov_model.get_rt_info()["dflash"]
-                if top_k is None:
-                    self.assertEqual(markov_rt_info["interface"].value, "markov_step_v1")
-                else:
-                    self.assertEqual(markov_rt_info["interface"].value, "topk_lattice_v1")
-                    self.assertEqual(markov_rt_info["top_k"].value, str(top_k))
+                self.assertEqual(markov_rt_info["interface"].value, "markov_head_v1")
+                self.assertEqual(markov_rt_info["top_k"].value, "64")
                 self.assertFalse(markov_model.has_rt_info(["runtime_options"]))
-                # The Markov head models are never weight-compressed; a floating-point weight format still applies.
+                # The Markov head model is never weight-compressed; a floating-point weight format still applies.
                 self.assertFalse(markov_model.has_rt_info(["nncf"]))
                 markov_types = markov_table_types(markov_model, config)
                 if weight_format == "fp16":
@@ -1795,5 +1789,5 @@ class OVCLIExportTestCase(unittest.TestCase):
                     ],
                     check=True,
                 )
-                self.assertTrue((Path(tmpdir) / "openvino_markov_step_model.xml").exists())
+                self.assertTrue((Path(tmpdir) / "openvino_markov_head_model.xml").exists())
                 self.assertEqual(sorted(path.name for path in Path(tmpdir).glob("*tokenizer*")), [])
