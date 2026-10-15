@@ -67,7 +67,7 @@ def parse_args_openvino(parser: "ArgumentParser"):
     optional_group.add_argument(
         "--weight-format",
         type=str,
-        choices=["fp32", "fp16", "int8", "int4", "mxfp4", "nf4", "cb4"],
+        choices=["fp32", "fp16", "int8", "int4", "mxfp4", "nf4", "cb4", "int3", "int2"],
         default=None,
         help=(
             "The weight format of the exported model. Option 'cb4' represents a codebook with 16 fixed fp8 values in E4M3 format."
@@ -344,6 +344,8 @@ class OVExportCommand(BaseOptimumCLICommand):
     def run(self):
         from ...exporters.openvino.__main__ import _main_quantize, _merge_move, main_export
         from ...intel.openvino.configuration import (
+            _DEFAULT_2BIT_WQ_CONFIG,
+            _DEFAULT_3BIT_WQ_CONFIG,
             _DEFAULT_4BIT_WQ_CONFIG,
             OVConfig,
             _GPTOSSQuantizationConfig,
@@ -394,15 +396,27 @@ class OVExportCommand(BaseOptimumCLICommand):
             )
             if self.args.weight_format is not None:
                 quantization_config = prepare_wc_config(self.args, _DEFAULT_4BIT_WQ_CONFIG)
-                # For int4/int8 quantization if no parameter is provided, then use the default config if exists
-                if no_compression_parameter_provided(self.args) and self.args.weight_format in ["int4", "int8"]:
+
+                if no_compression_parameter_provided(self.args) and self.args.weight_format in [
+                    "int2",
+                    "int3",
+                    "int4",
+                    "int8",
+                ]:
+                    # For int{2, 3, 4, 8} quantization, if no compression parameters are provided, use the model's default
+                    # quantization config if one exists.
                     if default_quantization_config is not None:
                         quantization_config = default_quantization_config
                         logger.info(
                             f"Applying the default quantization config for {self.args.model}: {quantization_config}."
                         )
-                    elif self.args.weight_format == "int4":
-                        quantization_config = _DEFAULT_4BIT_WQ_CONFIG
+                    elif self.args.weight_format in ["int2", "int3", "int4"]:
+                        quantization_config = {
+                            "int2": _DEFAULT_2BIT_WQ_CONFIG,
+                            "int3": _DEFAULT_3BIT_WQ_CONFIG,
+                            "int4": _DEFAULT_4BIT_WQ_CONFIG,
+                        }[self.args.weight_format]
+
                         logger.info(f"Applying a default quantization config: {quantization_config}.")
                     if self.args.quantization_statistics_path is not None:
                         quantization_config["statistics_path"] = self.args.quantization_statistics_path
@@ -503,10 +517,19 @@ class OVExportCommand(BaseOptimumCLICommand):
 
 def prepare_wc_config(args, default_configs):
     is_int8 = args.weight_format == "int8"
+    is_int2_or_int3 = args.weight_format == "int2" or args.weight_format == "int3"
+
+    weight_format_to_bits = {
+        "int2": 2,
+        "int3": 3,
+        "int4": 4,
+        "int8": 8,
+    }
+
     return {
-        "bits": 8 if is_int8 else 4,
+        "bits": weight_format_to_bits.get(args.weight_format, 4),
         "ratio": 1.0 if is_int8 else (args.ratio or default_configs["ratio"]),
-        "sym": args.sym or False,
+        "sym": True if is_int2_or_int3 else (args.sym or False),
         "group_size": -1 if is_int8 else args.group_size,
         "all_layers": None if is_int8 else args.all_layers,
         "dataset": args.dataset,

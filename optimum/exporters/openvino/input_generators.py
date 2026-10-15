@@ -29,7 +29,6 @@ from optimum.utils import (
     DummyInputGenerator,
     DummyPastKeyValuesGenerator,
     DummySeq2SeqDecoderTextInputGenerator,
-    DummySeq2SeqPastKeyValuesGenerator,
     DummyTextInputGenerator,
     DummyTimestepInputGenerator,
     DummyVisionInputGenerator,
@@ -1673,17 +1672,16 @@ class DummyQwen3VLVisionEmbedInputGenerator(DummyQwen2VLVisionEmbedInputGenerato
             )
 
 
-class Qwen3ASRDummySeq2SeqPastKeyValuesGenerator(DummySeq2SeqPastKeyValuesGenerator):
+class Qwen3ASRDummySeq2SeqPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     """Custom KV cache generator for Qwen3-ASR with GQA (num_key_value_heads != num_attention_heads).
     Qwen3-ASR has no cross-attention, so only self-attention KV cache is generated (2 per layer)."""
 
     def __init__(self, task, normalized_config, **kwargs):
         super().__init__(task, normalized_config, **kwargs)
-        # Override head count and head_dim for GQA
-        self.decoder_num_attention_heads = normalized_config.decoder_num_attention_heads
+        self.decoder_num_attention_heads = normalized_config.num_key_value_heads
         self.decoder_head_dim = getattr(normalized_config, "head_dim", None)
         if self.decoder_head_dim is None:
-            self.decoder_head_dim = self.decoder_hidden_size // normalized_config.num_attention_heads
+            self.decoder_head_dim = self.hidden_size // normalized_config.num_attention_heads
 
     def generate(self, input_name, framework="pt", int_dtype="int64", float_dtype="fp32"):
         if input_name == "past_key_values":
@@ -1699,7 +1697,7 @@ class Qwen3ASRDummySeq2SeqPastKeyValuesGenerator(DummySeq2SeqPastKeyValuesGenera
                     self.random_float_tensor(decoder_shape, framework=framework, dtype=float_dtype),
                     self.random_float_tensor(decoder_shape, framework=framework, dtype=float_dtype),
                 )
-                for _ in range(self.decoder_num_layers)
+                for _ in range(self.num_layers)
             ]
         return super().generate(input_name, framework=framework, int_dtype=int_dtype, float_dtype=float_dtype)
 
@@ -1721,6 +1719,34 @@ class FunASRDummyAudioInputGenerator(DummyAudioInputGenerator):
                 max_value=1,
                 framework=framework,
                 dtype=float_dtype,
+            )
+        return super().generate(input_name, framework=framework, int_dtype=int_dtype, float_dtype=float_dtype)
+
+
+class SenseVoiceDummyInputGenerator(FunASRDummyAudioInputGenerator):
+    """Dummy input generator for SenseVoiceSmall (CTC).
+
+    SenseVoiceSmall consumes fbank features laid out as (batch, num_frames, feature_size) plus the per-sample
+    valid frame counts (`speech_lengths`) and two integer prefix-query selectors (`language`, `textnorm`)
+    that index a small learned embedding table.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("input_features", "speech_lengths", "language", "textnorm")
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "speech_lengths":
+            # Valid frame count per sample; use the full (padded) frame count so the traced mask is all-ones.
+            return self.random_int_tensor(
+                shape=[self.batch_size],
+                max_value=self.nb_max_frames + 1,
+                min_value=self.nb_max_frames,
+                framework=framework,
+                dtype=int_dtype,
+            )
+        if input_name in ("language", "textnorm"):
+            # Any valid embedding index works for tracing; use 0 (== "auto" language).
+            return self.random_int_tensor(
+                shape=[self.batch_size], max_value=1, min_value=0, framework=framework, dtype=int_dtype
             )
         return super().generate(input_name, framework=framework, int_dtype=int_dtype, float_dtype=float_dtype)
 

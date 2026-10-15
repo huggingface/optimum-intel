@@ -75,9 +75,9 @@ jobs:
         run: |
           python tests/scripts/login_with_ci_token.py
 
-      - name: Test Qwen3-ASR and FunASR
+      - name: Test Qwen3-ASR, FunASR and SenseVoice
         run: |
-          pytest tests/openvino/${{ matrix.test-pattern }} -k "qwen3_asr or fun_asr" --durations=0
+          pytest tests/openvino/${{ matrix.test-pattern }} -k "qwen3_asr or fun_asr or sense_voice" --durations=0
 
       - if: ${{ matrix.test-pattern == '*export*' || matrix.test-pattern == '*quantization*' }}
         name: Install qwen-tts package and uninstall qwen-asr

@@ -324,6 +324,7 @@ HUB_MODEL_NAMES = {
     "qwen3_dflash": "optimum-intel-internal-testing/tiny-random-qwen3-dflash",
     "qwen3_deepspec_dflash": "optimum-intel-internal-testing/tiny-random-qwen3-deepspec-dflash",
     "fun_asr": "optimum-intel-internal-testing/tiny-random-fun-asr",
+    "sense_voice": "optimum-intel-internal-testing/tiny-random-sense-voice-small",
     "rembert": "optimum-intel-internal-testing/tiny-random-rembert",
     "resnet": "optimum-intel-internal-testing/tiny-random-resnet",
     "roberta": "optimum-intel-internal-testing/tiny-random-roberta",
@@ -747,15 +748,16 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     },
     "ouro": {"model": 34},
     "qwen3_asr": {
-        "encoder": 36,
-        "decoder": 32,
-        "decoder_with_past": 32,
+        "audio_encoder": 36,
+        "text_embeddings": 2,
+        "language_model": 30,
     },
     "fun_asr": {
         "encoder": 46,
         "decoder": 30,
         "decoder_with_past": 30,
     },
+    "sense_voice": {"model": 34},
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
