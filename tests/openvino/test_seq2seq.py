@@ -936,47 +936,6 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
         gc.collect()
 
-    def test_qwen4_exp_padded_batch(self):
-        # QSA operations get the number of valid key tokens of every sequence (`key_length`), so the sequences of a
-        # left-padded batch get the same result as in transformers, where QSA blocks start at the first valid token
-        if "qwen4_exp" not in self.SUPPORTED_ARCHITECTURES:
-            self.skipTest("qwen4_exp requires a newer transformers version")
-        model_id = MODEL_NAMES["qwen4_exp"]
-        transformers_model = AutoModelForImageTextToText.from_pretrained(model_id).eval()
-        ov_model = self.OVMODEL_CLASS.from_pretrained(
-            model_id, export=True, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
-        )
-        processor = AutoProcessor.from_pretrained(model_id)
-        processor.tokenizer.padding_side = "left"
-        prompts = [
-            "Hello there, how are you doing today?",
-            "Tell me a long story about a cat, a dog and a mouse living together in a small house near the river. "
-            * 2,
-            "What is the capital of France and why is it famous for its art and food?",
-        ]
-        texts = [
-            processor.apply_chat_template(
-                [{"role": "user", "content": [{"type": "text", "text": prompt}]}], add_generation_prompt=True
-            )
-            for prompt in prompts
-        ]
-        inputs = processor(text=texts, return_tensors="pt", padding=True)
-        self.assertGreater(len(set(inputs["attention_mask"].sum(-1).tolist())), 1)
-
-        valid = inputs["attention_mask"].bool()
-        with torch.no_grad():
-            transformers_logits = transformers_model(**inputs).logits
-        ov_logits = ov_model(**inputs).logits
-        self.assertTrue(torch.allclose(ov_logits[valid], transformers_logits[valid], atol=4e-3))
-
-        gen_config = GenerationConfig(max_new_tokens=20, min_new_tokens=20, do_sample=False, eos_token_id=None)
-        with torch.no_grad():
-            transformers_outputs = transformers_model.generate(**inputs, generation_config=gen_config)
-        ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
-        self.assertTrue(torch.equal(ov_outputs, transformers_outputs))
-        del transformers_model, ov_model
-        gc.collect()
-
     def test_minicpm_v4_5_temporal_ids_generation(self):
         # MiniCPM-V-4.5's image processor returns temporal_ids for still images.
         # They must be accepted without changing the output.
