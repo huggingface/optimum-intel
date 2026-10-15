@@ -220,7 +220,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "ltx-video": 2,
         "ltx2": 2,
         "ltx2.3": 2,
-        "ltx2.5": 2,
+        "ltx2.5": 4,  # the text encoder's tokenizer plus the prompt enhancer's processor tokenizer
         "sam": 0,  # no tokenizer
         "speecht5": 2,
         "kokoro": 0,  # uses g2p, no tokenizer
