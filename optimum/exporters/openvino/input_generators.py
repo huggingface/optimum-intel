@@ -257,9 +257,10 @@ class Eagle3DummyGenerator(DummyInputGenerator):
 
 
 class DSparkMarkovDummyGenerator(DummyInputGenerator):
-    """Dummy inputs for the DSpark Markov step and Top-K candidate scorer graphs."""
+    """Dummy inputs for the DSpark Markov head model: the dense step and the Top-K lattice over
+    `batch_size` packed draft blocks of `sequence_length` rows each."""
 
-    SUPPORTED_INPUT_NAMES = ("prev_token_ids", "draft_logits", "anchor_token_ids")
+    SUPPORTED_INPUT_NAMES = ("prev_token_ids", "draft_logits", "anchor_token_ids", "subsequence_begins")
 
     def __init__(
         self,
@@ -282,8 +283,10 @@ class DSparkMarkovDummyGenerator(DummyInputGenerator):
                 dtype=int_dtype,
             )
         if input_name == "draft_logits":
-            shape = (self.batch_size, self.num_draft_tokens, self.vocab_size)
+            shape = (self.batch_size * self.num_draft_tokens, self.vocab_size)
             return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "subsequence_begins":
+            return torch.arange(self.batch_size + 1, dtype=DTYPE_MAPPER.pt(int_dtype)) * self.num_draft_tokens
         raise ValueError(f"Unsupported DSpark Markov input: {input_name}")
 
 

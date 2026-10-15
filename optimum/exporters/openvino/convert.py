@@ -29,12 +29,7 @@ from transformers.utils import is_torch_available
 from openvino import Model, save_model
 from openvino.exceptions import OVTypeError
 from openvino.tools.ovc import convert_model
-from optimum.exporters.openvino.dflash_utils import (
-    DSPARK_ARCHITECTURES,
-    DSPARK_CANDIDATE_SCORER_INTERFACE,
-    parse_and_validate_dspark_config,
-    validate_dspark_top_k,
-)
+from optimum.exporters.openvino.dflash_utils import DSPARK_ARCHITECTURES, parse_and_validate_dspark_config
 from optimum.exporters.openvino.utils import (
     MULTI_MODAL_TEXT_GENERATION_MODELS,
     ONNX_SUPPORTED_ARCHITECTURES,
@@ -721,12 +716,9 @@ def export_from_model(
     device: str = "cpu",
     trust_remote_code: bool = False,
     patch_16bit_model: bool = False,
-    dspark_top_k: Optional[int] = None,
     **kwargs_shapes,
 ):
     model_kwargs = model_kwargs or {}
-    if dspark_top_k is not None:
-        validate_dspark_top_k(getattr(model, "config", None), dspark_top_k)
 
     if ov_config is not None and ov_config.quantization_config and not is_nncf_available():
         raise ImportError(
@@ -860,7 +852,6 @@ def export_from_model(
             _variant="default",
             exporter="openvino",
             stateful=stateful,
-            dspark_top_k=dspark_top_k,
         )
         logging.disable(logging.NOTSET)
 
@@ -1095,15 +1086,15 @@ def _add_dflash_mode_to_rt_info(model: Model, hf_config: "PretrainedConfig", can
 
 def _add_dflash_interface_to_rt_info(model: Model, config: "OpenVINOConfig") -> Model:
     """
-    Add the DFlash metadata of a DSpark Markov-head model: the dense step or the opt-in Top-K candidate scorer.
+    Add the DFlash metadata of the DSpark Markov-head model.
 
-    The model does not set dflash_mode, which marks the draft backbone; dflash/interface names its contract.
+    The model does not set dflash_mode, which marks the draft backbone; dflash/interface names its contract
+    and dflash/top_k is the K of the exported TopK.
     """
     hf_config = config._config
     dspark_config = parse_and_validate_dspark_config(hf_config)
     model.set_rt_info(config.dflash_interface, ["dflash", "interface"])
-    if config.dflash_interface == DSPARK_CANDIDATE_SCORER_INTERFACE:
-        model.set_rt_info(str(config.dspark_top_k), ["dflash", "top_k"])
+    model.set_rt_info(str(config.markov_head_top_k), ["dflash", "top_k"])
     model.set_rt_info(str(dspark_config.markov_rank), ["dflash", "markov_rank"])
     model.set_rt_info(dspark_config.markov_head_type, ["dflash", "markov_head_type"])
     model.set_rt_info(str(hf_config.vocab_size), ["dflash", "vocab_size"])
@@ -1226,7 +1217,6 @@ def _get_submodels_and_export_configs(
     model_kwargs: Optional[Dict] = None,
     exporter: str = "openvino",
     stateful: bool = False,
-    dspark_top_k: Optional[int] = None,
 ):
     if (
         not custom_architecture
@@ -1261,31 +1251,20 @@ def _get_submodels_and_export_configs(
     architectures = getattr(getattr(model, "config", None), "architectures", None)
     architecture = architectures[0] if isinstance(architectures, list) and architectures else None
     if architecture in DSPARK_ARCHITECTURES and getattr(model, "markov_head", None) is not None:
-        from optimum.exporters.openvino.model_configs import (
-            DSparkMarkovCandidateScorerOpenVINOConfig,
-            DSparkMarkovStepOpenVINOConfig,
-        )
-        from optimum.exporters.openvino.model_patcher import (
-            DSparkMarkovCandidateScorerForExport,
-            DSparkMarkovStepForExport,
-        )
+        from optimum.exporters.openvino.model_configs import DSparkMarkovHeadOpenVINOConfig
+        from optimum.exporters.openvino.model_patcher import DSparkVanillaMarkovHeadForExport
 
-        markov_config_kwargs = {
-            "task": "feature-extraction",
-            "int_dtype": int_dtype,
-            "float_dtype": float_dtype,
-            "preprocessors": preprocessors,
-        }
-        if dspark_top_k is None:
-            models_for_export["markov_step_model"] = (
-                DSparkMarkovStepForExport(model.markov_head, model.config),
-                DSparkMarkovStepOpenVINOConfig(model.config, **markov_config_kwargs),
-            )
-        else:
-            models_for_export["candidate_scorer_model"] = (
-                DSparkMarkovCandidateScorerForExport(model.markov_head, model.config, dspark_top_k),
-                DSparkMarkovCandidateScorerOpenVINOConfig(model.config, top_k=dspark_top_k, **markov_config_kwargs),
-            )
+        markov_head_config = DSparkMarkovHeadOpenVINOConfig(
+            model.config,
+            task="feature-extraction",
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        models_for_export["markov_head_model"] = (
+            DSparkVanillaMarkovHeadForExport(model.markov_head, model.config, markov_head_config.markov_head_top_k),
+            markov_head_config,
+        )
         stateful_per_model.append(False)
 
     # VLM Eagle3 models need stateful KV cache despite model_type being "llama"
