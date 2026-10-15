@@ -644,6 +644,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_merger_model": 10,
         "vision_embeddings_pos_model": 1,
         "ngram_embeddings_model": 1,
+        "mtp_model": 46,
     },
     "qwen3_omni_moe": {
         "lm_model": 34,

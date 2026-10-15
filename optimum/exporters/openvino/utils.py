@@ -504,6 +504,7 @@ SSM_MODELS = [
     "qwen3_5_text",
     "qwen3_5_moe_text",
     "qwen4_exp_text",
+    "qwen4_exp_mtp",
 ]
 
 # All transformers, diffusers, timm and sentence transformers models that were supported via optimum-onnx OnnxConfigs for which support is now removed

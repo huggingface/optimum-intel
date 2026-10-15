@@ -7977,7 +7977,8 @@ class _OVQwen4ExpForCausalLM(_OVQwen3_5ForCausalLM):
     to the language model as its `ngram_embeddings` input.
     """
 
-    additional_parts = ["vision_embeddings_merger", "vision_embeddings_pos", "ngram_embeddings"]
+    # `mtp` is optional, as for Qwen3.5: only present for checkpoints exported with an MTP head
+    additional_parts = ["vision_embeddings_merger", "vision_embeddings_pos", "ngram_embeddings", "mtp"]
 
     def __init__(
         self,

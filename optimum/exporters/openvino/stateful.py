@@ -339,7 +339,7 @@ def patch_stateful_hybrid_ssm(ov_model: ov.Model, empty_growing_states: bool = F
 
 
 # models with growing states that are not consumed by ScaledDotProductAttention (see `build_state_initializer`)
-_EMPTY_GROWING_STATE_MODELS = ("qwen4_exp", "qwen4_exp_text")
+_EMPTY_GROWING_STATE_MODELS = ("qwen4_exp", "qwen4_exp_text", "qwen4_exp_mtp")
 
 
 def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):

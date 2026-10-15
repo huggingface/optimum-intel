@@ -3084,3 +3084,62 @@ class Qwen4ExpDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         rope_positions = torch.arange(self.sequence_length, dtype=DTYPE_MAPPER.pt(float_dtype))
         cache_params.append(rope_positions.view(1, -1, 1).expand(self.batch_size, -1, 3).contiguous())
         return cache_params
+
+
+class Qwen4ExpMTPDummyInputGenerator(DummyInputGenerator):
+    """
+    Dummy inputs of the Qwen3.8-Flash-Next MTP head: the hyper-connection streams of the main model `hidden_states`
+    [batch, sequence, hc_count * hidden], `inputs_embeds`, `attention_mask` over the past and the current tokens,
+    4D `position_ids` and `cache_params` in the order of `Qwen4ExpMTPOpenVINOConfig.add_past_key_values`:
+    [key, value] per layer, the raw index keys per layer, the block index keys per layer, the M-RoPE positions.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("hidden_states", "inputs_embeds", "attention_mask", "position_ids", "cache_params")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        self.task = task
+        self.batch_size = batch_size
+        self.sequence_length = sequence_length
+        self.past_sequence_length = sequence_length
+        self.config = normalized_config.config
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        config = self.config
+        batch, seq, past = self.batch_size, self.sequence_length, self.past_sequence_length
+        hidden_size = config.hidden_size
+
+        def random_float(shape):
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+
+        if input_name == "hidden_states":
+            return random_float((batch, seq, config.hc_count * hidden_size))
+        if input_name == "inputs_embeds":
+            return random_float((batch, seq, hidden_size))
+        if input_name == "attention_mask":
+            return self.random_int_tensor(
+                (batch, past + seq), min_value=1, max_value=2, framework=framework, dtype=int_dtype
+            )
+        if input_name == "position_ids":
+            position_ids = torch.arange(past, past + seq, dtype=DTYPE_MAPPER.pt(int_dtype))
+            return position_ids.view(1, 1, -1).expand(4, batch, -1).contiguous()
+
+        num_layers = config.mtp_num_hidden_layers
+        head_dim = getattr(config, "head_dim", None) or hidden_size // config.num_attention_heads
+        cache_params = []
+        for _ in range(num_layers):
+            kv_shape = (batch, config.num_key_value_heads, past, head_dim)
+            cache_params += [random_float(kv_shape), random_float(kv_shape)]
+        for _ in range(num_layers):
+            cache_params.append(random_float((batch, past, config.indexer_head_dim)))
+        for _ in range(num_layers):
+            cache_params.append(random_float((batch, past // config.indexer_compress_ratio, config.indexer_head_dim)))
+        rope_positions = torch.arange(past, dtype=DTYPE_MAPPER.pt(float_dtype))
+        cache_params.append(rope_positions.view(1, -1, 1).expand(batch, -1, 3).contiguous())
+        return cache_params

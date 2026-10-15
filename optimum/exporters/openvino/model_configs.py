@@ -117,6 +117,7 @@ from optimum.exporters.openvino.input_generators import (
     Qwen3ASRDummySeq2SeqPastKeyValuesGenerator,
     Qwen3NextDummyPastKeyValuesGenerator,
     Qwen4ExpDummyPastKeyValuesGenerator,
+    Qwen4ExpMTPDummyInputGenerator,
     QwenDummyPastKeyValuesGenerator,
     QwenImage21VaeDummyInputGenerator,
     SenseVoiceDummyInputGenerator,
@@ -226,6 +227,8 @@ from optimum.exporters.openvino.model_patcher import (
     Qwen3VLLanguageModelPatcher,
     Qwen3VLVisionEmbMergerPatcher,
     Qwen4ExpLanguageModelPatcher,
+    Qwen4ExpMTPModelPatcher,
+    Qwen4ExpMTPModule,
     Qwen4ExpNGramEmbeddings,
     Qwen4ExpNGramEmbeddingsPatcher,
     QwenImage21I2ITextEncoderModelPatcher,
@@ -8065,6 +8068,85 @@ class Qwen4ExpTextOpenVINOConfig(Qwen3_5TextOpenVINOConfig):
         return common_inputs
 
 
+class Qwen4ExpMTPOpenVINOConfig(OpenVINOConfigWithPast):
+    """
+    Export configuration for the Multi-Token Prediction (MTP) head of Qwen3.8-Flash-Next, see `Qwen4ExpMTPModule`.
+    The head is stateful with the caches of its Qwen Sparse Attention layer, as the language model.
+    """
+
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (Qwen4ExpMTPDummyInputGenerator,)
+    _MODEL_PATCHER = Qwen4ExpMTPModelPatcher
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+    ):
+        text_config = getattr(config, "text_config", config)
+        super().__init__(
+            text_config,
+            task="text-generation-with-past",
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            use_past=True,
+            use_past_in_inputs=True,
+        )
+        self._orig_config = config
+
+    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        if direction == "inputs":
+            sequence_name, blocks_name, prefix = "past_sequence_length", "past_num_blocks", "cache_params.past"
+        else:
+            sequence_name, blocks_name, prefix = (
+                "past_sequence_length + sequence_length",
+                "num_blocks",
+                "cache_params.present",
+            )
+        num_layers = self._config.mtp_num_hidden_layers
+        for i in range(num_layers):
+            inputs_or_outputs[f"{prefix}.key.{i}"] = {0: "batch_size", 2: sequence_name}
+            inputs_or_outputs[f"{prefix}.value.{i}"] = {0: "batch_size", 2: sequence_name}
+        for i in range(num_layers):
+            inputs_or_outputs[f"{prefix}.index_key.{i}"] = {0: "batch_size", 1: sequence_name}
+        for i in range(num_layers):
+            inputs_or_outputs[f"{prefix}.block_index_key.{i}"] = {0: "batch_size", 1: blocks_name}
+        inputs_or_outputs[f"{prefix}.rope_positions"] = {0: "batch_size", 1: sequence_name}
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = OrderedDict(
+            {
+                "hidden_states": {0: "batch_size", 1: "sequence_length"},
+                "inputs_embeds": {0: "batch_size", 1: "sequence_length"},
+                "attention_mask": {0: "batch_size", 1: "past_sequence_length + sequence_length"},
+                "position_ids": {1: "batch_size", 2: "sequence_length"},
+            }
+        )
+        self.add_past_key_values(common_inputs, direction="inputs")
+        return common_inputs
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        common_outputs = OrderedDict(
+            {
+                "last_hidden_state": {0: "batch_size", 1: "sequence_length"},
+                "next_hidden_states": {0: "batch_size", 1: "sequence_length"},
+            }
+        )
+        self.add_past_key_values(common_outputs, direction="outputs")
+        return common_outputs
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        generator = self.DUMMY_INPUT_GENERATOR_CLASSES[0](self.task, self._normalized_config, **kwargs)
+        input_names = [name for name in self.inputs if not name.startswith("cache_params")] + ["cache_params"]
+        return {
+            name: generator.generate(name, framework=framework, int_dtype=self.int_dtype, float_dtype=self.float_dtype)
+            for name in input_names
+        }
+
+
 class Qwen4ExpConfigBehavior(str, enum.Enum):
     LANGUAGE = "language"
     VISION_EMBEDDINGS = "vision_embeddings"
@@ -8072,6 +8154,7 @@ class Qwen4ExpConfigBehavior(str, enum.Enum):
     TEXT_EMBEDDINGS = "text_embeddings"
     VISION_EMBEDDINGS_POS = "vision_embeddings_pos"
     NGRAM_EMBEDDINGS = "ngram_embeddings"
+    MTP = "mtp"
 
 
 @register_in_tasks_manager("qwen4_exp", *["image-text-to-text"], library_name="transformers")
@@ -8079,10 +8162,12 @@ class Qwen4ExpOpenVINOConfig(Qwen3_5OpenVINOConfig):
     """
     Qwen3.8-Flash-Next. Besides the Qwen3.5-like vision and text embeddings models and the language model, the
     hashed n-gram table of the PLE layers together with its hash function is exported as the separate
-    `ngram_embeddings` model.
+    `ngram_embeddings` model, and the Multi-Token Prediction head, if the checkpoint has one, as the `mtp` model.
     """
 
-    SUPPORTED_BEHAVIORS = [behavior.value for behavior in Qwen4ExpConfigBehavior]
+    SUPPORTED_BEHAVIORS = [
+        behavior.value for behavior in Qwen4ExpConfigBehavior if behavior != Qwen4ExpConfigBehavior.MTP
+    ]
     MIN_TRANSFORMERS_VERSION = "5.17.0"
     MAX_TRANSFORMERS_VERSION = None
 
@@ -8103,8 +8188,10 @@ class Qwen4ExpOpenVINOConfig(Qwen3_5OpenVINOConfig):
             behavior=behavior,
             preprocessors=preprocessors,
         )
-        # the MTP head is not exported
+        # the MTP head is exported if the checkpoint has one
         self.SUPPORTED_BEHAVIORS = list(type(self).SUPPORTED_BEHAVIORS)
+        if getattr(getattr(config, "text_config", config), "mtp_num_hidden_layers", 0) > 0:
+            self.SUPPORTED_BEHAVIORS.append(Qwen4ExpConfigBehavior.MTP.value)
         if self._behavior == Qwen4ExpConfigBehavior.NGRAM_EMBEDDINGS:
             self._config = config.text_config
             self._normalized_config = NormalizedTextConfig(self._config)
@@ -8129,6 +8216,9 @@ class Qwen4ExpOpenVINOConfig(Qwen3_5OpenVINOConfig):
                 inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
             )
 
+        if behavior == Qwen4ExpConfigBehavior.MTP:
+            return Qwen4ExpMTPOpenVINOConfig(self._orig_config, int_dtype=self.int_dtype, float_dtype=self.float_dtype)
+
         return self.__class__(
             self._orig_config,
             task=self.task,
@@ -8142,6 +8232,8 @@ class Qwen4ExpOpenVINOConfig(Qwen3_5OpenVINOConfig):
     def get_model_for_behavior(model, behavior: Union[str, Qwen4ExpConfigBehavior]):
         if behavior == Qwen4ExpConfigBehavior.NGRAM_EMBEDDINGS:
             return Qwen4ExpNGramEmbeddings(_get_model_attribute(model, "language_model"))
+        if behavior == Qwen4ExpConfigBehavior.MTP:
+            return Qwen4ExpMTPModule.from_pretrained_model(model)
         return Qwen3_5OpenVINOConfig.get_model_for_behavior(model, behavior)
 
     def patch_model_for_export(self, model: Union["PreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None):
