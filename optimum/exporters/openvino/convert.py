@@ -864,8 +864,12 @@ def export_from_model(
         save_config(model.config, output)
         generation_config = getattr(model, "generation_config", None)
         if generation_config is not None:
-            if hasattr(export_config, "prepare_generation_config_for_export"):
-                generation_config = export_config.prepare_generation_config_for_export(generation_config)
+            if not generation_config.do_sample and generation_config.temperature is not None:
+                # Qwen/Qwen3-ASR-0.6B currently sets temperature with do_sample=False, making its generation config
+                # invalid so Transformers won't save it. Remove this workaround once the checkpoint is fixed:
+                # https://huggingface.co/Qwen/Qwen3-ASR-0.6B/discussions/13
+                generation_config = copy.deepcopy(generation_config)
+                generation_config.temperature = None
             try:
                 generation_config.save_pretrained(output)
             except Exception as exception:

@@ -4976,19 +4976,6 @@ class Qwen3ASROpenVINOConfig(BaseVLMOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.57.6"
     MAX_TRANSFORMERS_VERSION = "4.57.6"
 
-    @staticmethod
-    def prepare_generation_config_for_export(generation_config):
-        generation_config = copy.deepcopy(generation_config)
-        # https://huggingface.co/Qwen/Qwen3-ASR-0.6B/discussions/13
-        # original generation config has do_sample=False and temperature=1e-6, which is invalid. save_pretrained fails:
-        # ValueError: GenerationConfig is invalid:
-        # - `temperature`: `do_sample` is not set to `True`. However, `temperature` is set to `1e-06` --
-        # this flag is only used in sample-based generation modes. You should set `do_sample=True` or
-        # unset `temperature`.
-        if not generation_config.do_sample:
-            generation_config.temperature = None
-        return generation_config
-
     def __init__(
         self,
         config: "PretrainedConfig",
