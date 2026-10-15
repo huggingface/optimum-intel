@@ -2924,7 +2924,8 @@ class Qwen4ExpDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     """
     Dummy `cache_params` of the Qwen3.8-Flash-Next language model, in the order of
     `Qwen4ExpTextOpenVINOConfig.add_past_key_values`: [conv, ssm] per Gated DeltaNet layer, [key, value] per QSA layer,
-    the raw index keys per QSA layer, the PLE short conv state per PLE layer and the M-RoPE positions of past tokens.
+    the raw index keys per QSA layer, the block index keys per QSA layer, the PLE short conv state per PLE layer and
+    the M-RoPE positions of past tokens.
     """
 
     SUPPORTED_INPUT_NAMES = ("cache_params",)
@@ -2977,6 +2978,9 @@ class Qwen4ExpDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
             cache_params += [random_float(kv_shape), random_float(kv_shape)]
         for _ in range(num_qsa):
             cache_params.append(random_float((self.batch_size, self.sequence_length, config.indexer_head_dim)))
+        num_blocks = self.sequence_length // config.indexer_compress_ratio
+        for _ in range(num_qsa):
+            cache_params.append(random_float((self.batch_size, num_blocks, config.indexer_head_dim)))
         ple_conv_state_len = (config.ple_conv_kernel_size - 1) * config.ngram_size
         for _ in range(num_ple):
             cache_params.append(

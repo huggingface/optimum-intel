@@ -7849,9 +7849,11 @@ class Qwen4ExpTextOpenVINOConfig(Qwen3_5TextOpenVINOConfig):
 
         if direction == "inputs":
             decoder_sequence_name = "past_sequence_length"
+            decoder_blocks_name = "past_num_blocks"
             cache_name_prefix = "cache_params.past"
         else:
             decoder_sequence_name = "past_sequence_length + sequence_length"
+            decoder_blocks_name = "num_blocks"
             cache_name_prefix = "cache_params.present"
 
         layer_types = self._normalized_config.layer_types
@@ -7868,6 +7870,9 @@ class Qwen4ExpTextOpenVINOConfig(Qwen3_5TextOpenVINOConfig):
         for i in range(num_qsa_layers):
             # raw (not normalized, not rotated) QSA index keys of all tokens
             inputs_or_outputs[f"{cache_name_prefix}.index_key.{i}"] = {0: "batch_size", 1: decoder_sequence_name}
+        for i in range(num_qsa_layers):
+            # block index keys of all complete blocks, computed once per block by QSAPrepare
+            inputs_or_outputs[f"{cache_name_prefix}.block_index_key.{i}"] = {0: "batch_size", 1: decoder_blocks_name}
         for i in range(num_ple_layers):
             inputs_or_outputs[f"{cache_name_prefix}.ple_conv.{i}"] = {0: "batch_size"}
         # M-RoPE (T, H, W) positions of all tokens

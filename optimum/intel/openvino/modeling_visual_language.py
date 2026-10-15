@@ -438,7 +438,7 @@ class OVMTPModel(OVModelPart):
 
 
 class OVNGramEmbeddings(OVModelPart):
-    """Hashed n-gram embeddings of the PLE layers (Qwen3.8-Flash-Next): QSAHashFunction + n-gram table lookup."""
+    """Hashed n-gram embeddings of the PLE layers (Qwen3.8-Flash-Next): NGramHashFunction + n-gram table lookup."""
 
     _model_name = "ngram_embeddings"
 

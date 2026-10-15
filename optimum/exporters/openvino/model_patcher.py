@@ -13044,13 +13044,14 @@ class Qwen3TTSCodecPatcher(OVDecoderModelPatcher):
 #
 # The language model is exported with explicit states instead of the transformers Cache:
 #   * Gated DeltaNet layers: conv and recurrent states, the recurrence is the `RecurrentAttentionCell` (as for Qwen3.5),
-#   * Qwen Sparse Attention (QSA) layers: key / value caches and the raw index keys of all past tokens,
+#   * Qwen Sparse Attention (QSA) layers: key / value caches, the raw index keys of all past tokens and the block
+#     index keys of all past complete blocks (QSAPrepare computes only the blocks completed by the new tokens),
 #   * PLE layers: the state of the dilated short convolution,
 #   * the multi-axis (M-RoPE) positions of all past tokens: block index keys are rotated at the first token of every
 #     key block, so QSAPrepare needs cos / sin of all key tokens, not only of the current ones.
 # The hashed n-gram table lookup of PLE is exported as a separate model (`Qwen4ExpNGramEmbeddings`), its output is the
 # `ngram_embeddings` input of the language model.
-# QSA is expressed with the QSAPrepare -> QSAIndexer -> BlockSparseAttention operation modules of `_ov_ops.py`.
+# QSA is expressed with the QSAPrepare -> SparseAttentionIndexer -> SparseAttention operation modules of `_ov_ops.py`.
 class _Qwen4ExpLinearAttentionCache:
     """The subset of the cache interface used by `qwen3_5_gated_delta_net_forward`."""
 
@@ -13067,10 +13068,16 @@ def _qwen4_exp_qsa_attention_forward(
     key_cache: torch.Tensor,
     value_cache: torch.Tensor,
     index_key_cache: torch.Tensor,
+    block_index_key_cache: torch.Tensor,
+    key_length: torch.Tensor,
 ):
     """
-    Qwen Sparse Attention with QSAPrepare -> QSAIndexer -> BlockSparseAttention.
+    Qwen Sparse Attention with QSAPrepare -> SparseAttentionIndexer -> SparseAttention.
     `position_embeddings` are the cos / sin of all key tokens (past and current), [N, S, Dr].
+    `key_length` [N] is the number of valid (non-padding) key tokens of every sequence, the sequences are aligned to
+    the right (left padding).
+    `block_index_key_cache` holds the block index keys of the past complete blocks: QSAPrepare computes only the
+    blocks completed by the current tokens.
     """
     indexer = self.indexer
     batch_size, seq_len, _ = hidden_states.shape
@@ -13090,9 +13097,12 @@ def _qwen4_exp_qsa_attention_forward(
     raw_index_keys = torch.cat([index_key_cache, raw_index_keys.view(batch_size, seq_len, -1)], dim=1)  # [N, S, Di]
 
     # k_layernorm scales by (1 + w)
-    block_index_keys = self.qsa_prepare(raw_index_keys, cos, sin, 1.0 + indexer.k_layernorm.weight)
-    key_length = torch._shape_as_tensor(raw_index_keys)[1]
-    block_indices, block_count = self.qsa_indexer.unpack(self.qsa_indexer(index_query, block_index_keys, key_length))
+    block_index_keys = self.qsa_prepare(
+        raw_index_keys, block_index_key_cache, key_length, cos, sin, 1.0 + indexer.k_layernorm.weight
+    )
+    block_indices, block_count = self.sparse_attention_indexer.unpack(
+        self.sparse_attention_indexer(index_query, block_index_keys, key_length)
+    )
 
     input_shape = hidden_states.shape[:-1]
     hidden_shape = (*input_shape, -1, self.head_dim)
@@ -13106,10 +13116,10 @@ def _qwen4_exp_qsa_attention_forward(
     key_states = torch.cat([key_cache, key_states], dim=2)
     value_states = torch.cat([value_cache, value_states], dim=2)
 
-    attn_output = self.block_sparse_attention(query_states, key_states, value_states, block_indices, block_count)
+    attn_output = self.sparse_attention(query_states, key_states, value_states, block_indices, block_count, key_length)
     attn_output = attn_output.transpose(1, 2).reshape(*input_shape, -1)
     attn_output = self.o_proj(attn_output * torch.sigmoid(gate))
-    return attn_output, key_states, value_states, raw_index_keys
+    return attn_output, key_states, value_states, raw_index_keys, block_index_keys
 
 
 def _qwen4_exp_rotary_embeddings(rotary_emb, positions: torch.Tensor):
@@ -13170,7 +13180,7 @@ class Qwen4ExpLanguageModelPatcher(OVDecoderModelPatcher):
     ):
         from openvino.frontend.pytorch import ConversionExtension, ModuleExtension
 
-        from ._ov_ops import BlockSparseAttention, QSAIndexer, QSAPrepare, get_openvino_extensions
+        from ._ov_ops import QSAPrepare, SparseAttention, SparseAttentionIndexer, get_openvino_extensions
 
         super().__init__(config, model, model_kwargs)
 
@@ -13187,8 +13197,8 @@ class Qwen4ExpLanguageModelPatcher(OVDecoderModelPatcher):
         self._qsa_modules = {
             layer_idx: (
                 QSAPrepare(text_config.indexer_compress_ratio, epsilon=text_config.rms_norm_eps),
-                QSAIndexer(text_config.indexer_compress_ratio, text_config.indexer_budget),
-                BlockSparseAttention(text_config.indexer_compress_ratio),
+                SparseAttentionIndexer(text_config.indexer_compress_ratio, text_config.indexer_budget),
+                SparseAttention(text_config.indexer_compress_ratio),
             )
             for layer_idx in qsa_layers
         }
@@ -13202,8 +13212,8 @@ class Qwen4ExpLanguageModelPatcher(OVDecoderModelPatcher):
         )
 
         # `cache_params` layout (see Qwen4ExpTextOpenVINOConfig.add_past_key_values):
-        # [conv, ssm] per linear layer, [key, value] per QSA layer, index_key per QSA layer, ple_conv per PLE layer,
-        # rope_positions
+        # [conv, ssm] per linear layer, [key, value] per QSA layer, index_key per QSA layer, block_index_key per QSA
+        # layer, ple_conv per PLE layer, rope_positions
         def patched_forward(
             inputs_embeds,
             attention_mask=None,
@@ -13221,6 +13231,8 @@ class Qwen4ExpLanguageModelPatcher(OVDecoderModelPatcher):
             offset += 2 * num_qsa
             index_key_caches = cache_params[offset : offset + num_qsa]
             offset += num_qsa
+            block_index_key_caches = cache_params[offset : offset + num_qsa]
+            offset += num_qsa
             ple_conv_states = cache_params[offset : offset + num_ple]
             past_rope_positions = cache_params[offset + num_ple]  # [N, past_len, 3], f32
 
@@ -13234,9 +13246,12 @@ class Qwen4ExpLanguageModelPatcher(OVDecoderModelPatcher):
             rope_positions = torch.cat([past_rope_positions, mrope_positions], dim=1)  # [N, S, 3]
             position_embeddings = _qwen4_exp_rotary_embeddings(text_model.rotary_emb, rope_positions)
             conv_mask = attention_mask[:, -seq_len:]
+            # valid key tokens of every sequence for QSA: the sequences are aligned to the right (left padding)
+            key_length = attention_mask.sum(dim=-1)
 
             hidden_states = inputs_embeds.repeat(1, 1, text_config.hc_count)
-            present_keys, present_values, present_index_keys, present_ple_conv = [], [], [], []
+            present_keys, present_values, present_index_keys, present_block_index_keys = [], [], [], []
+            present_ple_conv = []
             for layer_idx, decoder_layer in enumerate(text_model.layers):
                 if decoder_layer.ple is not None:
                     ple_idx = len(present_ple_conv)
@@ -13257,17 +13272,20 @@ class Qwen4ExpLanguageModelPatcher(OVDecoderModelPatcher):
                     )
                 else:
                     qsa_idx = len(present_keys)
-                    hidden_states, key_cache, value_cache, index_key_cache = _qwen4_exp_qsa_attention_forward(
+                    hidden_states, *qsa_caches = _qwen4_exp_qsa_attention_forward(
                         decoder_layer.self_attn,
                         hidden_states,
                         position_embeddings,
                         key_caches[qsa_idx],
                         value_caches[qsa_idx],
                         index_key_caches[qsa_idx],
+                        block_index_key_caches[qsa_idx],
+                        key_length,
                     )
-                    present_keys.append(key_cache)
-                    present_values.append(value_cache)
-                    present_index_keys.append(index_key_cache)
+                    for present, cache in zip(
+                        (present_keys, present_values, present_index_keys, present_block_index_keys), qsa_caches
+                    ):
+                        present.append(cache)
                 injection = hidden_states.unsqueeze(-2) * injection_weights.unsqueeze(-1)
                 hidden_states = hyper_input + injection.flatten(-2)
 
@@ -13284,7 +13302,8 @@ class Qwen4ExpLanguageModelPatcher(OVDecoderModelPatcher):
                 present_key_values += [linear_cache.conv_states[idx], linear_cache.recurrent_states[idx]]
             for key_cache, value_cache in zip(present_keys, present_values):
                 present_key_values += [key_cache, value_cache]
-            present_key_values += present_index_keys + present_ple_conv + [rope_positions]
+            present_key_values += present_index_keys + present_block_index_keys + present_ple_conv
+            present_key_values.append(rope_positions)
             return {"logits": logits, "present_key_values": present_key_values}
 
         self.patched_forward = patched_forward
@@ -13304,7 +13323,7 @@ class Qwen4ExpLanguageModelPatcher(OVDecoderModelPatcher):
                 linear_attn_layer.recurrent_attention_cell = RecurrentAttentionCell()
             else:
                 attn = decoder_layer.self_attn
-                attn.qsa_prepare, attn.qsa_indexer, attn.block_sparse_attention = self._qsa_modules[layer_idx]
+                attn.qsa_prepare, attn.sparse_attention_indexer, attn.sparse_attention = self._qsa_modules[layer_idx]
             sparse_moe_block = decoder_layer.mlp
             sparse_moe_block._orig_forward = sparse_moe_block.forward
             sparse_moe_block.forward = types.MethodType(patched_qwen3_5_moe_sparse_moe_block, sparse_moe_block)
@@ -13319,14 +13338,14 @@ class Qwen4ExpLanguageModelPatcher(OVDecoderModelPatcher):
                 del linear_attn_layer.recurrent_attention_cell
             else:
                 attn = decoder_layer.self_attn
-                del attn.qsa_prepare, attn.qsa_indexer, attn.block_sparse_attention
+                del attn.qsa_prepare, attn.sparse_attention_indexer, attn.sparse_attention
             decoder_layer.mlp.forward = decoder_layer.mlp._orig_forward
 
 
 class Qwen4ExpNGramEmbeddings(torch.nn.Module):
     """
     The hashed n-gram embeddings of all PLE layers of Qwen3.8-Flash-Next, exported as a separate model:
-    QSAHashFunction (rows of the packed n-gram table of every hashed head) -> Gather from the n-gram table.
+    NGramHashFunction (rows of the packed n-gram table of every hashed head) -> Gather from the n-gram table.
 
     Inputs: input_ids [N, L], ngram_history [N, ngram_size - 1] (the previous tokens, EOS for a new sequence).
     Outputs: ngram_embeddings [N, L, num_ple_layers, ple_embed_dim], ngram_history [N, ngram_size - 1] for the next
@@ -13334,7 +13353,7 @@ class Qwen4ExpNGramEmbeddings(torch.nn.Module):
     """
 
     def __init__(self, text_model):
-        from ._ov_ops import QSAHashFunction
+        from ._ov_ops import NGramHashFunction
 
         super().__init__()
         self.config = text_model.config
@@ -13342,7 +13361,7 @@ class Qwen4ExpNGramEmbeddings(torch.nn.Module):
         self.ngram_embeddings = torch.nn.ModuleList([module.ngram_embedding for module in ngram_modules])
         self.hash_functions = torch.nn.ModuleList(
             [
-                QSAHashFunction(
+                NGramHashFunction(
                     ngram_size=module.ngram_size,
                     heads_per_ngram=module.heads_per_ngram,
                     multipliers=module.layer_multipliers.tolist(),
@@ -13359,7 +13378,7 @@ class Qwen4ExpNGramEmbeddings(torch.nn.Module):
         for hash_function, ngram_embedding in zip(self.hash_functions, self.ngram_embeddings):
             row_ids, new_history = hash_function.unpack(hash_function(input_ids, ngram_history), input_ids)
             embeddings.append(ngram_embedding(row_ids).flatten(-2))
-        return torch.stack(embeddings, dim=2), new_history.to(ngram_history.dtype)
+        return torch.stack(embeddings, dim=2), new_history
 
 
 class Qwen4ExpNGramEmbeddingsPatcher(ModelPatcher):

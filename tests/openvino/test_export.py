@@ -34,10 +34,10 @@ from utils_tests import (
 
 from optimum.exporters.openvino import export_from_model, main_export
 from optimum.exporters.openvino._ov_ops import (
-    BlockSparseAttention,
-    QSAHashFunction,
-    QSAIndexer,
+    NGramHashFunction,
     QSAPrepare,
+    SparseAttention,
+    SparseAttentionIndexer,
     get_openvino_extensions,
 )
 from optimum.exporters.openvino.model_configs import (
@@ -586,8 +586,9 @@ class CustomExportModelTest(unittest.TestCase):
 
 class QSAOperationsTest(unittest.TestCase):
     """
-    The QSA operation modules of `_ov_ops.py` (analogues of the QSAPrepare, QSAIndexer, BlockSparseAttention and
-    QSAHashFunction operations): the OpenVINO conversion of every module must match its reference `forward`.
+    The QSA and n-gram hash operation modules of `_ov_ops.py` (analogues of the QSAPrepare, SparseAttentionIndexer,
+    SparseAttention and NGramHashFunction operations): the OpenVINO conversion of every module must match its
+    reference `forward`.
     """
 
     @staticmethod
@@ -609,50 +610,108 @@ class QSAOperationsTest(unittest.TestCase):
         assert not any("Python" in t or "Framework" in t for t in op_types), op_types
         return ov.compile_model(ov_model, OPENVINO_DEVICE, {"INFERENCE_PRECISION_HINT": "f32"})(list(inputs))[0]
 
-    @parameterized.expand([(3,), (4,), (17,)])
-    def test_qsa_prepare(self, key_length):
+    # (key positions S, new tokens L, left padding of the second sequence)
+    @parameterized.expand([(3, 3, 0), (17, 17, 0), (17, 4, 0), (19, 1, 0), (19, 19, 6), (23, 3, 6), (23, 1, 9)])
+    def test_qsa_prepare(self, num_positions, num_new_tokens, padding):
         torch.manual_seed(0)
-        module = QSAPrepare(compress_ratio=4)
-        inputs = (torch.randn(2, key_length, 16), torch.randn(2, key_length, 8), torch.randn(2, key_length, 8))
-        inputs += (torch.randn(16),)
-        expected = module(*inputs).numpy()
-        self.assertEqual(expected.shape, (2, key_length // 4, 16))
-        np.testing.assert_allclose(self._convert_and_infer(module, inputs), expected, atol=1e-5)
+        module = QSAPrepare(key_block_size=4)
+        raw_index_keys, rope_cos, rope_sin = (torch.randn(2, num_positions, d) for d in (16, 8, 8))
+        k_norm_weight = torch.randn(16)
+        key_length = torch.tensor([num_positions, num_positions - padding])
+        no_cache = module(raw_index_keys, torch.zeros(2, 0, 16), key_length, rope_cos, rope_sin, k_norm_weight)
+        self.assertEqual(tuple(no_cache.shape), (2, num_positions // 4, 16))
 
-    @parameterized.expand([(3, 3, 1, False), (38, 1, 1, False), (37, 37, 2, False), (40, 5, 1, True)])
-    def test_qsa_indexer(self, key_length, query_length, num_selection_heads, with_ties):
+        # the cached block keys are the output of the previous call, over the first S - L key positions
+        past = num_positions - num_new_tokens
+        past_block_index_keys = torch.zeros(2, 0, 16)
+        if past > 0:
+            past_block_index_keys = module(
+                raw_index_keys[:, :past],
+                past_block_index_keys,
+                key_length - num_new_tokens,
+                rope_cos[:, :past],
+                rope_sin[:, :past],
+                k_norm_weight,
+            )
+        inputs = (raw_index_keys, past_block_index_keys, key_length, rope_cos, rope_sin, k_norm_weight)
+        expected = module(*inputs)
+        np.testing.assert_allclose(expected.numpy(), no_cache.numpy(), atol=1e-6)
+        np.testing.assert_allclose(self._convert_and_infer(module, inputs), expected.numpy(), atol=1e-5)
+
+        # the padded sequence gets the block keys it has alone, the rows after its last block are zero
+        num_blocks = (num_positions - padding) // 4
+        alone = module(
+            raw_index_keys[1:, padding:],
+            torch.zeros(1, 0, 16),
+            key_length[1:],
+            rope_cos[1:, padding:],
+            rope_sin[1:, padding:],
+            k_norm_weight,
+        )
+        np.testing.assert_allclose(expected[1, :num_blocks].numpy(), alone[0, :num_blocks].numpy(), atol=1e-6)
+        self.assertTrue(bool((expected[1, num_blocks:] == 0).all()))
+
+    # (key positions S, query tokens L, selection heads, rounded inputs with score ties, left padding)
+    @parameterized.expand(
+        [
+            (3, 3, 1, False, 0),
+            (38, 1, 1, False, 0),
+            (37, 37, 2, False, 0),
+            (40, 5, 1, True, 0),
+            (37, 37, 1, False, 13),
+            (38, 1, 2, False, 9),
+        ]
+    )
+    def test_sparse_attention_indexer(self, num_positions, query_length, num_selection_heads, with_ties, padding):
         torch.manual_seed(0)
         index_query = torch.randn(2, 4, query_length, 16)
-        block_index_keys = torch.randn(2, key_length // 4, 16)
+        block_index_keys = torch.randn(2, num_positions // 4, 16)
         if with_ties:
             index_query, block_index_keys = index_query.round(), block_index_keys.round()
-        module = QSAIndexer(compress_ratio=4, token_budget=16, num_selection_heads=num_selection_heads)
-        inputs = (index_query, block_index_keys, torch.tensor(key_length))
+        module = SparseAttentionIndexer(key_block_size=4, token_budget=16, num_selection_heads=num_selection_heads)
+        key_length = torch.tensor([num_positions, num_positions - padding])
+        inputs = (index_query, block_index_keys, key_length)
         expected = module(*inputs).numpy()
         np.testing.assert_array_equal(self._convert_and_infer(module, inputs), expected)
 
-        block_indices, block_count = QSAIndexer.unpack(module(*inputs))
-        positions = key_length - query_length + torch.arange(query_length)
-        expected_count = torch.clamp((positions + 1) // 4, max=module.block_topk)
+        # positions are counted within every sequence; padding queries (p < 0) select no blocks
+        block_indices, block_count = SparseAttentionIndexer.unpack(module(*inputs))
+        positions = key_length[:, None] - query_length + torch.arange(query_length)  # [N, L]
+        num_visible_blocks = torch.clamp(torch.div(positions + 1, 4, rounding_mode="floor"), min=0)
+        expected_count = torch.clamp(num_visible_blocks, max=module.block_topk)[:, None]
         self.assertTrue(torch.equal(block_count, expected_count.expand_as(block_count).to(block_count.dtype)))
-        self.assertTrue(bool((block_indices < ((positions + 1) // 4)[:, None]).all()))
+        self.assertTrue(bool((block_indices < num_visible_blocks[:, None, :, None]).all()))
 
-    @parameterized.expand([(11, 11, 1, 2), (38, 1, 1, 2), (37, 37, 2, 1)])
-    def test_block_sparse_attention(self, key_length, query_length, num_selection_heads, num_kv_heads):
+    # (key positions S, query tokens L, selection heads, key-value heads, left padding)
+    @parameterized.expand(
+        [(11, 11, 1, 2, 0), (38, 1, 1, 2, 0), (37, 37, 2, 1, 0), (27, 27, 1, 2, 9), (30, 1, 1, 2, 11)]
+    )
+    def test_sparse_attention(self, num_positions, query_length, num_selection_heads, num_kv_heads, padding):
         torch.manual_seed(0)
-        indexer = QSAIndexer(compress_ratio=4, token_budget=8, num_selection_heads=num_selection_heads)
-        selection = indexer(torch.randn(2, 4, query_length, 16), torch.randn(2, key_length // 4, 16), key_length)
-        block_indices, block_count = QSAIndexer.unpack(selection)
-        module = BlockSparseAttention(compress_ratio=4)
-        inputs = (
-            torch.randn(2, 4, query_length, 8),
-            torch.randn(2, num_kv_heads, key_length, 8),
-            torch.randn(2, num_kv_heads, key_length, 8),
-            block_indices.contiguous(),
-            block_count.contiguous(),
+        key_length = torch.tensor([num_positions, num_positions - padding])
+        indexer = SparseAttentionIndexer(key_block_size=4, token_budget=8, num_selection_heads=num_selection_heads)
+        index_inputs = (torch.randn(2, 4, query_length, 16), torch.randn(2, num_positions // 4, 16))
+        block_indices, block_count = SparseAttentionIndexer.unpack(indexer(*index_inputs, key_length))
+        module = SparseAttention(key_block_size=4)
+        query = torch.randn(2, 4, query_length, 8)
+        key, value = torch.randn(2, num_kv_heads, num_positions, 8), torch.randn(2, num_kv_heads, num_positions, 8)
+        inputs = (query, key, value, block_indices.contiguous(), block_count.contiguous(), key_length)
+        expected = module(*inputs)
+        np.testing.assert_allclose(self._convert_and_infer(module, inputs), expected.numpy(), atol=1e-5)
+
+        # the padded sequence gets the result it has alone, its padding queries produce zeros
+        num_padding_queries = max(0, query_length - (num_positions - padding))
+        alone = module(
+            query[1:],
+            key[1:, :, padding:],
+            value[1:, :, padding:],
+            block_indices[1:].contiguous(),
+            block_count[1:].contiguous(),
         )
-        expected = module(*inputs).numpy()
-        np.testing.assert_allclose(self._convert_and_infer(module, inputs), expected, atol=1e-5)
+        np.testing.assert_allclose(
+            expected[1, :, num_padding_queries:].numpy(), alone[0, :, num_padding_queries:].numpy(), atol=1e-6
+        )
+        self.assertTrue(bool((expected[1, :, :num_padding_queries] == 0).all()))
 
     @staticmethod
     def _reference_hash(token_ids, history, ngram_size, heads_per_ngram, multipliers, sizes, offsets, eos):
@@ -700,7 +759,7 @@ class QSAOperationsTest(unittest.TestCase):
         history = torch.randint(0, 248320, (2, 2), generator=generator)
         token_ids[0, 3] = history[1, 1] = attributes["eos_token_id"]
 
-        module = QSAHashFunction(**attributes)
+        module = NGramHashFunction(**attributes)
         expected = self._reference_hash(
             token_ids,
             history,
@@ -713,3 +772,9 @@ class QSAOperationsTest(unittest.TestCase):
         )
         np.testing.assert_array_equal(module(token_ids, history).numpy(), expected)
         np.testing.assert_array_equal(self._convert_and_infer(module, (token_ids, history)), expected)
+
+        # row_ids are int32, new_history has the type of history so that it is the history of the next call
+        packed = self._convert_and_infer(module, (token_ids, history))
+        self.assertEqual(packed.dtype, np.int64)
+        row_ids, new_history = module.unpack(module(token_ids, history), token_ids)
+        self.assertEqual((row_ids.dtype, new_history.dtype), (torch.int32, history.dtype))

@@ -300,11 +300,12 @@ def patch_stateful_hybrid_ssm(ov_model: ov.Model, empty_growing_states: bool = F
         return kv_names, ssm_names, other_tensors
 
     # besides KV-cache, conv and SSM states, hybrid models may keep other per-layer states:
-    # QSA raw index keys, PLE short conv states and M-RoPE positions of past tokens (qwen4_exp)
+    # QSA raw and block index keys, PLE short conv states and M-RoPE positions of past tokens (qwen4_exp)
     ssm_prefix_input_names = [
         "cache_params.past.ssm",
         "cache_params.past.conv",
         "cache_params.past.index_key",
+        "cache_params.past.block_index_key",
         "cache_params.past.ple_conv",
         "cache_params.past.rope_positions",
     ]
@@ -318,6 +319,7 @@ def patch_stateful_hybrid_ssm(ov_model: ov.Model, empty_growing_states: bool = F
         "cache_params.present.ssm",
         "cache_params.present.conv",
         "cache_params.present.index_key",
+        "cache_params.present.block_index_key",
         "cache_params.present.ple_conv",
         "cache_params.present.rope_positions",
     ]
