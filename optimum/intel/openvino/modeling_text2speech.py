@@ -16,6 +16,7 @@ import gc
 import logging
 import os
 import re
+import shutil
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -40,6 +41,7 @@ from transformers.file_utils import add_start_docstrings
 from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.utils import ModelOutput
 
+from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import model_has_state
 from . import OV_DECODER_NAME, OV_ENCODER_NAME
 from .configuration import OVConfig, OVWeightQuantizationConfig
@@ -1436,8 +1438,6 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
         :meth:`_resolve_ir_dir` resolves for this model, so a second load finds the IRs already
         there instead of converting again.
         """
-        from optimum.exporters.openvino import main_export
-
         source = Path(str(model_id))
         if source.is_dir() and cls._is_complete_export(source):
             return source  # already an exported directory
@@ -1975,6 +1975,48 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
     def reshape(self, *args, **kwargs):
         logger.warning("Static shapes are not supported for Qwen3-TTS.")
         return self
+
+    def _save_pretrained(self, save_directory: Union[str, Path]):
+        """
+        Saves the model to the OpenVINO IR format so that it can be re-loaded using the
+        [`~optimum.intel.openvino.modeling.OVModel.from_pretrained`] class method.
+
+        Arguments:
+            save_directory (`str` or `Path`):
+                The directory where to save the model files.
+        """
+        super()._save_pretrained(save_directory)
+
+        save_directory = Path(save_directory)
+        source = Path(str(self._ir_dir))
+        if source.is_dir() and self._is_complete_export(source) and source.resolve() != save_directory.resolve():
+            self._copy_assets(source, save_directory)
+        elif not self._is_complete_export(save_directory):
+            # Fallback to main_export when there is no complete export to copy from.
+            # This happens when an instance is loaded with `export=False`.
+            main_export(
+                model_name_or_path=str(self.model_save_dir),
+                output=save_directory,
+                task=self.export_feature,
+            )
+
+    def _copy_assets(self, source: Path, destination: Path) -> None:
+        """Copy the non-IR assets of a complete export into ``destination``."""
+        ir_files = set()
+        for ir_name in self._all_ov_model_paths.values():
+            ir_files.add(ir_name)
+            ir_files.add(str(Path(ir_name).with_suffix(".bin")))
+        skip_names = {".git", ".gitattributes", ".cache"} | ir_files
+        for item in source.iterdir():
+            if item.name in skip_names:
+                continue
+            dest = destination / item.name
+            if item.is_dir():
+                shutil.copytree(item, dest, dirs_exist_ok=True)
+            else:
+                if dest.resolve() == item.resolve():
+                    continue
+                shutil.copy2(item, dest)
 
     def _apply_quantization(
         self,

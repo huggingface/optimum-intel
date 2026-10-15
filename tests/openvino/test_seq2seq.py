@@ -1240,25 +1240,6 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
 
         return preprocessors
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    def test_model_can_be_loaded_after_saving(self, model_arch):
-        model_id = MODEL_NAMES[model_arch]
-        with TemporaryDirectory() as save_dir:
-            ov_model = self.OVMODEL_CLASS.from_pretrained(
-                model_id,
-                compile=False,
-                trust_remote_code=model_arch in REMOTE_CODE_MODELS,
-                device=OPENVINO_DEVICE,
-            )
-            ov_model.save_pretrained(save_dir)
-            ov_restored_model = self.OVMODEL_CLASS.from_pretrained(
-                save_dir,
-                compile=False,
-                trust_remote_code=model_arch in REMOTE_CODE_MODELS,
-                device=OPENVINO_DEVICE,
-            )
-            self.assertIsInstance(ov_restored_model, type(ov_model))
-
 
 @pytest.mark.skipif(is_transformers_version("<", "5.0"), reason="OVModelForMultimodalLM requires transformers >= 5.0")
 class OVModelForMultimodalLMIntegrationTest(unittest.TestCase):
@@ -1379,6 +1360,7 @@ class OVModelForMultimodalLMIntegrationTest(unittest.TestCase):
 
 class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
     SUPPORTED_ARCHITECTURES = ("speecht5",)
+    TTS_SUPPORTED_ARCHITECTURES = SUPPORTED_ARCHITECTURES + ("kokoro", "qwen3_tts")
     OVMODEL_CLASS = OVModelForTextToSpeechSeq2Seq
     AUTOMODEL_CLASS = AutoModelForTextToSpectrogram
 
@@ -1692,3 +1674,35 @@ class OVModelForPix2StructIntegrationTest(OVSeq2SeqTestMixin):
         del model_with_pkv
         del model_without_pkv
         gc.collect()
+
+
+class TestLoadAfterSaving(OVModelForVisualCausalLMIntegrationTest):
+    SUPPORTED_ARCHITECTURES = OVModelForVisualCausalLMIntegrationTest.SUPPORTED_ARCHITECTURES + list(
+        OVModelForTextToSpeechSeq2SeqIntegrationTest.TTS_SUPPORTED_ARCHITECTURES
+    )
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    def test_model_can_be_loaded_after_saving(self, model_arch):
+        if model_arch == "speecht5":
+            self.skipTest("SpeechT5 requires a vocoder, so the test needs updating to test this model.")
+        if model_arch == "qwen3_tts" and not is_qwen_tts_available():
+            self.skipTest("qwen_tts package is not installed")
+        model_id = MODEL_NAMES[model_arch]
+        model_class = self.OVMODEL_CLASS
+        if model_arch in OVModelForTextToSpeechSeq2SeqIntegrationTest.TTS_SUPPORTED_ARCHITECTURES:
+            model_class = OVModelForTextToSpeechSeq2SeqIntegrationTest.OVMODEL_CLASS
+        with TemporaryDirectory() as save_dir:
+            ov_model = model_class.from_pretrained(
+                model_id,
+                compile=False,
+                trust_remote_code=model_arch in REMOTE_CODE_MODELS,
+                device=OPENVINO_DEVICE,
+            )
+            ov_model.save_pretrained(save_dir)
+            ov_restored_model = model_class.from_pretrained(
+                save_dir,
+                compile=False,
+                trust_remote_code=model_arch in REMOTE_CODE_MODELS,
+                device=OPENVINO_DEVICE,
+            )
+            self.assertIsInstance(ov_restored_model, type(ov_model))
