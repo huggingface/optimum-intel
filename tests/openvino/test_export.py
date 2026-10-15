@@ -140,6 +140,7 @@ class ExportModelTest(unittest.TestCase):
         "qwen3_5_mtp": OVModelForVisualCausalLM,
         "qwen3_5_moe": OVModelForVisualCausalLM,
         "qwen3_5_moe_mtp": OVModelForVisualCausalLM,
+        "qwen4_exp": OVModelForVisualCausalLM,
         "gemma4_unified": OVModelForVisualCausalLM,
         "gemma3n": OVModelForVisualCausalLM,
         "mistral3": OVModelForVisualCausalLM,
@@ -275,7 +276,10 @@ class ExportModelTest(unittest.TestCase):
 
                 # Models with a Multi-Token Prediction head export it as a separate submodel;
                 # make sure the openvino_mtp_model.xml file is actually produced.
-                if model_type in ("qwen3_5_mtp", "qwen3_5_moe_mtp"):
+                has_mtp = model_type in ("qwen3_5_mtp", "qwen3_5_moe_mtp") or (
+                    model_type == "qwen4_exp" and model.config.text_config.mtp_num_hidden_layers > 0
+                )
+                if has_mtp:
                     self.assertTrue(
                         (Path(tmpdirname) / "openvino_mtp_model.xml").is_file(),
                         "openvino_mtp_model.xml was not created during export",
@@ -305,6 +309,10 @@ class ExportModelTest(unittest.TestCase):
                     self.assertTrue(
                         ov_model.language_model.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
                     )
+                    if model_type == "qwen4_exp" and has_mtp:
+                        # the MTP head input is located in the language model through rt_info, not exposed as output
+                        self.assertTrue(ov_model.language_model.model.has_rt_info("mtp_hidden_states"))
+                        self.assertNotIn("last_hidden_state", ov_model.language_model.output_names)
                     if model_type in {"gemma3n", "gemma4_unified"}:
                         vision_model = ov_model.vision_embeddings.model
                         self.assertTrue(vision_model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"]))

@@ -16,7 +16,12 @@
 # The `RecurrentAttentionCellOp` appears in the Torch graph as a result of replacing
 # the `torch.nn.Module` block `RecurrentAttentionCell` via a registered
 # `ModuleExtension` for `RecurrentAttentionCell` in the OpenVINO PyTorch frontend.
+import functools
+import itertools
+from typing import Sequence, Tuple
+
 import numpy as np
+import torch
 
 import openvino as ov
 import openvino.opset14 as ops
@@ -266,3 +271,711 @@ def convert_recurrent_selective_ssm_cell(context):
     final_output = ops.concat([output_new, output_recurrent_state_new], 0)
 
     return [final_output.output(0)]
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+# Qwen Sparse Attention (QSA) and n-gram hashing operations.
+#
+# The torch.nn.Module classes below are analogues of the internal OpenVINO operations QSAPrepare, SparseAttentionIndexer,
+# SparseAttention and NGramHashFunction (see docs/articles_en/documentation/openvino-ir-format/operation-sets/
+# operation-specs/internal in the OpenVINO repository). Each module:
+#   * keeps the operation attributes as Python attributes,
+#   * implements the reference semantics of the operation in `forward` (used while the model is traced),
+#   * provides `openvino_extensions()` that returns the `ModuleExtension` replacing the module by a single operation
+#     in the traced graph and the `ConversionExtension` that converts this operation with the attributes of the
+#     module instance.
+#
+# The OpenVINO PyTorch frontend supports a single output per ModuleExtension, so the operations with two outputs
+# (SparseAttentionIndexer, NGramHashFunction) return them packed into one tensor; `unpack()` restores the outputs of the spec.
+# ----------------------------------------------------------------------------------------------------------------------
+
+
+_I64_MAX = np.iinfo(np.int64).max
+
+
+def _const_i64(value):
+    return ops.constant(np.array(value, dtype=np.int64))
+
+
+def _dim(shape, axis: int):
+    # scalar i64 dimension `axis` of the 1D shape tensor `shape`
+    return ops.gather(shape, _const_i64(axis), _const_i64(0))
+
+
+def _vec(*values):
+    # 1D i64 tensor from scalar nodes / python ints
+    return ops.concat(
+        [ops.unsqueeze(v if isinstance(v, ov.Node) else _const_i64(v), _const_i64(0)) for v in values], 0
+    )
+
+
+class _OVOperationModule(torch.nn.Module):
+    """Base class of the modules that are replaced by a single OpenVINO operation at conversion."""
+
+    _OP_TYPE = None
+    _instance_counter = itertools.count()
+
+    def __init__(self):
+        super().__init__()
+        self._op_name = f"{self._OP_TYPE}Op{next(_OVOperationModule._instance_counter)}"
+
+    def _conversion_attributes(self) -> dict:
+        raise NotImplementedError
+
+    @staticmethod
+    def _convert(context, **attributes):
+        raise NotImplementedError
+
+    def openvino_extensions(self) -> Tuple["ModuleExtension", "ConversionExtension"]:  # noqa: F821
+        from openvino.frontend.pytorch import ConversionExtension, ModuleExtension
+
+        convert_fn = functools.partial(self._convert, **self._conversion_attributes())
+        return ModuleExtension(self, self._op_name), ConversionExtension(self._op_name, convert_fn)
+
+
+def _rotate_half_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
+    rotary_dim = cos.shape[-1]
+    x_rope, x_pass = x[..., :rotary_dim], x[..., rotary_dim:]
+    x1, x2 = x_rope[..., : rotary_dim // 2], x_rope[..., rotary_dim // 2 :]
+    x_rope = x_rope * cos + torch.cat([-x2, x1], dim=-1) * sin
+    return torch.cat([x_rope, x_pass], dim=-1)
+
+
+def _sequence_key_length(key_length, batch_size):
+    # key_length [N] or [1] -> i64 [N]: the number of valid (non-padding) key tokens of every sequence
+    key_length = ops.reshape(ops.convert(key_length, "i64"), _const_i64([-1]), False)
+    return ops.broadcast(key_length, ops.unsqueeze(batch_size, _const_i64(0)))
+
+
+class QSAPrepare(_OVOperationModule):
+    """
+    Analogue of the QSAPrepare operation: one block index key per complete block of `key_block_size` raw index keys,
+    obtained by mean-pooling (f32), RMS normalization with `k_norm_weight` and rotate-half RoPE at the first token
+    of the block. The keys of the blocks computed by the previous calls are taken from `past_block_index_keys`, only
+    the blocks completed since then are computed.
+
+    Batches with padding: sequence `n` has `key_length[n]` valid key tokens, the last ones of the `S` key positions
+    (left padding). Its blocks start at its first valid token; the rows after its last complete block are zero.
+
+    Inputs: raw_index_keys [N, S, Di], past_block_index_keys [N, Bp, Di], key_length [N],
+            rope_cos [N, S, Dr], rope_sin [N, S, Dr], k_norm_weight [Di].
+    Output: block_index_keys [N, S // key_block_size, Di].
+    An empty `k_norm_weight` disables the normalization, empty `rope_cos` / `rope_sin` disable the rotation.
+    """
+
+    _OP_TYPE = "QSAPrepare"
+
+    def __init__(self, key_block_size: int, epsilon: float = 1e-6):
+        super().__init__()
+        self.key_block_size = key_block_size
+        self.epsilon = epsilon
+
+    def forward(self, raw_index_keys, past_block_index_keys, key_length, rope_cos, rope_sin, k_norm_weight):
+        batch_size, num_positions, head_dim = raw_index_keys.shape
+        ratio = self.key_block_size
+        num_blocks_max, num_past_blocks = num_positions // ratio, past_block_index_keys.shape[1]
+        key_length = key_length.reshape(-1).long().expand(batch_size)
+        padding = num_positions - key_length
+        num_blocks = key_length // ratio
+        # the previous call had at least Bp * r key positions: so many blocks of every sequence are cached
+        num_cached = torch.clamp(torch.div(num_past_blocks * ratio - padding, ratio, rounding_mode="floor"), min=0)
+        # every sequence completed at most this many blocks since then
+        num_steps = max(1, -(-(num_positions - num_past_blocks * ratio) // ratio))
+
+        blocks = num_cached[:, None] + torch.arange(num_steps)  # [N, J]
+        first = padding[:, None] + blocks * ratio  # key position of the first token of every block
+        tokens = (first[..., None] + torch.arange(ratio)).clamp(0, num_positions - 1).reshape(batch_size, -1)
+        keys = torch.gather(raw_index_keys, 1, tokens[..., None].expand(-1, -1, head_dim))
+        keys = keys.reshape(batch_size, num_steps, ratio, head_dim).float().mean(dim=2)
+        if k_norm_weight.numel() > 0:
+            keys = keys * torch.rsqrt(keys.pow(2).mean(-1, keepdim=True) + self.epsilon) * k_norm_weight.float()
+        if rope_cos.numel() > 0:
+            rows = first.clamp(0, num_positions - 1)[..., None].expand(-1, -1, rope_cos.shape[-1])
+            cos = torch.gather(rope_cos.expand(batch_size, -1, -1).float(), 1, rows)
+            sin = torch.gather(rope_sin.expand(batch_size, -1, -1).float(), 1, rows)
+            keys = _rotate_half_rope(keys, cos, sin)
+
+        # the cached blocks of every sequence, then the computed ones; one extra column absorbs invalid blocks
+        output = torch.zeros(batch_size, num_blocks_max + 1, head_dim, dtype=past_block_index_keys.dtype)
+        output[:, :num_past_blocks] = past_block_index_keys
+        output = output * (torch.arange(num_blocks_max + 1) < num_cached[:, None])[..., None]
+        targets = torch.where(blocks < num_blocks[:, None], blocks, num_blocks_max)
+        output = output.scatter(1, targets[..., None].expand(-1, -1, head_dim), keys.to(output.dtype))
+        return output[:, :num_blocks_max]
+
+    def _conversion_attributes(self):
+        return {"key_block_size": self.key_block_size, "epsilon": self.epsilon}
+
+    @staticmethod
+    def _convert(context, key_block_size, epsilon):
+        raw_index_keys = context.get_input(0)
+        past_block_index_keys = context.get_input(1)
+        rope_cos = context.get_input(3)
+        rope_sin = context.get_input(4)
+        k_norm_weight = context.get_input(5)
+
+        ratio = _const_i64(key_block_size)
+        zero, one = _const_i64(0), _const_i64(1)
+        raw_shape = ops.shape_of(raw_index_keys, "i64")
+        batch_size, num_positions, head_dim = _dim(raw_shape, 0), _dim(raw_shape, 1), _dim(raw_shape, 2)
+        key_length = _sequence_key_length(context.get_input(2), batch_size)
+        num_blocks_max = ops.divide(num_positions, ratio)
+        num_past_blocks = _dim(ops.shape_of(past_block_index_keys, "i64"), 1)
+        padding = ops.subtract(num_positions, key_length)  # [N]
+        num_blocks = ops.divide(key_length, ratio)  # [N]
+
+        # The previous call had at least Bp * r key positions, so at least this many blocks of every sequence are
+        # cached; every sequence completed at most J blocks since then (J >= 1 keeps the tensors non-empty).
+        past_positions = ops.multiply(num_past_blocks, ratio)
+        # (a negative numerator gives 0 with floor and truncating division alike)
+        num_cached = ops.maximum(ops.divide(ops.subtract(past_positions, padding), ratio), zero)  # [N]
+        num_steps = ops.divide(
+            ops.add(ops.subtract(num_positions, past_positions), _const_i64(key_block_size - 1)), ratio
+        )
+        num_steps = ops.maximum(num_steps, one)
+        blocks = ops.add(ops.unsqueeze(num_cached, one), ops.range(zero, num_steps, one, "i64"))  # [N, J]
+        first = ops.add(ops.unsqueeze(padding, one), ops.multiply(blocks, ratio))  # [N, J]
+        last_position = ops.subtract(num_positions, one)
+
+        # 1. mean-pool the raw index keys of every computed block
+        tokens = ops.add(ops.unsqueeze(first, _const_i64(-1)), ops.range(zero, ratio, one, "i64"))  # [N, J, r]
+        tokens = ops.minimum(ops.maximum(tokens, zero), last_position)
+        tokens = ops.reshape(tokens, _vec(batch_size, -1), False)
+        keys = ops.gather(raw_index_keys, tokens, one, 1)  # [N, J * r, Di]
+        keys = ops.reshape(keys, _vec(batch_size, num_steps, key_block_size, head_dim), False)
+        keys = ops.reduce_mean(ops.convert(keys, "f32"), _const_i64(2), False)  # [N, J, Di]
+
+        # 2. RMS-normalize every computed block key
+        if k_norm_weight.get_partial_shape().is_dynamic or k_norm_weight.get_partial_shape().to_shape()[0] > 0:
+            mean_square = ops.reduce_mean(ops.multiply(keys, keys), _const_i64(-1), True)
+            inv_rms = ops.divide(
+                ops.constant(np.float32(1.0)), ops.sqrt(ops.add(mean_square, ops.constant(np.float32(epsilon))))
+            )
+            keys = ops.multiply(ops.multiply(keys, inv_rms), ops.convert(k_norm_weight, "f32"))
+
+        # 3. rotate-half RoPE on the first Dr dimensions at the first token of every computed block
+        if rope_cos.get_partial_shape().is_dynamic or 0 not in rope_cos.get_partial_shape().to_shape():
+            rope_shape = ops.shape_of(rope_cos, "i64")
+            rotary_dim = _dim(rope_shape, 2)
+            rows = ops.minimum(ops.maximum(first, zero), last_position)
+
+            def block_start_rows(table):
+                table = ops.broadcast(table, _vec(batch_size, num_positions, rotary_dim))
+                return ops.convert(ops.gather(table, rows, one, 1), "f32")  # [N, J, Dr]
+
+            cos, sin = block_start_rows(rope_cos), block_start_rows(rope_sin)
+            half = ops.divide(rotary_dim, _const_i64(2))
+            rotary_dim_1d = ops.unsqueeze(rotary_dim, zero)
+            half_1d = ops.unsqueeze(half, zero)
+            last_axis = _const_i64([-1])
+            x_rope = ops.slice(keys, _const_i64([0]), rotary_dim_1d, _const_i64([1]), last_axis)
+            x_pass = ops.slice(keys, rotary_dim_1d, _const_i64([_I64_MAX]), _const_i64([1]), last_axis)
+            x1 = ops.slice(x_rope, _const_i64([0]), half_1d, _const_i64([1]), last_axis)
+            x2 = ops.slice(x_rope, half_1d, _const_i64([_I64_MAX]), _const_i64([1]), last_axis)
+            rotated = ops.concat([ops.negative(x2), x1], -1)
+            x_rope = ops.add(ops.multiply(x_rope, cos), ops.multiply(rotated, sin))
+            keys = ops.concat([x_rope, x_pass], -1)
+
+        # 4. the cached blocks of every sequence, then the computed ones; the extra column B absorbs the invalid ones
+        filler = ops.subtract(ops.add(num_blocks_max, one), num_past_blocks)
+        zeros = ops.broadcast(
+            ops.convert_like(ops.constant(np.float32(0.0)), past_block_index_keys), _vec(batch_size, filler, head_dim)
+        )
+        output = ops.concat([past_block_index_keys, zeros], 1)  # [N, B + 1, Di]
+        columns = ops.range(zero, ops.add(num_blocks_max, one), one, "i64")
+        cached = ops.less(ops.unsqueeze(columns, zero), ops.unsqueeze(num_cached, one))  # [N, B + 1]
+        output = ops.select(
+            ops.unsqueeze(cached, _const_i64(-1)), output, ops.convert_like(ops.constant(np.float32(0.0)), output)
+        )
+        targets = ops.select(ops.less(blocks, ops.unsqueeze(num_blocks, one)), blocks, num_blocks_max)  # [N, J]
+        targets = ops.broadcast(ops.unsqueeze(targets, _const_i64(-1)), _vec(batch_size, num_steps, head_dim))
+        output = ops.scatter_elements_update(output, targets, ops.convert_like(keys, output), 1)
+        output = ops.slice(
+            output, _const_i64([0]), ops.unsqueeze(num_blocks_max, zero), _const_i64([1]), _const_i64([1])
+        )
+        return [output.output(0)]
+
+
+class SparseAttentionIndexer(_OVOperationModule):
+    """
+    Analogue of the SparseAttentionIndexer operation: for every query token at the position `p = key_length[n] - L + l` of its
+    sequence scores the `(p + 1) // key_block_size` complete key blocks of the sequence with
+    `sum_h w[h] * ReLU(q[h] . k)` over the index query heads of every selection head and selects the
+    `token_budget // key_block_size` best ones (stable top-k: equal scores -> smaller block index first). A padding
+    query (`p < 0`) selects no blocks.
+
+    Inputs: index_query [N, Hi, L, Di], block_index_keys [N, B, Di], key_length [N] (or [1]),
+            index_weights [N, L, Hi] (optional).
+    Output: packed [N, Hs, L, KB + 1] of int32: block_indices [N, Hs, L, KB] (padded with -1)
+            and block_count [N, Hs, L] in the last column, see `unpack()`.
+    """
+
+    _OP_TYPE = "SparseAttentionIndexer"
+
+    def __init__(
+        self,
+        key_block_size: int,
+        token_budget: int,
+        num_selection_heads: int = 1,
+    ):
+        super().__init__()
+        self.key_block_size = key_block_size
+        self.token_budget = token_budget
+        self.num_selection_heads = num_selection_heads
+
+    @property
+    def block_topk(self):
+        return self.token_budget // self.key_block_size
+
+    @staticmethod
+    def unpack(packed: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        return packed[..., :-1], packed[..., -1]
+
+    def forward(self, index_query, block_index_keys, key_length, index_weights=None):
+        batch_size, num_index_heads, query_length, _ = index_query.shape
+        num_blocks = block_index_keys.shape[1]
+        key_length = torch.as_tensor(key_length).reshape(-1).long().expand(batch_size)
+        num_selection_heads, block_topk = self.num_selection_heads, self.block_topk
+
+        scores = torch.relu(torch.matmul(index_query.float(), block_index_keys.float().unsqueeze(1).transpose(-1, -2)))
+        if index_weights is not None:
+            scores = scores * index_weights.float().permute(0, 2, 1).unsqueeze(-1)
+        group_size = num_index_heads // num_selection_heads
+        scores = scores.reshape(batch_size, num_selection_heads, group_size, query_length, num_blocks).sum(dim=2)
+
+        positions = key_length[:, None] - query_length + torch.arange(query_length)  # [N, L]
+        num_visible_blocks = torch.clamp(torch.div(positions + 1, self.key_block_size, rounding_mode="floor"), min=0)
+        visible = torch.arange(num_blocks) < num_visible_blocks[..., None]  # [N, L, B]
+        scores = scores.masked_fill(~visible[:, None], float("-inf"))
+
+        # stable top-k: descending score, equal scores -> smaller block index first
+        order = torch.sort(scores, dim=-1, descending=True, stable=True).indices[..., :block_topk]
+        block_indices = torch.full((batch_size, num_selection_heads, query_length, block_topk), -1, dtype=torch.long)
+        block_indices[..., : order.shape[-1]] = order
+        block_count = torch.clamp(num_visible_blocks, max=block_topk)  # [N, L]
+        invalid = torch.arange(block_topk) >= block_count[..., None]  # [N, L, KB]
+        block_indices = block_indices.masked_fill(invalid[:, None], -1)
+        block_count = block_count[:, None, :, None].expand(-1, num_selection_heads, -1, 1)
+        return torch.cat([block_indices, block_count], dim=-1).to(torch.int32)
+
+    def _conversion_attributes(self):
+        return {
+            "key_block_size": self.key_block_size,
+            "token_budget": self.token_budget,
+            "num_selection_heads": self.num_selection_heads,
+        }
+
+    @staticmethod
+    def _convert(context, key_block_size, token_budget, num_selection_heads):
+        index_query = context.get_input(0)
+        block_index_keys = context.get_input(1)
+        index_weights = context.get_input(3) if context.get_input_size() > 3 else None
+        block_topk = token_budget // key_block_size
+        zero, one = _const_i64(0), _const_i64(1)
+
+        query_shape = ops.shape_of(index_query, "i64")
+        batch_size = _dim(query_shape, 0)
+        num_index_heads = _dim(query_shape, 1)
+        query_length = _dim(query_shape, 2)
+        num_blocks = _dim(ops.shape_of(block_index_keys, "i64"), 1)
+        key_length = _sequence_key_length(context.get_input(2), batch_size)  # [N]
+
+        # One extra never-visible all-zero block key keeps every intermediate tensor non-empty when there is no
+        # complete block yet (S < key_block_size).
+        keys = ops.convert(block_index_keys, "f32")
+        head_dim = _dim(ops.shape_of(block_index_keys, "i64"), 2)
+        keys = ops.concat([keys, ops.broadcast(ops.constant(np.float32(0.0)), _vec(batch_size, 1, head_dim))], 1)
+
+        # scores [N, Hi, L, B + 1] = ReLU(q . k) (* w), summed within every selection head -> [N, Hs, L, B + 1]
+        scores = ops.relu(ops.matmul(ops.convert(index_query, "f32"), ops.unsqueeze(keys, one), False, True))
+        if index_weights is not None:
+            weights = ops.unsqueeze(
+                ops.transpose(ops.convert(index_weights, "f32"), _const_i64([0, 2, 1])), _const_i64(-1)
+            )
+            scores = ops.multiply(scores, weights)
+        group_size = ops.divide(num_index_heads, _const_i64(num_selection_heads))
+        scores_shape = _vec(batch_size, num_selection_heads, group_size, query_length, ops.add(num_blocks, one))
+        scores = ops.reduce_sum(ops.reshape(scores, scores_shape, False), _const_i64(2), False)
+        neg_inf = ops.constant(np.float32(-np.inf))
+
+        # blocks visible to the query at the position p = key_length[n] - L + l of its sequence:
+        # b < (p + 1) // key_block_size; a padding query (p < 0) sees no block
+        ratio = _const_i64(key_block_size)
+        offsets = ops.range(zero, query_length, one, "i64")
+        positions = ops.add(ops.unsqueeze(ops.subtract(key_length, query_length), one), offsets)  # [N, L]
+        # (p + 1 <= 0 only for padding queries: 0 with floor and truncating division alike)
+        num_visible_blocks = ops.maximum(ops.divide(ops.add(positions, one), ratio), zero)
+        block_ids = ops.range(zero, ops.add(num_blocks, one), one, "i64")  # [B + 1]
+        visible = ops.less(block_ids, ops.unsqueeze(num_visible_blocks, _const_i64(-1)))  # [N, L, B + 1]
+        scores = ops.select(ops.unsqueeze(visible, one), scores, neg_inf)
+
+        # stable top-k: equal scores -> smaller block index first
+        k = ops.minimum(_const_i64(block_topk), ops.add(num_blocks, one))
+        block_indices = ops.topk(scores, k, -1, "max", "value", "i32", stable=True).output(1)
+        pads_end = _vec(0, 0, 0, ops.subtract(_const_i64(block_topk), k))
+        minus_one = ops.constant(np.array(-1, dtype=np.int32))
+        block_indices = ops.pad(block_indices, _const_i64([0, 0, 0, 0]), pads_end, "constant", minus_one)
+
+        # block_count = min(token_budget / key_block_size, (p + 1) // key_block_size); the rest of a row is -1
+        block_count = ops.minimum(num_visible_blocks, _const_i64(block_topk))  # [N, L]
+        slots = ops.range(zero, _const_i64(block_topk), one, "i64")
+        valid = ops.less(slots, ops.unsqueeze(block_count, _const_i64(-1)))  # [N, L, KB]
+        block_indices = ops.select(ops.unsqueeze(valid, one), block_indices, minus_one)
+        block_count = ops.broadcast(
+            ops.convert(ops.unsqueeze(ops.unsqueeze(block_count, one), _const_i64(-1)), "i32"),
+            _vec(batch_size, num_selection_heads, query_length, 1),
+        )
+        return [ops.concat([block_indices, block_count], -1).output(0)]
+
+
+class SparseAttention(_OVOperationModule):
+    """
+    Analogue of the SparseAttention operation: attention of every query token over the tokens of the key
+    blocks selected for it (`block_indices` / `block_count` of its row `l // query_block_size`) and, in the causal
+    mode, over the incomplete block that contains it.
+
+    Batches with padding: sequence `n` has `key_length[n]` valid key tokens, the last ones of the `S` key positions
+    (left padding); its blocks and positions are counted from its first valid token, padding tokens are never
+    attended and padding queries produce zeros. Without `key_length` there is no padding.
+
+    Inputs: query [N, H, L, E], key [N, Hkv, S, E], value [N, Hkv, S, Ev], block_indices [N, Hs, Lq, KB],
+            block_count [N, Hs, Lq], key_length [N] (optional), scale (optional scalar, needs `key_length`).
+    Output: [N, H, L, Ev].
+    """
+
+    _OP_TYPE = "SparseAttention"
+
+    def __init__(self, key_block_size: int, query_block_size: int = 1, causal: bool = True):
+        super().__init__()
+        self.key_block_size = key_block_size
+        self.query_block_size = query_block_size
+        self.causal = causal
+
+    def forward(self, query, key, value, block_indices, block_count, key_length=None, scale=None):
+        batch_size, num_heads, query_length, head_dim = query.shape
+        num_kv_heads, num_positions = key.shape[1], key.shape[2]
+        num_selection_heads, block_topk = block_indices.shape[1], block_indices.shape[-1]
+        ratio = self.key_block_size
+        key_length = num_positions if key_length is None else key_length
+        key_length = torch.as_tensor(key_length).reshape(-1).long().expand(batch_size)
+        padding = num_positions - key_length  # [N]
+        rows = torch.arange(query_length) // self.query_block_size
+        block_indices, block_count = block_indices[:, :, rows].long(), block_count[:, :, rows].long()
+
+        # block mask [N, Hs, L, ceil(S / r) + 2]: invalid slots -> column nB, padding keys -> column nB + 1 (never set)
+        num_key_blocks = (num_positions + ratio - 1) // ratio
+        valid = torch.arange(block_topk) < block_count.unsqueeze(-1)
+        block_indices = torch.where(valid, block_indices, num_key_blocks)
+        block_mask = torch.zeros((batch_size, num_selection_heads, query_length, num_key_blocks + 2), dtype=torch.bool)
+        block_mask = block_mask.scatter(-1, block_indices, torch.ones_like(block_indices, dtype=torch.bool))
+        # the block of every key position within its sequence
+        sequence_positions = torch.arange(num_positions) - padding[:, None]  # [N, S]
+        key_blocks = torch.where(sequence_positions >= 0, sequence_positions // ratio, num_key_blocks + 1)
+        mask = torch.gather(
+            block_mask, 3, key_blocks[:, None, None, :].expand(-1, num_selection_heads, query_length, -1)
+        )
+        if self.causal:
+            positions = key_length[:, None] - query_length + torch.arange(query_length)  # [N, L]
+            tail_begin = torch.div(positions + 1, ratio, rounding_mode="floor") * ratio
+            tail = (
+                (sequence_positions[:, None, :] >= tail_begin[..., None])
+                & (sequence_positions[:, None, :] <= positions[..., None])
+                & (sequence_positions[:, None, :] >= 0)
+            )  # [N, L, S]
+            mask = mask | tail[:, None]
+        mask = mask.repeat_interleave(num_heads // num_selection_heads, dim=1)
+
+        key = key.repeat_interleave(num_heads // num_kv_heads, dim=1).float()
+        value = value.repeat_interleave(num_heads // num_kv_heads, dim=1).float()
+        scale = 1.0 / head_dim**0.5 if scale is None else float(scale)
+        attn = torch.matmul(query.float(), key.transpose(-1, -2)) * scale
+        attn = torch.softmax(attn.masked_fill(~mask, float("-inf")), dim=-1).nan_to_num(0.0)
+        output = torch.matmul(attn, value)
+        output = torch.where(mask.any(dim=-1, keepdim=True), output, torch.zeros_like(output))
+        return output.to(query.dtype)
+
+    def _conversion_attributes(self):
+        return {
+            "key_block_size": self.key_block_size,
+            "query_block_size": self.query_block_size,
+            "causal": self.causal,
+        }
+
+    @staticmethod
+    def _convert(context, key_block_size, query_block_size, causal):
+        query = context.get_input(0)
+        key = context.get_input(1)
+        value = context.get_input(2)
+        block_indices = context.get_input(3)
+        block_count = context.get_input(4)
+        key_length = context.get_input(5) if context.get_input_size() > 5 else None
+        scale = context.get_input(6) if context.get_input_size() > 6 else None
+
+        query_shape = ops.shape_of(query, "i64")
+        batch_size, num_heads, query_length = _dim(query_shape, 0), _dim(query_shape, 1), _dim(query_shape, 2)
+        key_shape = ops.shape_of(key, "i64")
+        num_kv_heads, num_positions, key_head_dim = _dim(key_shape, 1), _dim(key_shape, 2), _dim(key_shape, 3)
+        value_head_dim = _dim(ops.shape_of(value, "i64"), 3)
+        index_shape = ops.shape_of(block_indices, "i64")
+        num_selection_heads, block_topk = _dim(index_shape, 1), _dim(index_shape, 3)
+        zero, one = _const_i64(0), _const_i64(1)
+        key_length = _sequence_key_length(num_positions if key_length is None else key_length, batch_size)
+        padding = ops.subtract(num_positions, key_length)  # [N]
+
+        block_indices = ops.convert(block_indices, "i64")
+        block_count = ops.convert(block_count, "i64")
+        if query_block_size != 1:
+            rows = ops.divide(ops.range(zero, query_length, one, "i64"), _const_i64(query_block_size))
+            block_indices = ops.gather(block_indices, rows, _const_i64(2))
+            block_count = ops.gather(block_count, rows, _const_i64(2))
+
+        # block mask [N, Hs, L, ceil(S / r) + 2]: the first block_count entries of every row; the invalid entries ->
+        # column nB, padding keys -> column nB + 1, which is never set
+        ratio = _const_i64(key_block_size)
+        num_key_blocks = ops.divide(ops.add(num_positions, _const_i64(key_block_size - 1)), ratio)
+        slots = ops.range(zero, block_topk, one, "i64")
+        valid = ops.less(slots, ops.unsqueeze(block_count, _const_i64(-1)))
+        block_indices = ops.select(valid, block_indices, num_key_blocks)
+        mask_shape = _vec(batch_size, num_selection_heads, query_length, ops.add(num_key_blocks, _const_i64(2)))
+        block_mask = ops.broadcast(ops.constant(np.float32(0.0)), mask_shape)
+        block_mask = ops.scatter_elements_update(
+            block_mask, block_indices, ops.broadcast(ops.constant(np.float32(1.0)), ops.shape_of(block_indices)), -1
+        )
+        # token mask [N, Hs, L, S]: the block of every key position within its sequence
+        key_positions = ops.range(zero, num_positions, one, "i64")
+        sequence_positions = ops.subtract(ops.unsqueeze(key_positions, zero), ops.unsqueeze(padding, one))  # [N, S]
+        is_valid_key = ops.greater_equal(sequence_positions, zero)
+        key_blocks = ops.select(
+            is_valid_key, ops.divide(ops.maximum(sequence_positions, zero), ratio), ops.add(num_key_blocks, one)
+        )
+        key_blocks = ops.broadcast(
+            ops.unsqueeze(key_blocks, _const_i64([1, 2])),
+            _vec(batch_size, num_selection_heads, query_length, num_positions),
+        )
+        mask = ops.greater(ops.gather_elements(block_mask, key_blocks, 3), ops.constant(np.float32(0.0)))
+        if causal:
+            offsets = ops.range(zero, query_length, one, "i64")
+            positions = ops.add(ops.unsqueeze(ops.subtract(key_length, query_length), one), offsets)  # [N, L]
+            # p < 0 only for padding queries, whose tail is empty for any rounding of the division
+            tail_begin = ops.multiply(ops.divide(ops.add(positions, one), ratio), ratio)
+            sequence_positions = ops.unsqueeze(sequence_positions, one)  # [N, 1, S]
+            tail = ops.logical_and(
+                ops.logical_and(
+                    ops.greater_equal(sequence_positions, ops.unsqueeze(tail_begin, _const_i64(-1))),
+                    ops.less_equal(sequence_positions, ops.unsqueeze(positions, _const_i64(-1))),
+                ),
+                ops.greater_equal(sequence_positions, zero),
+            )  # [N, L, S]
+            mask = ops.logical_or(mask, ops.unsqueeze(tail, one))
+
+        # selection head g -> query heads of group g; kv head -> query heads of its group
+        def repeat_heads(x, num_groups, rest):
+            x = ops.unsqueeze(x, _const_i64(2))
+            x = ops.broadcast(x, _vec(batch_size, num_groups, ops.divide(num_heads, num_groups), *rest))
+            return ops.reshape(x, _vec(batch_size, num_heads, *rest), False)
+
+        mask = repeat_heads(mask, num_selection_heads, [query_length, num_positions])
+        key = repeat_heads(key, num_kv_heads, [num_positions, key_head_dim])
+        value = repeat_heads(value, num_kv_heads, [num_positions, value_head_dim])
+
+        if scale is None:
+            head_dim = ops.convert(_dim(query_shape, 3), "f32")
+            scale = ops.divide(ops.constant(np.float32(1.0)), ops.sqrt(head_dim))
+        scale = ops.convert_like(scale, query)
+        output = ops.scaled_dot_product_attention(query, key, value, mask, scale, causal=False)
+        # a query head without attended positions (e.g. a padding query) produces zeros
+        has_keys = ops.reduce_logical_or(mask, _const_i64(-1), True)
+        output = ops.select(has_keys, output, ops.convert_like(ops.constant(np.float32(0.0)), output))
+        return [output.output(0)]
+
+
+class NGramHashFunction(_OVOperationModule):
+    """
+    Analogue of the NGramHashFunction operation: rows of the packed hashed n-gram table for every token and hashed
+    head, `(XOR_k back(k) * multipliers[k]) % head_vocab_sizes[h] + head_offsets[h]` with exact int64 math, where
+    `back(k)` is the token k steps back, or `eos_token_id` before the start of the history or across an EOS.
+
+    Inputs: token_ids [N, L], history [N, ngram_size - 1].
+    Outputs: row_ids [N, L, H] of int32 and new_history [N, ngram_size - 1] of the type of `history`. They are
+             returned packed into one 1D tensor of the type of `history` (lossless: the row ids are below 2^31),
+             flattened and concatenated, see `unpack()`.
+    """
+
+    _OP_TYPE = "NGramHashFunction"
+
+    def __init__(
+        self,
+        ngram_size: int,
+        heads_per_ngram: int,
+        multipliers: Sequence[int],
+        head_vocab_sizes: Sequence[int],
+        head_offsets: Sequence[int],
+        eos_token_id: int,
+    ):
+        super().__init__()
+        self.ngram_size = ngram_size
+        self.heads_per_ngram = heads_per_ngram
+        self.multipliers = [int(m) for m in multipliers]
+        self.head_vocab_sizes = [int(s) for s in head_vocab_sizes]
+        self.head_offsets = [int(o) for o in head_offsets]
+        self.eos_token_id = int(eos_token_id)
+
+    @property
+    def context_length(self):
+        return self.ngram_size - 1
+
+    @property
+    def num_heads(self):
+        return self.context_length * self.heads_per_ngram
+
+    def unpack(self, packed: torch.Tensor, token_ids: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        batch_size, seq_len = token_ids.shape
+        num_rows = batch_size * seq_len * self.num_heads
+        row_ids = packed[:num_rows].reshape(batch_size, seq_len, self.num_heads)
+        new_history = packed[num_rows:].reshape(batch_size, self.context_length)
+        return row_ids.to(torch.int32), new_history
+
+    def forward(self, token_ids, history):
+        context, seq_len = self.context_length, token_ids.shape[1]
+        sequence = torch.cat([history.long(), token_ids.long()], dim=1)  # [N, c + L]
+        shifted = [sequence[:, context - k : context - k + seq_len] for k in range(context + 1)]
+        is_eos = [s == self.eos_token_id for s in shifted]
+        # back(k) is the token k steps back, unless an EOS lies strictly between it and the current token
+        back = [shifted[0]]
+        valid = torch.ones_like(shifted[0], dtype=torch.bool)
+        for k in range(1, context + 1):
+            back.append(torch.where(valid, shifted[k], torch.full_like(shifted[k], self.eos_token_id)))
+            valid = valid & ~is_eos[k]
+
+        rows = []
+        mix = back[0] * self.multipliers[0]
+        for order in range(2, self.ngram_size + 1):
+            mix = torch.bitwise_xor(mix, back[order - 1] * self.multipliers[order - 1])
+            for e in range(self.heads_per_ngram):
+                head = (order - 2) * self.heads_per_ngram + e
+                rows.append(torch.remainder(mix, self.head_vocab_sizes[head]) + self.head_offsets[head])
+        row_ids = torch.stack(rows, dim=-1)
+        new_history = sequence[:, -context:]
+        return torch.cat([row_ids.flatten(), new_history.flatten()]).to(history.dtype)
+
+    def _conversion_attributes(self):
+        return {
+            "ngram_size": self.ngram_size,
+            "heads_per_ngram": self.heads_per_ngram,
+            "multipliers": self.multipliers,
+            "head_vocab_sizes": self.head_vocab_sizes,
+            "head_offsets": self.head_offsets,
+            "eos_token_id": self.eos_token_id,
+        }
+
+    @staticmethod
+    def _convert(context, ngram_size, heads_per_ngram, multipliers, head_vocab_sizes, head_offsets, eos_token_id):
+        # The hash needs exact 63-bit integer math, but plugins execute i64 arithmetic in i32 (the CPU plugin lowers
+        # i64 to i32) and evaluate i32 Divide, FloorMod and comparisons through f32, which is exact only below 2^24.
+        # The decomposition below is therefore built from i32 operations that stay exact on the full i32 range:
+        # Add, Subtract, Multiply (without overflow), BitwiseXor, BitwiseAnd and BitwiseRightShift.
+        #   * every 64-bit value is kept as little-endian limbs of `limb_bits` bits,
+        #   * a product token * multiplier is computed limb by limb with carries (shift / mask),
+        #   * XOR is applied limb-wise,
+        #   * the remainder modulo p is accumulated with Horner steps `acc = (acc * 2^limb_bits + limb) % p`, where
+        #     the reduction of `acc < p * 2^limb_bits` is a sequence of branch-free conditional subtractions of
+        #     `p * 2^j`, j = limb_bits - 1 .. 0.
+        # The limb width keeps every intermediate value below 2^31: `p * 2^limb_bits <= 2^31`, limb products < 2^22.
+        from openvino.opset15 import bitwise_right_shift
+
+        if max(head_vocab_sizes) >= 2**30 or max(head_offsets) + max(head_vocab_sizes) >= 2**31:
+            raise ValueError("NGramHashFunction decomposition supports head vocabularies and table rows below 2^31")
+        limb_bits = min(11, 31 - max(head_vocab_sizes).bit_length())
+        limb_base = 1 << limb_bits
+        num_limbs = -(-64 // limb_bits)  # limbs of a 64-bit value
+        num_token_limbs = -(-31 // limb_bits)  # limbs of a non-negative i32 token id
+
+        def const_i32(value):
+            return ops.constant(np.array(value, dtype=np.int32))
+
+        def low_bits(x):
+            return ops.bitwise_and(x, const_i32(limb_base - 1))
+
+        def high_bits(x, shift=limb_bits):
+            return bitwise_right_shift(x, const_i32(shift))
+
+        def reduce_mod(x, modulus):
+            # x % modulus for 0 <= x < modulus * 2^limb_bits
+            for j in reversed(range(limb_bits)):
+                step = const_i32(modulus << j)
+                diff = ops.subtract(x, step)
+                negative = high_bits(diff, 31)  # -1 if diff < 0 else 0
+                x = ops.add(diff, ops.bitwise_and(step, negative))
+            return x
+
+        history_input = context.get_input(1)
+        token_ids = ops.convert(context.get_input(0), "i32")
+        history = ops.convert(history_input, "i32")
+        num_context = ngram_size - 1
+        sequence = ops.concat([history, token_ids], 1)  # [N, c + L]
+        seq_len = _dim(ops.shape_of(token_ids, "i64"), 1)
+        eos = const_i32(eos_token_id)
+        axis = _const_i64([1])
+
+        def shifted(k):
+            start = _const_i64([num_context - k])
+            stop = ops.unsqueeze(ops.add(seq_len, _const_i64(num_context - k)), _const_i64(0))
+            return ops.slice(sequence, start, stop, _const_i64([1]), axis)
+
+        # back(k): the token k steps back, or EOS if an EOS lies strictly between it and the current token
+        back = [shifted(0)]
+        valid = None
+        for k in range(1, num_context + 1):
+            token = shifted(k)
+            back.append(token if valid is None else ops.select(valid, token, eos))
+            not_eos = ops.not_equal(token, eos)
+            valid = not_eos if valid is None else ops.logical_and(valid, not_eos)
+
+        def product_limbs(token, multiplier):
+            # limbs of token * multiplier (exact, < 2^63 by the operation contract)
+            token_limbs = [low_bits(high_bits(token, limb_bits * j)) for j in range(num_token_limbs)]
+            multiplier_limbs = [(multiplier >> (limb_bits * i)) & (limb_base - 1) for i in range(num_limbs)]
+            limbs, carry = [], None
+            for c in range(num_limbs):
+                column = carry
+                for j in range(min(c + 1, num_token_limbs)):
+                    if multiplier_limbs[c - j]:
+                        term = ops.multiply(token_limbs[j], const_i32(multiplier_limbs[c - j]))
+                        column = term if column is None else ops.add(column, term)
+                if column is None:
+                    column = ops.multiply(token, const_i32(0))
+                limbs.append(low_bits(column))
+                carry = high_bits(column)
+            return limbs
+
+        rows = []
+        mix = product_limbs(back[0], multipliers[0])
+        for order in range(2, ngram_size + 1):
+            term = product_limbs(back[order - 1], multipliers[order - 1])
+            mix = [ops.bitwise_xor(a, b) for a, b in zip(mix, term)]
+            for e in range(heads_per_ngram):
+                head = (order - 2) * heads_per_ngram + e
+                remainder = None
+                for limb in reversed(mix):
+                    remainder = (
+                        limb if remainder is None else ops.add(ops.multiply(remainder, const_i32(limb_base)), limb)
+                    )
+                    remainder = reduce_mod(remainder, head_vocab_sizes[head])
+                row = ops.add(remainder, const_i32(head_offsets[head]))
+                rows.append(ops.unsqueeze(row, _const_i64(-1)))
+        row_ids = ops.concat(rows, -1)  # [N, L, H]
+        new_history = ops.slice(sequence, _const_i64([-num_context]), _const_i64([_I64_MAX]), _const_i64([1]), axis)
+        flat = _const_i64([-1])
+        packed = ops.concat([ops.reshape(row_ids, flat, False), ops.reshape(new_history, flat, False)], 0)
+        # packed into the type of history, which is the type of new_history; unpack() restores int32 row ids
+        return [ops.convert_like(packed, history_input).output(0)]
+
+
+def get_openvino_extensions(modules: Sequence[_OVOperationModule]):
+    """Returns `module_extensions` and `conversion_extensions` of a patcher for the given operation modules."""
+    module_extensions, conversion_extensions = {}, []
+    for module in modules:
+        module_extension, conversion_extension = module.openvino_extensions()
+        module_extensions[module] = module_extension
+        conversion_extensions.append(conversion_extension)
+    return module_extensions, conversion_extensions

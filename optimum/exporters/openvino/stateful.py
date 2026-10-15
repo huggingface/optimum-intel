@@ -92,7 +92,7 @@ def fuse_cache_reorder(
     ov_model.validate_nodes_and_infer_types()
 
 
-def build_state_initializer(ov_model: ov.Model, batch_dim: int):
+def build_state_initializer(ov_model: ov.Model, batch_dim: int, empty_growing_states: bool = False):
     """
     Build initialization ShapeOf Expression for all ReadValue ops
 
@@ -101,13 +101,21 @@ def build_state_initializer(ov_model: ov.Model, batch_dim: int):
           openvino model
       batch_dim (int):
           index of dimension corresponding to batch size
+      empty_growing_states (bool):
+          keep the states with a dynamic dimension besides the batch one (e.g. a cache growing by concatenation along
+          the sequence) without an initializer, so that they start empty. Their initializer would produce a tensor
+          with a static zero dimension, which the CPU plugin propagates to the state memory of a state that is not
+          consumed by ScaledDotProductAttention, so that the state cannot grow.
     """
     main_input_name = "input_ids" if model_has_input_output_name(ov_model, "input_ids") else "inputs_embeds"
     input_ids = ov_model.input(main_input_name)
     batch = opset13.gather(opset13.shape_of(input_ids, output_type="i64"), opset13.constant([0]), opset13.constant(0))
     for op in ov_model.get_ops():
         if op.get_type_name() == "ReadValue":
-            dims = [dim.min_length for dim in list(op.get_output_partial_shape(0))]
+            partial_shape = list(op.get_output_partial_shape(0))
+            if empty_growing_states and any(dim.is_dynamic for i, dim in enumerate(partial_shape) if i != batch_dim):
+                continue
+            dims = [dim.min_length for dim in partial_shape]
             dims[batch_dim] = batch
             dims = [opset13.constant(np.array([dim], dtype=np.int64)) if isinstance(dim, int) else dim for dim in dims]
             shape = opset13.concat(dims, axis=0)
@@ -123,6 +131,7 @@ def make_stateful(
     key_value_output_names: List[str],
     batch_dim: int,
     num_beams_and_batch: int = None,
+    empty_growing_states: bool = False,
 ):
     """
     Hides kv-cache inputs and outputs inside the model as variables.
@@ -140,6 +149,8 @@ def make_stateful(
             index of batch dimension in key value layers
         num_beams_an_batch (int):
             precalculated number of beams and batch for shapes initialization
+        empty_growing_states (bool):
+            see `build_state_initializer`
     """
     from openvino._offline_transformations import apply_make_stateful_transformation
 
@@ -170,7 +181,7 @@ def make_stateful(
 
     apply_make_stateful_transformation(ov_model, input_output_map)
     if num_beams_and_batch is None:
-        build_state_initializer(ov_model, batch_dim)
+        build_state_initializer(ov_model, batch_dim, empty_growing_states)
 
 
 def ensure_stateful_is_available(warn=True):
@@ -266,7 +277,7 @@ def insert_state_for_nodes(model: ov.Model, nodes):
         model.add_sinks([assign])
 
 
-def patch_stateful_hybrid_ssm(ov_model: ov.Model):
+def patch_stateful_hybrid_ssm(ov_model: ov.Model, empty_growing_states: bool = False):
     def get_kv_ssm_tensor_names(ssm_prefix_names: list, kv_prefix_names: list, ov_tensors):
         # return tensor names of model inputs/outputs tensors with KV and SSM states
         kv_names = []
@@ -288,14 +299,30 @@ def patch_stateful_hybrid_ssm(ov_model: ov.Model):
                 other_tensors.append(ov_tensor)
         return kv_names, ssm_names, other_tensors
 
-    ssm_prefix_input_names = ["cache_params.past.ssm", "cache_params.past.conv"]
+    # besides KV-cache, conv and SSM states, hybrid models may keep other per-layer states:
+    # QSA raw and block index keys, PLE short conv states and M-RoPE positions of past tokens (qwen4_exp)
+    ssm_prefix_input_names = [
+        "cache_params.past.ssm",
+        "cache_params.past.conv",
+        "cache_params.past.index_key",
+        "cache_params.past.block_index_key",
+        "cache_params.past.ple_conv",
+        "cache_params.past.rope_positions",
+    ]
     kv_prefix_input_names = ["cache_params.past.key", "cache_params.past.value"]
     kv_input_names, ssm_input_names, not_cache_inputs = get_kv_ssm_tensor_names(
         ssm_prefix_input_names, kv_prefix_input_names, ov_model.inputs
     )
     cache_inputs = kv_input_names + ssm_input_names
 
-    ssm_prefix_output_names = ["cache_params.present.ssm", "cache_params.present.conv"]
+    ssm_prefix_output_names = [
+        "cache_params.present.ssm",
+        "cache_params.present.conv",
+        "cache_params.present.index_key",
+        "cache_params.present.block_index_key",
+        "cache_params.present.ple_conv",
+        "cache_params.present.rope_positions",
+    ]
     kv_prefix_output_names = ["cache_params.present.key", "cache_params.present.value"]
     kv_output_names, ssm_output_names, _ = get_kv_ssm_tensor_names(
         ssm_prefix_output_names, kv_prefix_output_names, ov_model.outputs
@@ -306,18 +333,25 @@ def patch_stateful_hybrid_ssm(ov_model: ov.Model):
     # so KV tensors must be handled properly
     batch_dim = 0
     fuse_cache_reorder(ov_model, not_cache_inputs, cache_inputs, batch_dim)
-    make_stateful(ov_model, not_cache_inputs, cache_inputs, cache_outputs, batch_dim)
+    make_stateful(
+        ov_model, not_cache_inputs, cache_inputs, cache_outputs, batch_dim, empty_growing_states=empty_growing_states
+    )
+
+
+# models with growing states that are not consumed by ScaledDotProductAttention (see `build_state_initializer`)
+_EMPTY_GROWING_STATE_MODELS = ("qwen4_exp", "qwen4_exp_text", "qwen4_exp_mtp")
 
 
 def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
     if config.is_encoder_decoder and model_has_input_output_name(ov_model, "encoder_hidden_states"):
         return patch_stateful_encoder_decoder(config, ov_model)
+    empty_growing_states = config.model_type in _EMPTY_GROWING_STATE_MODELS
     if config.model_type in SSM_MODELS:
-        return patch_stateful_hybrid_ssm(ov_model)
+        return patch_stateful_hybrid_ssm(ov_model, empty_growing_states)
     # For VLM models, the text sub-model may be SSM-based (e.g. qwen3_5 VLM with qwen3_5_text language model)
     text_config = getattr(config, "text_config", None)
     if text_config is not None and getattr(text_config, "model_type", None) in SSM_MODELS:
-        return patch_stateful_hybrid_ssm(ov_model)
+        return patch_stateful_hybrid_ssm(ov_model, empty_growing_states)
     return patch_stateful_decoder(config, ov_model)
 
 

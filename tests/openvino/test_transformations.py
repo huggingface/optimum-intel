@@ -396,6 +396,40 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "ConvertToSwishCPU",
         ],
     },
+    "qwen4_exp": {
+        # Qwen3.8-Flash-Next is an image-text-to-text model; the checked transformations are in its hybrid
+        # language model: Gated DeltaNet layers (recurrent cell Loop), Qwen Sparse Attention layers (decomposed
+        # QSAPrepare -> SparseAttentionIndexer -> SparseAttention), MoE and RMS norms
+        "model_class": "OVModelForVisualCausalLM",
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+            "TransposeMatMul",
+            "TransposeConvert",
+            "CommonFusions",
+            "ReshapeAMatMul",
+            "LinOpSequenceFusion",
+        ],
+        "compile": [
+            "GatedDeltaNetFusion",
+            "FuseGDNLoop",
+            "SDPASubgraphFusion",
+            "RMSFusion",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionIOSlicing",
+            "RoPEFusionPreprocess",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "CommonDecompositions",
+            "ConvertSoftMax8ToSoftMax1",
+            "ConvertScatterElementsUpdate12ToScatterElementsUpdate3",
+            "ConvertBroadcast3",
+            "ConvertTiledMoeBlockToGatherMatmuls",
+            "ConvertMatMulToFC",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+        ],
+    },
 }
 
 if is_transformers_version(">=", "5.0.0"):

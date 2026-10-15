@@ -2975,3 +2975,169 @@ class DummyQwen3TTSComponentInputGenerator(DummyInputGenerator):
                 shape, max_value=self.config.codebook_size, framework=framework, dtype=int_dtype
             )
         raise ValueError(f"Unsupported input name {input_name} for {self.__class__.__name__}")
+
+
+class DummyQwen4ExpLMInputGenerator(DummyTextInputGenerator):
+    """
+    Dummy inputs of the Qwen3.8-Flash-Next (`qwen4_exp`) language model: 4D position ids (text, T, H, W) and the
+    hashed n-gram embeddings of the PLE layers `ngram_embeddings` [batch, sequence, num_ple_layers, ple_embed_dim].
+    """
+
+    SUPPORTED_INPUT_NAMES = DummyTextInputGenerator.SUPPORTED_INPUT_NAMES + ("ngram_embeddings",)
+
+    def __init__(self, task: str, normalized_config: NormalizedTextConfig, **kwargs):
+        super().__init__(task, normalized_config, **kwargs)
+        config = normalized_config.config
+        self.num_ple_layers = len(config.ple_layer_ids or [])
+        self.ple_embed_dim = config.ple_embed_dim
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "ngram_embeddings":
+            shape = (self.batch_size, self.sequence_length, self.num_ple_layers, self.ple_embed_dim)
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        generated_input = super().generate(input_name, framework, int_dtype, float_dtype)
+        if input_name == "position_ids":
+            return generated_input.unsqueeze(0).expand(4, -1, -1)
+        return generated_input
+
+
+class DummyQwen4ExpNGramInputGenerator(DummyTextInputGenerator):
+    """Dummy inputs of the Qwen3.8-Flash-Next n-gram embeddings model: token ids and the previous n-1 tokens."""
+
+    SUPPORTED_INPUT_NAMES = ("input_ids", "ngram_history")
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "ngram_history":
+            shape = (self.batch_size, self.normalized_config.config.ngram_size - 1)
+            return self.random_int_tensor(shape, max_value=self.vocab_size, framework=framework, dtype=int_dtype)
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class Qwen4ExpDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
+    """
+    Dummy `cache_params` of the Qwen3.8-Flash-Next language model, in the order of
+    `Qwen4ExpTextOpenVINOConfig.add_past_key_values`: [conv, ssm] per Gated DeltaNet layer, [key, value] per QSA layer,
+    the raw index keys per QSA layer, the block index keys per QSA layer, the PLE short conv state per PLE layer and
+    the M-RoPE positions of past tokens.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("cache_params",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            **kwargs,
+        )
+        self.config = normalized_config.config
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        config = self.config
+        layer_types = config.layer_types
+        num_linear = layer_types.count("linear_attention")
+        num_qsa = len(layer_types) - num_linear
+        num_ple = len(config.ple_layer_ids or [])
+        conv_dim = 2 * config.linear_num_key_heads * config.linear_key_head_dim
+        conv_dim += config.linear_num_value_heads * config.linear_value_head_dim
+        head_dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
+
+        def random_float(shape):
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+
+        cache_params = []
+        for _ in range(num_linear):
+            cache_params.append(random_float((self.batch_size, conv_dim, config.linear_conv_kernel_dim)))
+            cache_params.append(
+                random_float(
+                    (
+                        self.batch_size,
+                        config.linear_num_value_heads,
+                        config.linear_key_head_dim,
+                        config.linear_value_head_dim,
+                    )
+                )
+            )
+        for _ in range(num_qsa):
+            kv_shape = (self.batch_size, config.num_key_value_heads, self.sequence_length, head_dim)
+            cache_params += [random_float(kv_shape), random_float(kv_shape)]
+        for _ in range(num_qsa):
+            cache_params.append(random_float((self.batch_size, self.sequence_length, config.indexer_head_dim)))
+        num_blocks = self.sequence_length // config.indexer_compress_ratio
+        for _ in range(num_qsa):
+            cache_params.append(random_float((self.batch_size, num_blocks, config.indexer_head_dim)))
+        ple_conv_state_len = (config.ple_conv_kernel_size - 1) * config.ngram_size
+        for _ in range(num_ple):
+            cache_params.append(
+                random_float((self.batch_size, config.hc_count * config.hidden_size, ple_conv_state_len))
+            )
+        rope_positions = torch.arange(self.sequence_length, dtype=DTYPE_MAPPER.pt(float_dtype))
+        cache_params.append(rope_positions.view(1, -1, 1).expand(self.batch_size, -1, 3).contiguous())
+        return cache_params
+
+
+class Qwen4ExpMTPDummyInputGenerator(DummyInputGenerator):
+    """
+    Dummy inputs of the Qwen3.8-Flash-Next MTP head: the hyper-connection streams of the main model `hidden_states`
+    [batch, sequence, hc_count * hidden], `inputs_embeds`, `attention_mask` over the past and the current tokens,
+    4D `position_ids` and `cache_params` in the order of `Qwen4ExpMTPOpenVINOConfig.add_past_key_values`:
+    [key, value] per layer, the raw index keys per layer, the block index keys per layer, the M-RoPE positions.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("hidden_states", "inputs_embeds", "attention_mask", "position_ids", "cache_params")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedTextConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        self.task = task
+        self.batch_size = batch_size
+        self.sequence_length = sequence_length
+        self.past_sequence_length = sequence_length
+        self.config = normalized_config.config
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        config = self.config
+        batch, seq, past = self.batch_size, self.sequence_length, self.past_sequence_length
+        hidden_size = config.hidden_size
+
+        def random_float(shape):
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+
+        if input_name == "hidden_states":
+            return random_float((batch, seq, config.hc_count * hidden_size))
+        if input_name == "inputs_embeds":
+            return random_float((batch, seq, hidden_size))
+        if input_name == "attention_mask":
+            return self.random_int_tensor(
+                (batch, past + seq), min_value=1, max_value=2, framework=framework, dtype=int_dtype
+            )
+        if input_name == "position_ids":
+            position_ids = torch.arange(past, past + seq, dtype=DTYPE_MAPPER.pt(int_dtype))
+            return position_ids.view(1, 1, -1).expand(4, batch, -1).contiguous()
+
+        num_layers = config.mtp_num_hidden_layers
+        head_dim = getattr(config, "head_dim", None) or hidden_size // config.num_attention_heads
+        cache_params = []
+        for _ in range(num_layers):
+            kv_shape = (batch, config.num_key_value_heads, past, head_dim)
+            cache_params += [random_float(kv_shape), random_float(kv_shape)]
+        for _ in range(num_layers):
+            cache_params.append(random_float((batch, past, config.indexer_head_dim)))
+        for _ in range(num_layers):
+            cache_params.append(random_float((batch, past // config.indexer_compress_ratio, config.indexer_head_dim)))
+        rope_positions = torch.arange(past, dtype=DTYPE_MAPPER.pt(float_dtype))
+        cache_params.append(rope_positions.view(1, -1, 1).expand(batch, -1, 3).contiguous())
+        return cache_params

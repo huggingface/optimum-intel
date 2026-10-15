@@ -13074,3 +13074,527 @@ class MiniCPMV4_7VisionEmbeddingsPatcher(ModelPatcher):
             layer.self_attn.forward = layer.self_attn._orig_forward
         vision_tower.vit_merger.self_attn.forward = vision_tower.vit_merger.self_attn._orig_forward
         vision_tower.vit_merger.forward = vision_tower.vit_merger._orig_forward
+
+
+# Qwen3.8-Flash-Next (`qwen4_exp`) language model.
+#
+# The language model is exported with explicit states instead of the transformers Cache:
+#   * Gated DeltaNet layers: conv and recurrent states, the recurrence is the `RecurrentAttentionCell` (as for Qwen3.5),
+#   * Qwen Sparse Attention (QSA) layers: key / value caches, the raw index keys of all past tokens and the block
+#     index keys of all past complete blocks (QSAPrepare computes only the blocks completed by the new tokens),
+#   * PLE layers: the state of the dilated short convolution,
+#   * the multi-axis (M-RoPE) positions of all past tokens: block index keys are rotated at the first token of every
+#     key block, so QSAPrepare needs cos / sin of all key tokens, not only of the current ones.
+# The hashed n-gram table lookup of PLE is exported as a separate model (`Qwen4ExpNGramEmbeddings`), its output is the
+# `ngram_embeddings` input of the language model.
+# QSA is expressed with the QSAPrepare -> SparseAttentionIndexer -> SparseAttention operation modules of `_ov_ops.py`.
+class _Qwen4ExpLinearAttentionCache:
+    """The subset of the cache interface used by `qwen3_5_gated_delta_net_forward`."""
+
+    def __init__(self, linear_attn_mapping, conv_states, recurrent_states):
+        self.linear_attn_mapping = linear_attn_mapping
+        self.conv_states = conv_states
+        self.recurrent_states = recurrent_states
+
+
+def _qwen4_exp_qsa_attention_forward(
+    self,
+    hidden_states: torch.Tensor,
+    position_embeddings: Tuple[torch.Tensor, torch.Tensor],
+    key_cache: torch.Tensor,
+    value_cache: torch.Tensor,
+    index_key_cache: torch.Tensor,
+    block_index_key_cache: torch.Tensor,
+    key_length: torch.Tensor,
+):
+    """
+    Qwen Sparse Attention with QSAPrepare -> SparseAttentionIndexer -> SparseAttention.
+    `position_embeddings` are the cos / sin of all key tokens (past and current), [N, S, Dr].
+    `key_length` [N] is the number of valid (non-padding) key tokens of every sequence, the sequences are aligned to
+    the right (left padding).
+    `block_index_key_cache` holds the block index keys of the past complete blocks: QSAPrepare computes only the
+    blocks completed by the current tokens.
+    """
+    indexer = self.indexer
+    batch_size, seq_len, _ = hidden_states.shape
+    cos, sin = position_embeddings
+    current_cos, current_sin = cos[:, -seq_len:], sin[:, -seq_len:]
+
+    # index query: RMS + RoPE by regular graph operations; raw index keys: appended to the state
+    qk = indexer.index_qk_proj(hidden_states)
+    index_query, raw_index_keys = torch.split(
+        qk,
+        [indexer.index_n_heads * indexer.index_head_dim, indexer.index_kv_heads * indexer.index_head_dim],
+        dim=-1,
+    )
+    index_query = indexer.q_layernorm(index_query.view(batch_size, seq_len, -1, indexer.index_head_dim))
+    index_query = apply_rotary_pos_emb_qwen4_exp(index_query, current_cos, current_sin, unsqueeze_dim=2)
+    index_query = index_query.transpose(1, 2)  # [N, Hi, L, Di]
+    raw_index_keys = torch.cat([index_key_cache, raw_index_keys.view(batch_size, seq_len, -1)], dim=1)  # [N, S, Di]
+
+    # k_layernorm scales by (1 + w)
+    block_index_keys = self.qsa_prepare(
+        raw_index_keys, block_index_key_cache, key_length, cos, sin, 1.0 + indexer.k_layernorm.weight
+    )
+    block_indices, block_count = self.sparse_attention_indexer.unpack(
+        self.sparse_attention_indexer(index_query, block_index_keys, key_length)
+    )
+
+    input_shape = hidden_states.shape[:-1]
+    hidden_shape = (*input_shape, -1, self.head_dim)
+    query_states, gate = torch.chunk(self.q_proj(hidden_states).view(*input_shape, -1, self.head_dim * 2), 2, dim=-1)
+    gate = gate.reshape(*input_shape, -1)
+    query_states = self.q_norm(query_states.view(hidden_shape)).transpose(1, 2)
+    key_states = self.k_norm(self.k_proj(hidden_states).view(hidden_shape)).transpose(1, 2)
+    value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+    query_states = apply_rotary_pos_emb_qwen4_exp(query_states, current_cos, current_sin)
+    key_states = apply_rotary_pos_emb_qwen4_exp(key_states, current_cos, current_sin)
+    key_states = torch.cat([key_cache, key_states], dim=2)
+    value_states = torch.cat([value_cache, value_states], dim=2)
+
+    attn_output = self.sparse_attention(query_states, key_states, value_states, block_indices, block_count, key_length)
+    attn_output = attn_output.transpose(1, 2).reshape(*input_shape, -1)
+    attn_output = self.o_proj(attn_output * torch.sigmoid(gate))
+    return attn_output, key_states, value_states, raw_index_keys, block_index_keys
+
+
+def _qwen4_exp_rotary_embeddings(rotary_emb, positions: torch.Tensor):
+    """
+    Interleaved M-RoPE cos / sin [N, S, Dr] of `Qwen4ExpTextRotaryEmbedding` from positions [N, S, 3] (T, H, W).
+    Frequency i uses the H axis for i % 3 == 1, i < 3 * mrope_section[1], the W axis for i % 3 == 2,
+    i < 3 * mrope_section[2] and the T axis otherwise; the axis is selected with a constant one-hot mask.
+    """
+    inv_freq = rotary_emb.inv_freq.float()
+    axis = torch.zeros(inv_freq.shape[0], dtype=torch.long)
+    for dim, offset in ((1, 1), (2, 2)):
+        axis[offset : rotary_emb.mrope_section[dim] * 3 : 3] = dim
+    axis_mask = torch.nn.functional.one_hot(axis, 3).T.to(inv_freq.dtype)  # [3, Dr / 2]
+    freqs = (positions.float().unsqueeze(-1) * inv_freq * axis_mask).sum(dim=-2)  # [N, S, Dr / 2]
+    emb = torch.cat([freqs, freqs], dim=-1)
+    return emb.cos() * rotary_emb.attention_scaling, emb.sin() * rotary_emb.attention_scaling
+
+
+def apply_rotary_pos_emb_qwen4_exp(x, cos, sin, unsqueeze_dim=1):
+    # rotate-half RoPE on the first `cos.shape[-1]` dimensions (partial rotary)
+    cos, sin = cos.unsqueeze(unsqueeze_dim), sin.unsqueeze(unsqueeze_dim)
+    rotary_dim = cos.shape[-1]
+    x_rope, x_pass = x[..., :rotary_dim], x[..., rotary_dim:]
+    x1, x2 = x_rope[..., : rotary_dim // 2], x_rope[..., rotary_dim // 2 :]
+    x_rope = x_rope * cos + torch.cat((-x2, x1), dim=-1) * sin
+    return torch.cat([x_rope, x_pass], dim=-1)
+
+
+def _qwen4_exp_ple_forward(
+    self, hidden_states: torch.Tensor, embeddings: torch.Tensor, conv_state: torch.Tensor, conv_mask: torch.Tensor
+):
+    """PLE layer with precomputed n-gram `embeddings` [N, L, ple_embed_dim] and an explicit short conv state."""
+    key_normed = self.norm_key(self.key_proj(embeddings)).unflatten(-1, (self.hc_count, self.hidden_size))
+    value = self.value_proj(embeddings)
+    query_normed = self.norm_query(hidden_states).unflatten(-1, (self.hc_count, self.hidden_size))
+    gate = (key_normed * query_normed).sum(dim=-1, keepdim=True) / math.sqrt(self.hidden_size)
+    gate = gate.abs().clamp_min(1e-6).sqrt() * gate.sign()
+    gated_value = torch.sigmoid(gate) * value.unsqueeze(-2)
+    gated_value_normed = self.norm_conv(gated_value.flatten(-2))
+    gated_value = gated_value.flatten(-2)
+    conv_mask = conv_mask[:, :, None].to(gated_value.dtype)
+    gated_value = gated_value * conv_mask
+    gated_value_normed = gated_value_normed * conv_mask
+
+    # dilated depthwise short convolution over [state, current]
+    conv_input = torch.cat([conv_state, gated_value_normed.transpose(1, 2)], dim=-1)
+    new_conv_state = conv_input[:, :, -self.short_conv_state_len :]
+    conv_output = F.silu(self.conv1d(conv_input)).transpose(1, 2)
+    return gated_value + conv_output, new_conv_state
+
+
+def _patch_qwen4_exp_experts(experts: nn.Module):
+    """
+    Patches Qwen4ExpTextExperts.forward, as for MiniCPM-V-4.7 (Qwen3_5MoeExperts, same interface and weight layout):
+    https://github.com/huggingface/transformers/blob/v5.17.0/src/transformers/models/qwen4_exp/modeling_qwen4_exp.py
+    Why: the per-expert loop does not trace; the `torch.bmm` form is turned into GatherMatmul (CPU) / fused MoE (GPU) by
+    OpenVINO. 16-bit weights also need `prepare_minicpmv4_7_moe_weights` to stay 16-bit (not upcast to f32 in memory and
+    in the graph) during the conversion. The sparse MoE block (router, shared expert) traces as is.
+    """
+    experts._orig_forward = experts.forward
+    if experts.gate_up_proj.dtype in (torch.float16, torch.bfloat16):
+        prepare_minicpmv4_7_moe_weights(experts)
+    experts.forward = types.MethodType(lfm2_moe_experts_forward, experts)
+
+
+def _unpatch_qwen4_exp_experts(experts: nn.Module):
+    experts.forward = experts._orig_forward
+    restore_minicpmv4_7_moe_weights(experts)
+
+
+class Qwen4ExpLanguageModelPatcher(OVDecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        from openvino.frontend.pytorch import ConversionExtension, ModuleExtension
+
+        from ._ov_ops import QSAPrepare, SparseAttention, SparseAttentionIndexer, get_openvino_extensions
+
+        super().__init__(config, model, model_kwargs)
+
+        self._text_model = model.model.language_model
+        text_config = model.config.text_config
+        self._text_config = text_config
+        layer_types = [layer.layer_type for layer in self._text_model.layers]
+        linear_layers = [i for i, layer_type in enumerate(layer_types) if layer_type == "linear_attention"]
+        qsa_layers = [i for i, layer_type in enumerate(layer_types) if layer_type != "linear_attention"]
+        ple_layers = [i for i, layer in enumerate(self._text_model.layers) if layer.ple is not None]
+        linear_attn_mapping = {layer_idx: idx for idx, layer_idx in enumerate(linear_layers)}
+
+        # QSA operation modules, one set per QSA layer
+        self._qsa_modules = {
+            layer_idx: (
+                QSAPrepare(text_config.indexer_compress_ratio, epsilon=text_config.rms_norm_eps),
+                SparseAttentionIndexer(text_config.indexer_compress_ratio, text_config.indexer_budget),
+                SparseAttention(text_config.indexer_compress_ratio),
+            )
+            for layer_idx in qsa_layers
+        }
+        op_modules = [module for modules in self._qsa_modules.values() for module in modules]
+        self.module_extensions, self.conversion_extensions = get_openvino_extensions(op_modules)
+        self.module_extensions[RecurrentAttentionCell] = ModuleExtension(
+            RecurrentAttentionCell, "RecurrentAttentionCellOp"
+        )
+        self.conversion_extensions.append(
+            ConversionExtension("RecurrentAttentionCellOp", convert_recurrent_attention_cell)
+        )
+
+        # `cache_params` layout (see Qwen4ExpTextOpenVINOConfig.add_past_key_values):
+        # [conv, ssm] per linear layer, [key, value] per QSA layer, index_key per QSA layer, block_index_key per QSA
+        # layer, ple_conv per PLE layer, rope_positions
+        def patched_forward(
+            inputs_embeds,
+            attention_mask=None,
+            position_ids=None,
+            ngram_embeddings=None,
+            cache_params=None,
+        ):
+            text_model = self._text_model
+            num_linear, num_qsa, num_ple = len(linear_layers), len(qsa_layers), len(ple_layers)
+            conv_states = [cache_params[2 * i] for i in range(num_linear)]
+            recurrent_states = [cache_params[2 * i + 1] for i in range(num_linear)]
+            offset = 2 * num_linear
+            key_caches = [cache_params[offset + 2 * i] for i in range(num_qsa)]
+            value_caches = [cache_params[offset + 2 * i + 1] for i in range(num_qsa)]
+            offset += 2 * num_qsa
+            index_key_caches = cache_params[offset : offset + num_qsa]
+            offset += num_qsa
+            block_index_key_caches = cache_params[offset : offset + num_qsa]
+            offset += num_qsa
+            ple_conv_states = cache_params[offset : offset + num_ple]
+            past_rope_positions = cache_params[offset + num_ple]  # [N, past_len, 3], f32
+
+            seq_len = inputs_embeds.shape[1]
+            linear_cache = _Qwen4ExpLinearAttentionCache(linear_attn_mapping, conv_states, recurrent_states)
+
+            # M-RoPE cos / sin of all key tokens: past positions from the state + the current positions (T, H, W rows)
+            # (the positions state is f32: exact below 2^24, and i64 states are not supported by all plugins)
+            mrope_positions = position_ids[1:] if position_ids.shape[0] == 4 else position_ids
+            mrope_positions = mrope_positions.permute(1, 2, 0).to(past_rope_positions.dtype)
+            rope_positions = torch.cat([past_rope_positions, mrope_positions], dim=1)  # [N, S, 3]
+            position_embeddings = _qwen4_exp_rotary_embeddings(text_model.rotary_emb, rope_positions)
+            conv_mask = attention_mask[:, -seq_len:]
+            # valid key tokens of every sequence for QSA: the sequences are aligned to the right (left padding)
+            key_length = attention_mask.sum(dim=-1)
+
+            hidden_states = inputs_embeds.repeat(1, 1, text_config.hc_count)
+            present_keys, present_values, present_index_keys, present_block_index_keys = [], [], [], []
+            present_ple_conv = []
+            for layer_idx, decoder_layer in enumerate(text_model.layers):
+                if decoder_layer.ple is not None:
+                    ple_idx = len(present_ple_conv)
+                    ple_output, ple_conv_state = _qwen4_exp_ple_forward(
+                        decoder_layer.ple,
+                        hidden_states,
+                        ngram_embeddings[:, :, ple_idx],
+                        ple_conv_states[ple_idx],
+                        conv_mask,
+                    )
+                    hidden_states = hidden_states + ple_output
+                    present_ple_conv.append(ple_conv_state)
+
+                hidden_states, hyper_input, injection_weights = decoder_layer.attn_hyper_connection(hidden_states)
+                if decoder_layer.layer_type == "linear_attention":
+                    hidden_states = decoder_layer.linear_attn(
+                        hidden_states, cache_params=linear_cache, attention_mask=conv_mask
+                    )
+                else:
+                    qsa_idx = len(present_keys)
+                    hidden_states, *qsa_caches = _qwen4_exp_qsa_attention_forward(
+                        decoder_layer.self_attn,
+                        hidden_states,
+                        position_embeddings,
+                        key_caches[qsa_idx],
+                        value_caches[qsa_idx],
+                        index_key_caches[qsa_idx],
+                        block_index_key_caches[qsa_idx],
+                        key_length,
+                    )
+                    for present, cache in zip(
+                        (present_keys, present_values, present_index_keys, present_block_index_keys), qsa_caches
+                    ):
+                        present.append(cache)
+                injection = hidden_states.unsqueeze(-2) * injection_weights.unsqueeze(-1)
+                hidden_states = hyper_input + injection.flatten(-2)
+
+                hidden_states, hyper_input, injection_weights = decoder_layer.mlp_hyper_connection(hidden_states)
+                hidden_states = decoder_layer.mlp(hidden_states)
+                injection = hidden_states.unsqueeze(-2) * injection_weights.unsqueeze(-1)
+                hidden_states = hyper_input + injection.flatten(-2)
+
+            hidden_states = text_model.hyper_connection_mixer(hidden_states)
+            logits = self._model.lm_head(hidden_states)
+
+            present_key_values = []
+            for idx in range(num_linear):
+                present_key_values += [linear_cache.conv_states[idx], linear_cache.recurrent_states[idx]]
+            for key_cache, value_cache in zip(present_keys, present_values):
+                present_key_values += [key_cache, value_cache]
+            present_key_values += present_index_keys + present_block_index_keys + present_ple_conv
+            present_key_values.append(rope_positions)
+            return {"logits": logits, "present_key_values": present_key_values}
+
+        self.patched_forward = patched_forward
+        self.model_orig_forward = self.orig_forward
+        self.orig_forward = patched_forward
+
+    def __enter__(self):
+        super().__enter__()
+        setattr(self._model, self.orig_forward_name, self.patched_forward)
+
+        for layer_idx, decoder_layer in enumerate(self._text_model.layers):
+            if decoder_layer.layer_type == "linear_attention":
+                linear_attn_layer = decoder_layer.linear_attn
+                linear_attn_layer._orig_forward = linear_attn_layer.forward
+                linear_attn_layer.forward = types.MethodType(qwen3_5_gated_delta_net_forward, linear_attn_layer)
+                linear_attn_layer.recurrent_gated_delta_rule = patched_recurrent_gated_delta_rule
+                linear_attn_layer.recurrent_attention_cell = RecurrentAttentionCell()
+            else:
+                attn = decoder_layer.self_attn
+                attn.qsa_prepare, attn.sparse_attention_indexer, attn.sparse_attention = self._qsa_modules[layer_idx]
+            _patch_qwen4_exp_experts(decoder_layer.mlp.experts)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        setattr(self._model, self.orig_forward_name, self.model_orig_forward)
+        for decoder_layer in self._text_model.layers:
+            if decoder_layer.layer_type == "linear_attention":
+                linear_attn_layer = decoder_layer.linear_attn
+                linear_attn_layer.forward = linear_attn_layer._orig_forward
+                del linear_attn_layer.recurrent_attention_cell
+            else:
+                attn = decoder_layer.self_attn
+                del attn.qsa_prepare, attn.sparse_attention_indexer, attn.sparse_attention
+            _unpatch_qwen4_exp_experts(decoder_layer.mlp.experts)
+
+
+class Qwen4ExpNGramEmbeddings(torch.nn.Module):
+    """
+    The hashed n-gram embeddings of all PLE layers of Qwen3.8-Flash-Next, exported as a separate model:
+    NGramHashFunction (rows of the packed n-gram table of every hashed head) -> Gather from the n-gram table.
+
+    Inputs: input_ids [N, L], ngram_history [N, ngram_size - 1] (the previous tokens, EOS for a new sequence).
+    Outputs: ngram_embeddings [N, L, num_ple_layers, ple_embed_dim], ngram_history [N, ngram_size - 1] for the next
+    call.
+    """
+
+    def __init__(self, text_model):
+        from ._ov_ops import NGramHashFunction
+
+        super().__init__()
+        self.config = text_model.config
+        ngram_modules = [layer.ple.ple_embedding for layer in text_model.layers if layer.ple is not None]
+        self.ngram_embeddings = torch.nn.ModuleList([module.ngram_embedding for module in ngram_modules])
+        self.hash_functions = torch.nn.ModuleList(
+            [
+                NGramHashFunction(
+                    ngram_size=module.ngram_size,
+                    heads_per_ngram=module.heads_per_ngram,
+                    multipliers=module.layer_multipliers.tolist(),
+                    head_vocab_sizes=module.head_vocab_sizes,
+                    head_offsets=module.head_offsets,
+                    eos_token_id=module.eos_token_id,
+                )
+                for module in ngram_modules
+            ]
+        )
+
+    def forward(self, input_ids, ngram_history):
+        embeddings, new_history = [], None
+        for hash_function, ngram_embedding in zip(self.hash_functions, self.ngram_embeddings):
+            row_ids, new_history = hash_function.unpack(hash_function(input_ids, ngram_history), input_ids)
+            embeddings.append(ngram_embedding(row_ids).flatten(-2))
+        return torch.stack(embeddings, dim=2), new_history
+
+
+class Qwen4ExpNGramEmbeddingsPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        from ._ov_ops import get_openvino_extensions
+
+        super().__init__(config, model, model_kwargs)
+        self.module_extensions, self.conversion_extensions = get_openvino_extensions(list(model.hash_functions))
+
+
+class Qwen4ExpMTPModule(nn.Module):
+    """
+    The Multi-Token Prediction (MTP) head of Qwen3.8-Flash-Next (qwen4_exp), exported as a separate model.
+
+    transformers drops the `mtp.*` weights (`_keys_to_ignore_on_load_unexpected`), so the head is rebuilt from the
+    qwen4_exp modules and its weights are read from the checkpoint. The structure follows vLLM
+    (`vllm/models/qwen4_exp`, `residual_linear_shared` fusion):
+        e = fc_embedding(pre_fc_norm_embedding(inputs_embeds))                                       [N, L, H]
+        x = fc_hidden(pre_fc_norm_hidden(hidden_states).view(hc, H)) + e                             [N, L, hc, H]
+        x = one Qwen Sparse Attention decoder layer (hyper-connections, QSA, MoE; no PLE)
+        last_hidden_state = hyper_connection_mixer(x)  -> the lm_head of the main model
+        next_hidden_states = x                          -> `hidden_states` of the next draft step
+    `hidden_states` of the first draft step are the pre-final-mixer hyper-connection streams of the main model.
+    """
+
+    __module__ = "transformers.models.qwen4_exp"
+
+    def __init__(self, text_config):
+        super().__init__()
+        from transformers.models.qwen4_exp.modeling_qwen4_exp import (
+            Qwen4ExpTextDecoderLayer,
+            Qwen4ExpTextGatedResidual,
+            Qwen4ExpTextRMSNorm,
+            Qwen4ExpTextRotaryEmbedding,
+        )
+
+        hidden_size, hc_count = text_config.hidden_size, text_config.hc_count
+        self.hidden_size, self.hc_count = hidden_size, hc_count
+        # one QSA layer of the main architecture, without PLE
+        layer_config = copy.deepcopy(text_config)
+        layer_config.num_hidden_layers = text_config.mtp_num_hidden_layers
+        layer_config.layer_types = ["qwen_sparse_attention"] * text_config.mtp_num_hidden_layers
+        layer_config.ple_layer_ids = []
+        self.pre_fc_norm_embedding = Qwen4ExpTextRMSNorm(hidden_size, eps=text_config.rms_norm_eps)
+        self.pre_fc_norm_hidden = Qwen4ExpTextRMSNorm(hc_count * hidden_size, eps=text_config.rms_norm_eps)
+        self.fc_embedding = nn.Linear(hidden_size, hidden_size, bias=False)
+        self.fc_hidden = nn.Linear(hidden_size, hidden_size, bias=False)
+        self.layers = nn.ModuleList(
+            [Qwen4ExpTextDecoderLayer(layer_config, layer_idx) for layer_idx in range(layer_config.num_hidden_layers)]
+        )
+        self.hyper_connection_mixer = Qwen4ExpTextGatedResidual(text_config, use_combine=False)
+        self.rotary_emb = Qwen4ExpTextRotaryEmbedding(text_config)
+
+    @classmethod
+    def from_pretrained_model(cls, model):
+        """Create the MTP head and load its weights from the checkpoint of the full model."""
+        text_config = getattr(model.config, "text_config", model.config)
+        mtp_module = cls(text_config)
+        _load_mtp_weights(mtp_module, model)
+        mtp_module.config = copy.deepcopy(text_config)
+        # own model type: the stateful transformation handles its QSA states (see `patch_stateful`)
+        mtp_module.config.model_type = "qwen4_exp_mtp"
+        return mtp_module
+
+    def forward(self, hidden_states, inputs_embeds, attention_mask=None, position_ids=None, cache_params=None):
+        # `cache_params` layout (see Qwen4ExpMTPOpenVINOConfig): [key, value] per layer, index_key per layer,
+        # block_index_key per layer, rope_positions
+        num_layers = len(self.layers)
+        key_caches = [cache_params[2 * i] for i in range(num_layers)]
+        value_caches = [cache_params[2 * i + 1] for i in range(num_layers)]
+        index_key_caches = cache_params[2 * num_layers : 3 * num_layers]
+        block_index_key_caches = cache_params[3 * num_layers : 4 * num_layers]
+        past_rope_positions = cache_params[4 * num_layers]  # [N, past_len, 3], f32
+
+        embeds = self.fc_embedding(self.pre_fc_norm_embedding(inputs_embeds))
+        streams = self.pre_fc_norm_hidden(hidden_states).unflatten(-1, (self.hc_count, self.hidden_size))
+        hidden_states = (self.fc_hidden(streams) + embeds.unsqueeze(-2)).flatten(-2)
+
+        # M-RoPE cos / sin of all key tokens, as in the language model
+        mrope_positions = position_ids[1:] if position_ids.shape[0] == 4 else position_ids
+        mrope_positions = mrope_positions.permute(1, 2, 0).to(past_rope_positions.dtype)
+        rope_positions = torch.cat([past_rope_positions, mrope_positions], dim=1)  # [N, S, 3]
+        position_embeddings = _qwen4_exp_rotary_embeddings(self.rotary_emb, rope_positions)
+        key_length = attention_mask.sum(dim=-1)
+
+        present = [[] for _ in range(4)]
+        for idx, decoder_layer in enumerate(self.layers):
+            hidden_states, hyper_input, injection_weights = decoder_layer.attn_hyper_connection(hidden_states)
+            hidden_states, *qsa_caches = _qwen4_exp_qsa_attention_forward(
+                decoder_layer.self_attn,
+                hidden_states,
+                position_embeddings,
+                key_caches[idx],
+                value_caches[idx],
+                index_key_caches[idx],
+                block_index_key_caches[idx],
+                key_length,
+            )
+            for cache_list, cache in zip(present, qsa_caches):
+                cache_list.append(cache)
+            injection = hidden_states.unsqueeze(-2) * injection_weights.unsqueeze(-1)
+            hidden_states = hyper_input + injection.flatten(-2)
+            hidden_states, hyper_input, injection_weights = decoder_layer.mlp_hyper_connection(hidden_states)
+            hidden_states = decoder_layer.mlp(hidden_states)
+            injection = hidden_states.unsqueeze(-2) * injection_weights.unsqueeze(-1)
+            hidden_states = hyper_input + injection.flatten(-2)
+
+        present_keys, present_values, present_index_keys, present_block_index_keys = present
+        present_key_values = []
+        for key_cache, value_cache in zip(present_keys, present_values):
+            present_key_values += [key_cache, value_cache]
+        present_key_values += present_index_keys + present_block_index_keys + [rope_positions]
+        return {
+            "last_hidden_state": self.hyper_connection_mixer(hidden_states),
+            "next_hidden_states": hidden_states,
+            "present_key_values": present_key_values,
+        }
+
+
+class Qwen4ExpMTPModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        from ._ov_ops import QSAPrepare, SparseAttention, SparseAttentionIndexer, get_openvino_extensions
+
+        super().__init__(config, model, model_kwargs)
+        text_config = model.config
+        self._qsa_modules = [
+            (
+                QSAPrepare(text_config.indexer_compress_ratio, epsilon=text_config.rms_norm_eps),
+                SparseAttentionIndexer(text_config.indexer_compress_ratio, text_config.indexer_budget),
+                SparseAttention(text_config.indexer_compress_ratio),
+            )
+            for _ in model.layers
+        ]
+        op_modules = [module for modules in self._qsa_modules for module in modules]
+        self.module_extensions, self.conversion_extensions = get_openvino_extensions(op_modules)
+        # the forward lives on the module (see `Qwen4ExpMTPModule.forward`); bypass the base cache handling
+        self.patched_forward = self._model.forward
+        self.orig_forward = self._model.forward
+
+    def __enter__(self):
+        super().__enter__()
+        for decoder_layer, (qsa_prepare, indexer, sparse_attention) in zip(self._model.layers, self._qsa_modules):
+            attn = decoder_layer.self_attn
+            attn.qsa_prepare, attn.sparse_attention_indexer, attn.sparse_attention = (
+                qsa_prepare,
+                indexer,
+                sparse_attention,
+            )
+            _patch_qwen4_exp_experts(decoder_layer.mlp.experts)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for decoder_layer in self._model.layers:
+            attn = decoder_layer.self_attn
+            del attn.qsa_prepare, attn.sparse_attention_indexer, attn.sparse_attention
+            _unpatch_qwen4_exp_experts(decoder_layer.mlp.experts)

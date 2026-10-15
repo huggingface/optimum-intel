@@ -40,6 +40,23 @@ from transformers import (
 from transformers.modeling_outputs import BaseModelOutputWithPooling
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLModel
 from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLModel
+
+
+try:
+    from transformers.models.qwen2_vl.modeling_qwen2_vl import VisionRotaryEmbedding
+except ImportError:
+    # removed in transformers 5.17 in favor of a config-based Qwen2VLVisionRotaryEmbedding
+    class VisionRotaryEmbedding(torch.nn.Module):
+        def __init__(self, dim: int, theta: float = 10000.0) -> None:
+            super().__init__()
+            inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2, dtype=torch.float) / dim))
+            self.register_buffer("inv_freq", inv_freq, persistent=False)
+
+        def forward(self, seqlen: int) -> torch.Tensor:
+            seq = torch.arange(seqlen, device=self.inv_freq.device, dtype=self.inv_freq.dtype)
+            return torch.outer(seq, self.inv_freq)
+
+
 from transformers.utils import ModelOutput
 
 
@@ -92,6 +109,11 @@ if is_transformers_version(">=", "5.2"):
 if is_transformers_version(">=", "5.18"):
     from transformers.models.minicpmv4_7.modeling_minicpmv4_7 import MiniCPMV4_7Model
     from transformers.vision_utils import get_vision_nearest_position_ids, get_vision_window_index
+
+
+if is_transformers_version(">=", "5.17.0"):
+    from transformers.models.qwen4_exp.modeling_qwen4_exp import Qwen4ExpForConditionalGeneration, Qwen4ExpModel
+    from transformers.vision_utils import get_vision_interpolation_indices_and_weights, get_vision_position_ids
 
 
 if TYPE_CHECKING:
@@ -231,7 +253,7 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
             if past_len:
                 position_ids = position_ids[..., -inputs_embeds.shape[1] :]
 
-            if self.config.model_type in ["qwen3_5", "qwen3_5_moe"] and position_ids.ndim != 3:
+            if self.config.model_type in ["qwen3_5", "qwen3_5_moe", "qwen4_exp"] and position_ids.ndim != 3:
                 position_ids = np.repeat(np.expand_dims(position_ids, 0), 4, axis=0)
             elif (
                 self.config.model_type in ["qwen2_vl", "qwen2_5_vl", "qwen3_vl", "qwen3_asr"]
@@ -282,6 +304,12 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
             if per_layer_inputs is None:
                 raise ValueError("Expected 'per_layer_inputs', but it was not passed")
             inputs["per_layer_inputs"] = torch.Tensor(per_layer_inputs)
+
+        if "ngram_embeddings" in self.input_names:
+            ngram_embeddings = kwargs.pop("ngram_embeddings", None)
+            if ngram_embeddings is None:
+                raise ValueError("Expected 'ngram_embeddings', but it was not passed")
+            inputs["ngram_embeddings"] = ngram_embeddings
 
         return inputs
 
@@ -426,6 +454,17 @@ class OVMTPModel(OVModelPart):
         self.compile()
         inputs = {name: kwargs[name] for name in self.input_names if name in kwargs}
         return self.request(inputs)
+
+
+class OVNGramEmbeddings(OVModelPart):
+    """Hashed n-gram embeddings of the PLE layers (Qwen3.8-Flash-Next): NGramHashFunction + n-gram table lookup."""
+
+    _model_name = "ngram_embeddings"
+
+    def forward(self, input_ids, ngram_history):
+        self.compile()
+        result = self.request({"input_ids": input_ids, "ngram_history": ngram_history})
+        return result[0], result[1]
 
 
 class OVAudioEmbeddings(OVModelPart):
@@ -847,6 +886,7 @@ MODEL_PARTS_CLS_MAPPING = {
     "code_predictor": OVCodePredictorDecoder,
     "code2wav": OVCode2Wav,
     "mtp": OVMTPModel,
+    "ngram_embeddings": OVNGramEmbeddings,
 }
 
 
@@ -1313,6 +1353,9 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             and extra_outputs
         ):
             additional_kwargs["per_layer_inputs"] = extra_outputs[0]
+
+        if self.config.model_type == "qwen4_exp" and extra_outputs:
+            additional_kwargs["ngram_embeddings"] = extra_outputs[0]
 
         return self.language_model.forward(
             input_ids=None,
@@ -4316,6 +4359,7 @@ if is_transformers_version(">=", "4.57"):
     _OVQwen3VLForCausalLM.get_placeholder_mask = Qwen3VLModel.get_placeholder_mask
     _OVQwen3VLForCausalLM.get_rope_index = Qwen3VLModel.get_rope_index
     _OVQwen3VLForCausalLM.get_video_features = Qwen3VLModel.get_video_features
+    # removed from transformers 5.17 (Qwen3-VL export is limited to earlier versions)
     _OVQwen3VLForCausalLM.rot_pos_emb = getattr(Qwen3VLVisionModel, "rot_pos_emb", None)
     _OVQwen3VLForCausalLM.get_vision_position_ids = getattr(Qwen3VLModel, "get_vision_position_ids", None)
 
@@ -7935,7 +7979,204 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM):
 if is_transformers_version(">=", "5.2"):
     _OVQwen3_5ForCausalLM.get_placeholder_mask = Qwen3_5Model.get_placeholder_mask
     _OVQwen3_5ForCausalLM.get_rope_index = Qwen3_5Model.get_rope_index
+    # removed from transformers 5.17 (Qwen3.5 export is limited to earlier versions)
     _OVQwen3_5ForCausalLM.rot_pos_emb = getattr(Qwen3_5VisionModel, "rot_pos_emb", None)
+
+
+class _OVQwen4ExpForCausalLM(_OVQwen3_5ForCausalLM):
+    """
+    Qwen3.8-Flash-Next. The vision and text embeddings are the ones of Qwen3.5. The hashed n-gram embeddings of the
+    PLE layers are computed by the separate `ngram_embeddings` model from the current tokens and the previous
+    `ngram_size - 1` tokens of every sequence (`ngram_history`, kept here between the generation steps) and passed
+    to the language model as its `ngram_embeddings` input.
+    """
+
+    # `mtp` is optional, as for Qwen3.5: only present for checkpoints exported with an MTP head
+    additional_parts = ["vision_embeddings_merger", "vision_embeddings_pos", "ngram_embeddings", "mtp"]
+
+    def __init__(
+        self,
+        language_model: ov.Model,
+        text_embeddings: ov.Model,
+        vision_embeddings: ov.Model,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = None,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        **kwargs,
+    ):
+        if is_transformers_version("<", "5.17.0"):
+            raise Exception("Qwen3.8-Flash-Next requires transformers >= 5.17.0; earlier versions are not supported.")
+
+        OVModelForVisualCausalLM.__init__(
+            self,
+            language_model=language_model,
+            text_embeddings=text_embeddings,
+            vision_embeddings=vision_embeddings,
+            config=config,
+            device=device,
+            dynamic_shapes=dynamic_shapes,
+            ov_config=ov_config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
+            **kwargs,
+        )
+        self.rope_deltas = None  # cache rope_deltas here
+        self.ngram_history = None  # previous ngram_size - 1 tokens of every sequence
+
+        vision_config = config.vision_config
+        self.num_grid_per_side = int(vision_config.num_position_embeddings**0.5)
+        self.spatial_merge_size = vision_config.spatial_merge_size
+        # axial vision RoPE (Qwen4ExpVisionRotaryEmbedding): head_dim // 4 frequencies for each of the H and W axes
+        spatial_dim = vision_config.hidden_size // vision_config.num_heads // 2
+        theta = vision_config.rope_parameters["rope_theta"]
+        self.vision_inv_freq = 1.0 / (theta ** (torch.arange(0, spatial_dim, 2, dtype=torch.float) / spatial_dim))
+
+        text_config = config.text_config
+        eos_token_id = text_config.eos_token_id
+        self.ngram_eos_token_id = eos_token_id[0] if isinstance(eos_token_id, list) else eos_token_id
+        self.ngram_context_length = text_config.ngram_size - 1
+
+    def rot_pos_emb(self, grid_thw):
+        # angles of the H and W positions, [num_patches, head_dim // 2]
+        position_ids = get_vision_position_ids(grid_thw, self.spatial_merge_size)
+        return (position_ids[..., None].float() * self.vision_inv_freq).flatten(1)
+
+    def fast_pos_embed_interpolate(self, grid_thw):
+        # bilinear resampling of the learned position grid, self.vision_embeddings_pos replaces nn.Embedding
+        indices, weights = get_vision_interpolation_indices_and_weights(
+            grid_thw,
+            num_grid_per_side=self.num_grid_per_side,
+            mode="bilinear",
+            align_corners=True,
+            spatial_merge_size=self.spatial_merge_size,
+        )
+        pos_embeds = torch.from_numpy(self.vision_embeddings_pos(indices.T.contiguous()))  # [taps, patches, C]
+        return (pos_embeds * weights.T[:, :, None]).sum(0)
+
+    def get_mm_token_type_ids(self, input_ids):
+        # text (0), image (1), video (2)
+        mm_token_type_ids = torch.zeros_like(input_ids, dtype=torch.int32)
+        mm_token_type_ids[input_ids == self.config.image_token_id] = 1
+        mm_token_type_ids[input_ids == self.config.video_token_id] = 2
+        return mm_token_type_ids
+
+    def get_rope_index(self, input_ids, image_grid_thw=None, video_grid_thw=None, attention_mask=None, **kwargs):
+        mm_token_type_ids = kwargs.get("mm_token_type_ids")
+        if mm_token_type_ids is None or mm_token_type_ids.shape != input_ids.shape:
+            mm_token_type_ids = self.get_mm_token_type_ids(input_ids)
+        return Qwen4ExpModel.get_rope_index(
+            self,
+            input_ids,
+            mm_token_type_ids,
+            image_grid_thw=image_grid_thw,
+            video_grid_thw=video_grid_thw,
+            attention_mask=attention_mask,
+        )
+
+    def get_ngram_embeddings(self, input_ids, attention_mask=None, past_key_values=None):
+        batch_size, seq_len = input_ids.shape
+        if past_key_values is None or self.ngram_history is None or self.ngram_history.shape[0] != batch_size:
+            self.ngram_history = np.full(
+                (batch_size, self.ngram_context_length), self.ngram_eos_token_id, dtype=np.int64
+            )
+        if attention_mask is not None and seq_len > 1:
+            # as in transformers, padding tokens are replaced by EOS, which also resets the n-gram context
+            input_ids = torch.where(attention_mask[:, -seq_len:].bool(), input_ids, self.ngram_eos_token_id)
+        ngram_embeddings, self.ngram_history = self.ngram_embeddings(input_ids, self.ngram_history)
+        return ngram_embeddings
+
+    def get_multimodal_embeddings(
+        self,
+        input_ids,
+        pixel_values=None,
+        attention_mask=None,
+        position_ids=None,
+        pixel_values_videos=None,
+        image_grid_thw=None,
+        video_grid_thw=None,
+        cache_position=None,
+        **kwargs,
+    ):
+        if cache_position is None:
+            # positions of the current tokens, used to build the M-RoPE positions when they are not provided
+            past_length = self.language_model._past_length if kwargs.get("past_key_values") is not None else 0
+            cache_position = torch.arange(past_length, past_length + input_ids.shape[1])
+        inputs_embeds, attention_mask, position_ids = super().get_multimodal_embeddings(
+            input_ids,
+            pixel_values=pixel_values,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            pixel_values_videos=pixel_values_videos,
+            image_grid_thw=image_grid_thw,
+            video_grid_thw=video_grid_thw,
+            cache_position=cache_position,
+            **kwargs,
+        )
+        ngram_embeddings = self.get_ngram_embeddings(input_ids, attention_mask, kwargs.get("past_key_values"))
+        return inputs_embeds, attention_mask, position_ids, ngram_embeddings
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        attention_mask=None,
+        inputs_embeds=None,
+        position_ids=None,
+        use_cache=True,
+        pixel_values=None,
+        pixel_values_videos=None,
+        image_grid_thw=None,
+        video_grid_thw=None,
+        mm_token_type_ids=None,
+        next_sequence_length=None,
+        **kwargs,
+    ):
+        # transformers >= 5.17: the 4D position ids are prepared by `_prepare_position_ids_for_generation` and
+        # extended at every step; `mm_token_type_ids` is only needed for them at the pre-fill stage.
+        if inputs_embeds is not None:
+            raise ValueError("Qwen3.8-Flash-Next generation needs `input_ids` to compute the n-gram embeddings.")
+        if past_key_values is not None:
+            input_ids = input_ids[:, -(next_sequence_length or 1) :]
+            pixel_values = None
+            pixel_values_videos = None
+        if position_ids is not None:
+            position_ids = position_ids[..., -input_ids.shape[1] :]
+        return {
+            "input_ids": input_ids,
+            "inputs_embeds": None,
+            "position_ids": position_ids,
+            "past_key_values": past_key_values,
+            "use_cache": use_cache,
+            "attention_mask": attention_mask,
+            "pixel_values": pixel_values,
+            "pixel_values_videos": pixel_values_videos,
+            "image_grid_thw": image_grid_thw,
+            "video_grid_thw": video_grid_thw,
+        }
+
+    def _reorder_cache(self, past_key_values, beam_idx):
+        if self.ngram_history is not None:
+            self.ngram_history = self.ngram_history[np.asarray(beam_idx)]
+        return super()._reorder_cache(past_key_values, beam_idx)
+
+    def generate(self, *args, **kwargs):
+        self.ngram_history = None
+        return super().generate(*args, **kwargs)
+
+
+if is_transformers_version(">=", "5.17.0"):
+    _OVQwen4ExpForCausalLM.get_placeholder_mask = Qwen4ExpModel.get_placeholder_mask
+    _OVQwen4ExpForCausalLM.get_vision_position_ids = Qwen4ExpModel.get_vision_position_ids
+    # expands the 4D position ids along the batch dimension (beam search, num_return_sequences)
+    _OVQwen4ExpForCausalLM._expand_inputs_for_generation = (
+        Qwen4ExpForConditionalGeneration._expand_inputs_for_generation
+    )
+    _OVQwen4ExpForCausalLM._get_image_nums_and_video_nums = (
+        Qwen4ExpForConditionalGeneration._get_image_nums_and_video_nums
+    )
 
 
 class _OVMuseGlimmerForCausalLM(OVModelForVisualCausalLM):
@@ -8344,6 +8585,7 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "qwen3_5_text": _OVQwen3_5ForCausalLM,
     "qwen3_5_moe": _OVQwen3_5ForCausalLM,
     "qwen3_5_moe_text": _OVQwen3_5ForCausalLM,
+    "qwen4_exp": _OVQwen4ExpForCausalLM,
     "qwen3_omni_moe": _OVQwen3OmniMoeForCausalLM,
     "minicpmo": _OVMiniCPMOForCausalLM,
     "videochat_flash_qwen": _OVVideoChatFlashQwenForCausalLM,
