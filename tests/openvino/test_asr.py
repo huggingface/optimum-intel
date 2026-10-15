@@ -32,7 +32,7 @@ class OVASRTest(unittest.TestCase):
     Compares OpenVINO model output to original PyTorch model output.
     """
 
-    SUPPORTED_ARCHITECTURES = ("qwen3_asr", "fun_asr")
+    SUPPORTED_ARCHITECTURES = ("qwen3_asr", "fun_asr", "sense_voice")
 
     def _generate_audio_data(self):
         np.random.seed(SEED)
@@ -67,9 +67,14 @@ class OVASRTest(unittest.TestCase):
         # Generate with OV model using the exact PT-produced inputs.
         ov_gen_kwargs = {
             "input_features": ref["input_features"],
-            "decoder_input_ids": ref["decoder_input_ids"],
             **ref["gen_kwargs"],
         }
+        if ref.get("decoder_input_ids") is not None:
+            ov_gen_kwargs["decoder_input_ids"] = ref["decoder_input_ids"]
+
+        if ref.get("speech_lengths") is not None:
+            ov_gen_kwargs["speech_lengths"] = ref["speech_lengths"]
+
         if ref["attention_mask"] is not None:
             ov_gen_kwargs["attention_mask"] = ref["attention_mask"]
 
@@ -77,9 +82,52 @@ class OVASRTest(unittest.TestCase):
         if hasattr(ov_generated_ids, "sequences"):
             ov_generated_ids = ov_generated_ids.sequences
 
-        prompt_len = ref["decoder_input_ids"].shape[1]
+        if ref.get("decoder_input_ids") is not None:
+            prompt_len = ref["decoder_input_ids"].shape[1]
+        else:
+            prompt_len = None
         ov_text = ref["decode_fn"](ov_generated_ids, prompt_len)
 
+        self.assertEqual(ref["pt_text"], ov_text)
+
+        del ref["pt_model"]
+        del ov_model
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @pytest.mark.skipif(
+        is_transformers_version("<", "4.57") or is_transformers_version(">=", "4.58"),
+        reason="Currently, we support Qwen3-ASR and FunASR only for transformers==4.57 since they are trust-remote-code models.",
+    )
+    def test_compile_false(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+
+        ref = self._get_pt_reference(model_arch)
+
+        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
+            model_id,
+            export=True,
+            trust_remote_code=True,
+            ov_config=F32_CONFIG,
+            device=OPENVINO_DEVICE,
+            compile=False,
+        )
+
+        ov_gen_kwargs = {"input_features": ref["input_features"], **ref["gen_kwargs"]}
+        if ref.get("decoder_input_ids") is not None:
+            ov_gen_kwargs["decoder_input_ids"] = ref["decoder_input_ids"]
+        if ref.get("speech_lengths") is not None:
+            ov_gen_kwargs["speech_lengths"] = ref["speech_lengths"]
+        if ref["attention_mask"] is not None:
+            ov_gen_kwargs["attention_mask"] = ref["attention_mask"]
+
+        ov_generated_ids = ov_model.generate(**ov_gen_kwargs)
+        if hasattr(ov_generated_ids, "sequences"):
+            ov_generated_ids = ov_generated_ids.sequences
+
+        prompt_len = ref["decoder_input_ids"].shape[1] if ref.get("decoder_input_ids") is not None else None
+        ov_text = ref["decode_fn"](ov_generated_ids, prompt_len)
         self.assertEqual(ref["pt_text"], ov_text)
 
         del ref["pt_model"]
@@ -89,6 +137,8 @@ class OVASRTest(unittest.TestCase):
     def _get_pt_reference(self, model_arch):
         if model_arch == "fun_asr":
             return self._get_pt_reference_funasr()
+        if model_arch == "sense_voice":
+            return self._get_pt_reference_sense_voice()
         else:
             return self._get_pt_reference_qwen3_asr()
 
@@ -204,4 +254,38 @@ class OVASRTest(unittest.TestCase):
             ],
             "preprocess_check": None,
             "pt_model": transformers_model,
+        }
+
+    def _get_pt_reference_sense_voice(self):
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+
+        from funasr import AutoModel
+        from funasr.utils.load_utils import extract_fbank
+
+        model_id = MODEL_NAMES["sense_voice"]
+        buf = io.StringIO()
+        with redirect_stdout(buf), redirect_stderr(buf):
+            pt_model = AutoModel(model=model_id, hub="hf", trust_remote_code=True, device="cpu", disable_update=True)
+
+        audio_data, sample_rate = self._generate_audio_data()
+        audio_tensor = torch.from_numpy(audio_data)
+
+        speech, speech_lengths = extract_fbank(audio_tensor, data_type="sound", frontend=pt_model.kwargs["frontend"])
+
+        with redirect_stdout(buf), redirect_stderr(buf):
+            args = pt_model.kwargs
+            args["data_type"] = "fbank"
+            pt_result = pt_model.model.inference(speech, speech_lengths, **args)
+        pt_text = pt_result[0][0]["text"]
+
+        return {
+            "input_features": speech,
+            "speech_lengths": speech_lengths,
+            "decode_fn": lambda ids, prompt_len: ids[0],
+            "pt_text": pt_text,
+            "preprocess_check": None,
+            "gen_kwargs": {},
+            "pt_model": pt_model,
+            "attention_mask": None,
         }

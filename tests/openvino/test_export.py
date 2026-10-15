@@ -140,6 +140,7 @@ class ExportModelTest(unittest.TestCase):
         "lfm2_moe": OVModelForCausalLM,
         "qwen3_asr": OVModelForSpeechSeq2Seq,
         "fun_asr": OVModelForSpeechSeq2Seq,
+        "sense_voice": OVModelForSpeechSeq2Seq,
         "mamba": OVModelForCausalLM,
         "falcon_mamba": OVModelForCausalLM,
         "gemma4": OVModelForVisualCausalLM,
@@ -158,6 +159,7 @@ class ExportModelTest(unittest.TestCase):
         "qwen3_omni_moe": OVModelForMultimodalLM,
         "muse_glimmer": OVModelForVisualCausalLM,
         "deepseek_ocr2": OVModelForVisualCausalLM,
+        "minicpmv4_7": OVModelForVisualCausalLM,
     }
 
     if is_diffusers_version(">=", "0.41.0.dev0"):
@@ -204,7 +206,7 @@ class ExportModelTest(unittest.TestCase):
         auto_model = self.SUPPORTED_ARCHITECTURES[model_type]
         task = auto_model.export_feature
         model_name = MODEL_NAMES[model_type]
-        if model_type == "fun_asr":
+        if model_type in ("fun_asr", "sense_voice"):
             library_name = "funasr"
         else:
             library_name = TasksManager.infer_library_from_model(model_name)
@@ -233,6 +235,10 @@ class ExportModelTest(unittest.TestCase):
             from optimum.intel.openvino.modeling_funasr import _FunASRForSpeechSeq2Seq
 
             model = _FunASRForSpeechSeq2Seq.from_pretrained(model_name, **loading_kwargs)
+        elif model_type == "sense_voice":
+            from optimum.intel.openvino.modeling_funasr import _SenseVoiceForCTC
+
+            model = _SenseVoiceForCTC.from_pretrained(model_name)
         elif model_type == "kokoro":
             model = TasksManager.get_model_from_task(
                 task=task,
@@ -309,7 +315,7 @@ class ExportModelTest(unittest.TestCase):
                     self.assertTrue(
                         ov_model.language_model.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
                     )
-                    if model_type == "gemma4_unified":
+                    if model_type in {"gemma3n", "gemma4_unified"}:
                         vision_model = ov_model.vision_embeddings.model
                         self.assertTrue(vision_model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"]))
                         self.assertEqual(

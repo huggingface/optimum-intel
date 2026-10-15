@@ -53,6 +53,8 @@ from optimum.exporters.openvino.input_generators import (
     DummyGemma4VisionInputGenerator,
     DummyKokoroInputGenerator,
     DummyLLavaMultiModalProjectorInputGenerator,
+    DummyMiniCPMV4_7LMInputGenerator,
+    DummyMiniCPMV4_7VisionInputGenerator,
     DummyMiniCPMVImageInputGenerator,
     DummyMiniCPMVResampleInputGenerator,
     DummyMistral3MultiModalProjectorInputGenerator,
@@ -117,6 +119,7 @@ from optimum.exporters.openvino.input_generators import (
     Qwen4ExpDummyPastKeyValuesGenerator,
     QwenDummyPastKeyValuesGenerator,
     QwenImage21VaeDummyInputGenerator,
+    SenseVoiceDummyInputGenerator,
     Zamba2DummyPastKeyValuesGenerator,
 )
 from optimum.exporters.openvino.model_patcher import (
@@ -174,6 +177,9 @@ from optimum.exporters.openvino.model_patcher import (
     MambaPatcher,
     MiniCPM3Patcher,
     MiniCPMModelPatcher,
+    MiniCPMV4_7LanguageModelPatcher,
+    MiniCPMV4_7VisionEmbeddingsModule,
+    MiniCPMV4_7VisionEmbeddingsPatcher,
     MiniCPMVImageEmbeddingsModelPatcher,
     MiniCPMVResamplerModelPatcher,
     Mistral3ImageEmbeddingModelPatcher,
@@ -3627,6 +3633,140 @@ class MiniCPMOOpenVINOConfig(MiniCPMVOpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "4.51.3"
 
 
+class MiniCPMV4_7ConfigBehavior(str, enum.Enum):
+    LANGUAGE = "language"
+    VISION_EMBEDDINGS = "vision_embeddings"
+    TEXT_EMBEDDINGS = "text_embeddings"
+
+
+@register_in_tasks_manager("minicpmv4_7", *["image-text-to-text"], library_name="transformers")
+class MiniCPMV4_7OpenVINOConfig(BaseVLMOpenVINOConfig):
+    """
+    MiniCPM-V 4.7: a SigLIP-style vision tower with a ViT window-attention merger and an MLP merger, on top of a
+    Qwen3.5 (hybrid Gated DeltaNet + full attention) language model with canvas M-RoPE. The language model is either
+    dense (`qwen3_5_text`) or MoE (`qwen3_5_moe_text`).
+
+    Uses the native transformers implementation (no remote code). The vision graph encodes one crop at a time, see
+    `MiniCPMV4_7VisionEmbeddingsPatcher`.
+    """
+
+    MIN_TRANSFORMERS_VERSION = "5.18.0"
+    MAX_TRANSFORMERS_VERSION = None
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in MiniCPMV4_7ConfigBehavior]
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyMiniCPMV4_7VisionInputGenerator,)
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: MiniCPMV4_7ConfigBehavior = MiniCPMV4_7ConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._behavior = behavior
+        self._orig_config = config
+        if self._behavior == MiniCPMV4_7ConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == MiniCPMV4_7ConfigBehavior.VISION_EMBEDDINGS:
+            return {
+                "pixel_values": {3: "patches_width"},
+                "position_ids": {0: "num_patches"},
+                "window_index": {0: "num_patches"},
+                "merge_index": {0: "num_merged_patches"},
+            }
+        return {}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == MiniCPMV4_7ConfigBehavior.VISION_EMBEDDINGS:
+            return {"last_hidden_state": {0: "num_tokens"}}
+        return {}
+
+    def with_behavior(
+        self,
+        behavior: Union[str, MiniCPMV4_7ConfigBehavior],
+    ):
+        """
+        Creates a config for different behaviour.
+        Args:
+            behavior ([`ConfigBehavior`]):
+                The behavior to use for the new instance.
+        """
+        if isinstance(behavior, str) and not isinstance(behavior, MiniCPMV4_7ConfigBehavior):
+            behavior = MiniCPMV4_7ConfigBehavior(behavior)
+
+        # qwen3_5_text for the dense checkpoints, qwen3_5_moe_text for the MoE ones (e.g. MiniCPM-V-4.7-35B-A3B)
+        text_model_type = self._orig_config.text_config.model_type
+
+        if behavior == MiniCPMV4_7ConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config(
+                text_model_type,
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
+                max_transformers_version=self.MAX_TRANSFORMERS_VERSION,
+            )
+
+        if behavior == MiniCPMV4_7ConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                text_model_type,
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=MiniCPMV4_7LanguageModelPatcher,
+                dummy_input_generator=DummyMiniCPMV4_7LMInputGenerator,
+                inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
+                max_transformers_version=self.MAX_TRANSFORMERS_VERSION,
+            )
+
+        if behavior == MiniCPMV4_7ConfigBehavior.VISION_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    @staticmethod
+    def get_model_for_behavior(model, behavior: Union[str, MiniCPMV4_7ConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, MiniCPMV4_7ConfigBehavior):
+            behavior = MiniCPMV4_7ConfigBehavior(behavior)
+
+        if behavior == MiniCPMV4_7ConfigBehavior.LANGUAGE:
+            return model
+
+        if behavior == MiniCPMV4_7ConfigBehavior.VISION_EMBEDDINGS:
+            return MiniCPMV4_7VisionEmbeddingsModule(model)
+
+        if behavior == MiniCPMV4_7ConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.model.language_model.embed_tokens
+            text_embedding.config = model.config.text_config
+            return text_embedding
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior == MiniCPMV4_7ConfigBehavior.VISION_EMBEDDINGS:
+            return MiniCPMV4_7VisionEmbeddingsPatcher(self, model, model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
+
+
 class Phi3VisionConfigBehavior(str, enum.Enum):
     LANGUAGE = "language"
     VISION_PROJECTION = "vision_projection"
@@ -4959,6 +5099,40 @@ class FunASROpenVINOConfig(AudioToTextOpenVINOConfig):
         for i in range(self._normalized_config.decoder_num_layers):
             inputs_or_outputs[f"{name}.{i}.decoder.key"] = {0: "batch_size", 2: decoder_sequence_name}
             inputs_or_outputs[f"{name}.{i}.decoder.value"] = {0: "batch_size", 2: decoder_sequence_name}
+
+
+@register_in_tasks_manager(
+    "sense_voice",
+    *["automatic-speech-recognition"],
+    library_name="funasr",
+)
+class SenseVoiceOpenVINOConfig(AudioOpenVINOConfig):
+    """OpenVINO export config for SenseVoiceSmall.
+
+    SenseVoiceSmall is encoder-only: fbank features (batch, num_frames, feature_size), the per-sample valid
+    frame counts (`speech_lengths`) and two integer prefix-query selectors (`language`, `textnorm`) are
+    consumed by a SANM encoder + CTC head, producing per-frame token logits and the per-sample encoder
+    output lengths. `speech_lengths` drives the SANM padding mask, so a padded batch decodes correctly.
+    """
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (SenseVoiceDummyInputGenerator,)
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(feature_size="num_mel_bins", allow_new=True)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "input_features": {0: "batch_size", 1: "encoder_sequence_length"},
+            "speech_lengths": {0: "batch_size"},
+            "language": {0: "batch_size"},
+            "textnorm": {0: "batch_size"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "logits": {0: "batch_size", 1: "logits_sequence_length"},
+            "encoder_out_lens": {0: "batch_size"},
+        }
 
 
 @register_in_tasks_manager(
