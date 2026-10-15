@@ -869,12 +869,22 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "vision_embeddings_model": {"int8": 28},
             },
         ),
+        # Data-aware: mixed precision (ratio < 1) is not used, its sensitivity metrics do not support the 3D
+        # MoE expert weights yet.
         (
-            # data-aware: mixed precision (ratio < 1) is not used, its sensitivity metrics do not support the 3D
-            # MoE expert weights yet
             "image-text-to-text",
             "minicpmv4_7",
             "int4 --group-size 8 --ratio 1.0 --dataset textvqa --num-samples 1 --scale-estimation",
+            {
+                "lm_model": {"int8": 8, "int4": 102},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 28},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "minicpmv4_7",
+            "int4 --group-size 8 --ratio 1.0 --dataset gsm8k --num-samples 1 --scale-estimation",
             {
                 "lm_model": {"int8": 8, "int4": 102},
                 "text_embeddings_model": {"int8": 1},

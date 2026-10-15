@@ -566,6 +566,14 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
             "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
         },
     },
+    "openbmb/MiniCPM-V-4.7-1B": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 1.0,
+        "dataset": "gsm8k",
+        "scale_estimation": True,
+    },
     # Teacher-forced top-1 agreement with the bf16 model on text-only / image / video answers: 93.8% vs 93.0% with the
     # generic int4 config (group size 128); int8 reaches 97.8%.
     "openbmb/MiniCPM-V-4.7-35B-A3B": {
