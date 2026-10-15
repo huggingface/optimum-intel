@@ -1208,7 +1208,7 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
     def test_compare_spatio_temporal_guidance_to_diffusers_pipeline(self, model_arch: str):
         # STG perturbs the self-attention of selected transformer blocks, which the exported graph
         # cannot select by block index on its own, so check the traced mask reproduces it.
-        if not model_arch.startswith("ltx2") or is_diffusers_version("<", "0.40.0"):
+        if model_arch not in ["ltx2", "ltx2.3", "ltx2.5"] or is_diffusers_version("<", "0.40.0"):
             self.skipTest(f"{model_arch} does not expose spatio-temporal guidance")
 
         height, width = 64, 64
@@ -1365,7 +1365,7 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
             "guidance_scale": 4.5,
         }
         # diffusers 0.40.0 re-compresses the conditioning image with H.264, which only accepts a single PIL image.
-        if model_arch.startswith("ltx2") and is_diffusers_version(">=", "0.40.0"):
+        if model_arch in ["ltx2", "ltx2.3", "ltx2.5"] and is_diffusers_version(">=", "0.40.0"):
             inputs["image_crf"] = 0
         inputs.update(_ltx2_modality_isolation_off(model_arch))
 
@@ -1380,7 +1380,7 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
 
     @staticmethod
     def _auto_cls(model_arch: str):
-        if model_arch.startswith("ltx2"):
+        if model_arch in ["ltx2", "ltx2.3", "ltx2.5"]:
             from diffusers import LTX2ImageToVideoPipeline
 
             return LTX2ImageToVideoPipeline
