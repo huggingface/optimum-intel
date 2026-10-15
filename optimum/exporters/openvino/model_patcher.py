@@ -13430,6 +13430,25 @@ def _qwen4_exp_ple_forward(
     return gated_value + conv_output, new_conv_state
 
 
+def _patch_qwen4_exp_experts(experts: nn.Module):
+    """
+    Patches Qwen4ExpTextExperts.forward, as for MiniCPM-V-4.7 (Qwen3_5MoeExperts, same interface and weight layout):
+    https://github.com/huggingface/transformers/blob/v5.17.0/src/transformers/models/qwen4_exp/modeling_qwen4_exp.py
+    Why: the per-expert loop does not trace; the `torch.bmm` form is turned into GatherMatmul (CPU) / fused MoE (GPU) by
+    OpenVINO. 16-bit weights also need `prepare_minicpmv4_7_moe_weights` to stay 16-bit (not upcast to f32 in memory and
+    in the graph) during the conversion. The sparse MoE block (router, shared expert) traces as is.
+    """
+    experts._orig_forward = experts.forward
+    if experts.gate_up_proj.dtype in (torch.float16, torch.bfloat16):
+        prepare_minicpmv4_7_moe_weights(experts)
+    experts.forward = types.MethodType(lfm2_moe_experts_forward, experts)
+
+
+def _unpatch_qwen4_exp_experts(experts: nn.Module):
+    experts.forward = experts._orig_forward
+    restore_minicpmv4_7_moe_weights(experts)
+
+
 class Qwen4ExpLanguageModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
@@ -13583,9 +13602,7 @@ class Qwen4ExpLanguageModelPatcher(OVDecoderModelPatcher):
             else:
                 attn = decoder_layer.self_attn
                 attn.qsa_prepare, attn.sparse_attention_indexer, attn.sparse_attention = self._qsa_modules[layer_idx]
-            sparse_moe_block = decoder_layer.mlp
-            sparse_moe_block._orig_forward = sparse_moe_block.forward
-            sparse_moe_block.forward = types.MethodType(patched_qwen3_5_moe_sparse_moe_block, sparse_moe_block)
+            _patch_qwen4_exp_experts(decoder_layer.mlp.experts)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -13598,7 +13615,7 @@ class Qwen4ExpLanguageModelPatcher(OVDecoderModelPatcher):
             else:
                 attn = decoder_layer.self_attn
                 del attn.qsa_prepare, attn.sparse_attention_indexer, attn.sparse_attention
-            decoder_layer.mlp.forward = decoder_layer.mlp._orig_forward
+            _unpatch_qwen4_exp_experts(decoder_layer.mlp.experts)
 
 
 class Qwen4ExpNGramEmbeddings(torch.nn.Module):
@@ -13796,13 +13813,11 @@ class Qwen4ExpMTPModelPatcher(ModelPatcher):
                 indexer,
                 sparse_attention,
             )
-            sparse_moe_block = decoder_layer.mlp
-            sparse_moe_block._orig_forward = sparse_moe_block.forward
-            sparse_moe_block.forward = types.MethodType(patched_qwen3_5_moe_sparse_moe_block, sparse_moe_block)
+            _patch_qwen4_exp_experts(decoder_layer.mlp.experts)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         for decoder_layer in self._model.layers:
             attn = decoder_layer.self_attn
             del attn.qsa_prepare, attn.sparse_attention_indexer, attn.sparse_attention
-            decoder_layer.mlp.forward = decoder_layer.mlp._orig_forward
+            _unpatch_qwen4_exp_experts(decoder_layer.mlp.experts)
