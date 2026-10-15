@@ -16,6 +16,7 @@ import inspect
 import logging
 import re
 from collections import namedtuple
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
@@ -503,6 +504,66 @@ SSM_MODELS = [
     "qwen3_5_text",
     "qwen3_5_moe_text",
 ]
+
+
+@dataclass(frozen=True)
+class TokenClassificationHead:
+    """A single per-token classification head of a multi-head token-classification model.
+
+    Args:
+        name (`str`):
+            Name of the head output, used as-is as the OpenVINO output tensor name.
+        label_map_attr (`str`):
+            Name of the `PretrainedConfig` attribute holding the `{index: label}` mapping of this head.
+    """
+
+    name: str
+    label_map_attr: str
+
+
+@dataclass(frozen=True)
+class MultiHeadTokenClassificationSpec:
+    """Describes a token-classification architecture that exposes several classification heads.
+
+    Args:
+        heads (`Tuple[TokenClassificationHead, ...]`):
+            The heads, in the order in which the model returns them.
+        loading_task (`str`):
+            Task used to resolve the auto class the checkpoint has to be loaded with. Remote-code
+            checkpoints commonly register a single `AutoModel` entry in `auto_map`, in which case
+            `AutoModelForTokenClassification` cannot resolve the custom architecture.
+    """
+
+    heads: Tuple[TokenClassificationHead, ...]
+    loading_task: str = "feature-extraction"
+
+    @property
+    def head_names(self) -> Tuple[str, ...]:
+        return tuple(head.name for head in self.heads)
+
+
+MULTI_HEAD_TOKEN_CLASSIFICATION_ARCHITECTURES: Dict[str, MultiHeadTokenClassificationSpec] = {
+    "Qwen3ForGuardModel": MultiHeadTokenClassificationSpec(
+        heads=(
+            TokenClassificationHead("risk_level_logits", "response_risk_level_map"),
+            TokenClassificationHead("category_logits", "response_category_map"),
+            TokenClassificationHead("query_risk_level_logits", "query_risk_level_map"),
+            TokenClassificationHead("query_category_logits", "query_category_map"),
+        ),
+    ),
+}
+
+
+def get_multi_head_token_classification_spec(
+    config: Optional[PretrainedConfig],
+) -> Optional[MultiHeadTokenClassificationSpec]:
+    """Returns the multi-head token-classification spec of `config`, or `None` for regular architectures."""
+    for architecture in getattr(config, "architectures", None) or []:
+        spec = MULTI_HEAD_TOKEN_CLASSIFICATION_ARCHITECTURES.get(architecture)
+        if spec is not None:
+            return spec
+    return None
+
 
 # All transformers, diffusers, timm and sentence transformers models that were supported via optimum-onnx OnnxConfigs for which support is now removed
 ONNX_SUPPORTED_ARCHITECTURES = {

@@ -57,6 +57,11 @@ _import_structure = {
     "utils.dummy_openvino_and_diffusers_objects": [],
     "utils.dummy_openvino_and_sentence_transformers_objects": [],
     "openvino": [
+        "OVGuard",
+        "OVGuardConfig",
+        "OVGuardReport",
+        "OVGuardVerdict",
+        "OVGuardViolationError",
         "OVModelForAudioClassification",
         "OVModelForAudioFrameClassification",
         "OVModelForAudioXVector",
@@ -207,6 +212,11 @@ else:
 if TYPE_CHECKING:
     from .openvino import (
         OVConfig,
+        OVGuard,
+        OVGuardConfig,
+        OVGuardReport,
+        OVGuardVerdict,
+        OVGuardViolationError,
         OVModelForAudioClassification,
         OVModelForAudioFrameClassification,
         OVModelForAudioXVector,
