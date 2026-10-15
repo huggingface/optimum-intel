@@ -765,15 +765,6 @@ def export_from_model(
 
     is_encoder_decoder = getattr(getattr(model, "config", {}), "is_encoder_decoder", False)
 
-    # Qwen3-ASR is structurally encoder-decoder (audio_tower + text LM) but config says is_encoder_decoder=False
-    if model_type == "qwen3_asr" and not is_encoder_decoder:
-        is_encoder_decoder = True
-        model.config.is_encoder_decoder = True
-        if not hasattr(model, "get_encoder"):
-            model.get_encoder = lambda: model.thinker.audio_tower
-        # Set decoder_start_token_id so the saved config enables encoder-decoder generation
-        if model.config.decoder_start_token_id is None:
-            model.config.decoder_start_token_id = 0
     stateful = stateful and (
         ensure_export_task_support_stateful(task) or ensure_model_type_support_stateful(model_type)
     )
@@ -901,6 +892,12 @@ def export_from_model(
         save_config(model.config, output)
         generation_config = getattr(model, "generation_config", None)
         if generation_config is not None:
+            if not generation_config.do_sample and generation_config.temperature is not None:
+                # Qwen/Qwen3-ASR-0.6B currently sets temperature with do_sample=False, making its generation config
+                # invalid so Transformers won't save it. Remove this workaround once the checkpoint is fixed:
+                # https://huggingface.co/Qwen/Qwen3-ASR-0.6B/discussions/13
+                generation_config = copy.deepcopy(generation_config)
+                generation_config.temperature = None
             try:
                 generation_config.save_pretrained(output)
             except Exception as exception:
