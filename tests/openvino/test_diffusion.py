@@ -1208,6 +1208,34 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
             diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).frames
             np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
 
+    @unittest.skipUnless(is_diffusers_version(">=", "0.33.0"), "LTX Video 0.9.5 requires diffusers >= 0.33")
+    @require_diffusers
+    def test_ltx_video_0_9_5_batched_vae_timestep(self):
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES["ltx-video-0.9.5"], device=OPENVINO_DEVICE)
+        latents = torch.zeros((2, pipeline.vae.config.latent_channels, 1, 2, 2), dtype=pipeline.vae.dtype)
+        self.assertEqual(len(pipeline.vae.decoder.model.input("timestep").partial_shape), 1)
+        with self.assertRaises(RuntimeError):
+            pipeline.vae.decode(latents, 0.5, return_dict=False)
+
+        timesteps = torch.tensor([0.1, 0.9])
+        batch_output = pipeline.vae.decode(latents, timesteps, return_dict=False)[0]
+        individual_outputs = [
+            pipeline.vae.decode(latents[index : index + 1], timesteps[index : index + 1], return_dict=False)[0]
+            for index in range(2)
+        ]
+        self.assertFalse(torch.allclose(individual_outputs[0], individual_outputs[1]))
+        torch.testing.assert_close(batch_output, torch.cat(individual_outputs))
+
+        for batch_size, num_videos_per_prompt in ((2, 1), (1, 2)):
+            inputs = self.generate_inputs(
+                height=64, width=64, batch_size=batch_size, num_frames=9, model_arch="ltx-video-0.9.5"
+            )
+            inputs["decode_timestep"] = timesteps.tolist()
+            outputs = pipeline(
+                **inputs, num_videos_per_prompt=num_videos_per_prompt, generator=get_generator("pt", SEED)
+            ).frames
+            self.assertEqual(outputs.shape, (2, 9, 64, 64, 3))
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
     def test_compare_spatio_temporal_guidance_to_diffusers_pipeline(self, model_arch: str):
