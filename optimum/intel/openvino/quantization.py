@@ -302,6 +302,7 @@ class OVCalibrationDatasetBuilder:
                 return self.build_from_dataset_name(
                     config,
                     dataset_metadata["id"],
+                    dataset_config_name=dataset_metadata.get("name"),
                     num_samples=config.num_samples,
                     dataset_split=dataset_metadata["split"],
                 )
@@ -818,7 +819,13 @@ class OVCalibrationDatasetBuilder:
 
         from PIL import Image
 
-        processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=self.trust_remote_code)
+        if self.model.config.model_type == "minicpmv4_7":
+            # the checkpoint processor configs point at remote code, see `load_minicpmv4_7_processor`
+            from optimum.exporters.openvino.utils import load_minicpmv4_7_processor
+
+            processor = load_minicpmv4_7_processor(config.processor)
+        else:
+            processor = AutoProcessor.from_pretrained(config.processor, trust_remote_code=self.trust_remote_code)
         try:
             tokenizer = AutoTokenizer.from_pretrained(config.tokenizer, trust_remote_code=self.trust_remote_code)
             tokenizer_error = None
@@ -845,13 +852,19 @@ class OVCalibrationDatasetBuilder:
                 if len(collected_inputs["lm_model"]) >= num_samples:
                     break
 
-                instruction = item[dataset_metadata["inputs"]["instruction"]]
-                if "image_url" in dataset_metadata["inputs"]:
+                # A VLM may tune only its language-model component on a text-only dataset without image metadata.
+                if "prompt_template" in dataset_metadata:
+                    instruction = dataset_metadata["prompt_template"].format_map(item)
+                else:
+                    instruction = item[dataset_metadata["inputs"]["instruction"]]
+                if "image_url" in dataset_metadata.get("inputs", {}):
                     image_url = item[dataset_metadata["inputs"]["image_url"]]
                     image = Image.open(requests.get(image_url, stream=True).raw).convert("RGB")
-                else:
+                elif "image" in dataset_metadata.get("inputs", {}):
                     image = item[dataset_metadata["inputs"]["image"]].convert("RGB")
-                if max_image_size is not None:
+                else:
+                    image = None
+                if image is not None and max_image_size is not None:
                     # To avoid large images, resize them keeping the aspect ratio
                     scale_factor = max(image.size[0] / max_image_size, image.size[1] / max_image_size)
                     if scale_factor > 1:
