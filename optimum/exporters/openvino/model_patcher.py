@@ -21,7 +21,6 @@ import math
 import os
 import types
 from dataclasses import dataclass
-from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
@@ -97,7 +96,7 @@ if is_transformers_version(">=", "4.57"):
         Qwen3RotaryEmbedding,
     )
     from transformers.models.qwen3.modeling_qwen3 import (
-        eager_attention_forward as qwen3_eager_attention_forward,
+        repeat_kv as qwen3_repeat_kv,
     )
     from transformers.models.qwen3.modeling_qwen3 import (
         rotate_half as qwen3_rotate_half,
@@ -8983,62 +8982,82 @@ def _dflash_apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1):
     return q_embed, k_embed
 
 
-def _dflash_repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
-    """repeat_kv using reshape instead of unsqueeze to insert the group dim.
-
-    The GPU plugin's UnsqueezeBroadcastReshapeSDPAFusion matches a Reshape but not the
-    Unsqueeze from stock ``[:, :, None]`` (valid only atop a KVCache op the draft lacks).
-    Matching keeps the draft on native-GQA SDPA (micro kernel), not a materialized broadcast.
-    """
-    batch, num_key_value_heads, slen, head_dim = hidden_states.shape
-    if n_rep == 1:
-        return hidden_states
-    hidden_states = hidden_states.reshape(batch, num_key_value_heads, 1, slen, head_dim).expand(
-        batch, num_key_value_heads, n_rep, slen, head_dim
-    )
-    return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
-
-
-def _dflash_attention_mask(
-    query_states: torch.Tensor,
-    key_states: torch.Tensor,
-    cache_position: Optional[torch.LongTensor],
+def _dflash_attention_masks(
+    attention_mask: torch.Tensor,
+    token_type_ids: torch.Tensor,
     sliding_window: Optional[int],
-    attention_mask: Optional[torch.Tensor] = None,
-) -> Optional[torch.Tensor]:
-    q_len = query_states.shape[-2]
-    kv_len = key_states.shape[-2]
+    dtype: torch.dtype,
+) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    """Additive [batch, 1, query_len, kv_len] masks for the full and the sliding-window layers.
+
+    Queries are the new tokens [context delta ; block] and keys are [past ; context delta ; block].
+    Attention is causal except inside the block (token_type_ids == 1), where it is bidirectional.
+    This is the PagedAttentionExtension token_type_ids semantics, so SDPAToPagedAttention keeps it
+    by forwarding token_type_ids, which the masks depend on. The sliding mask is written in the
+    form SDPAToPagedAttention recognizes (Select(.., Select(Unsqueeze(Unsqueeze(dist >= window))))),
+    so the window becomes the PagedAttentionExtension sliding_window.
+    """
+    batch_size, kv_len = attention_mask.shape
+    query_len = token_type_ids.shape[1]
+    past_len = kv_len - query_len
+    device = attention_mask.device
+    min_value = torch.tensor(torch.finfo(dtype).min, dtype=dtype, device=device)
+    zero = torch.tensor(0.0, dtype=dtype, device=device)
+
+    key_positions = torch.arange(kv_len, device=device)
+    query_positions = torch.arange(past_len, kv_len, device=device)
+    # cached keys are committed context, never block tokens
+    past_token_types = torch.zeros((batch_size, past_len), dtype=token_type_ids.dtype, device=device)
+    key_token_types = torch.cat([past_token_types, token_type_ids], dim=1)
+    bidirectional = (token_type_ids[:, :, None] == 1) & (key_token_types[:, None, :] == 1)
+    future = key_positions[None, :] > query_positions[:, None]
+    padding = attention_mask[:, None, :] == 0
+    masked = ((future[None, :, :] & ~bidirectional) | padding)[:, None, :, :]
+
+    full_mask = torch.where(masked, min_value, zero)
     if sliding_window is None:
-        if attention_mask is None:
-            return None
-        # Full-attention layers only need the caller's padding mask. Avoid building
-        # and adding an all-zero [batch, 1, q_len, kv_len] mask.
-        return attention_mask[:, :, :, -kv_len:]
-    device = query_states.device
-    dtype = query_states.dtype
-    full_mask = torch.zeros((q_len, kv_len), dtype=dtype, device=device)
+        return full_mask, None
+    outside_window = (query_positions[:, None] - key_positions[None, :]) >= sliding_window
+    window_mask = torch.where(outside_window.unsqueeze(0).unsqueeze(0), min_value, zero)
+    return full_mask, torch.where(masked, min_value, window_mask)
 
-    if sliding_window is not None:
-        # Window test is relative: (query_pos - key_pos) >= window. kv_len already
-        # reflects any cached slice, so a 0-based frame (queries = last q_len) gives
-        # the right distances with no absolute offset.
-        query_positions = torch.arange(kv_len - q_len, kv_len, device=device)
-        key_positions = torch.arange(kv_len, device=device)
-        outside_window = (query_positions.reshape(-1, 1) - key_positions.reshape(1, -1)) >= sliding_window
-        full_mask = full_mask.masked_fill(outside_window, torch.finfo(dtype).min)
 
-    full_mask = full_mask[None, None, :, :].expand(query_states.shape[0], 1, -1, -1)
+def _dflash_past_key_value(past_key_values: Cache, layer_idx: int):
+    """Cached (key, value) of a layer before it is updated, or (None, None) while the cache is empty."""
+    layers = getattr(past_key_values, "layers", None)
+    if layers is not None:
+        if layer_idx < len(layers) and getattr(layers[layer_idx], "is_initialized", True):
+            return layers[layer_idx].keys, layers[layer_idx].values
+        return None, None
+    if layer_idx < len(past_key_values.key_cache):
+        return past_key_values.key_cache[layer_idx], past_key_values.value_cache[layer_idx]
+    return None, None
 
-    if attention_mask is None:
-        return full_mask
-    # Keep the last kv_len columns: the kept keys are the caller mask's final entries.
-    return attention_mask[:, :, :, -kv_len:] + full_mask
+
+def _dflash_set_past_key_value(past_key_values: Cache, layer_idx: int, key: torch.Tensor, value: torch.Tensor):
+    """Replace the cached (key, value) of a layer."""
+    layers = getattr(past_key_values, "layers", None)
+    if layers is not None:
+        if layer_idx < len(layers) and getattr(layers[layer_idx], "is_initialized", True):
+            layers[layer_idx].keys, layers[layer_idx].values = key, value
+        else:
+            past_key_values.update(key, value, layer_idx)
+    elif layer_idx < len(past_key_values.key_cache):
+        past_key_values.key_cache[layer_idx], past_key_values.value_cache[layer_idx] = key, value
+    else:
+        past_key_values.update(key, value, layer_idx)
 
 
 # adopted from https://github.com/z-lab/dflash/blob/main/dflash/model.py#L185
 # and https://github.com/huggingface/transformers/blob/v5.14.0/src/transformers/models/qwen3/modeling_qwen3.py#L222
 class Qwen3DFlashAttention(Qwen3Attention):
-    """Qwen3 attention variant used by DFlash, where draft tokens attend over target context and noise tokens."""
+    """Qwen3 attention variant used by DFlash, where draft tokens attend over target context and noise tokens.
+
+    It is an ordinary KV-cache attention step over the new rows [context delta ; block]: every row gets a
+    query, key and value, and SDPA reads the plain Concat(past, new) cache, so SDPAToPagedAttention converts
+    it to PagedAttentionExtension. The stateful cache (Assign) keeps only the committed context rows, while
+    PagedAttentionExtension also writes the block and relies on the caller to roll it back.
+    """
 
     def __init__(self, config: "Qwen3Config", layer_idx: int):
         super().__init__(config, layer_idx)
@@ -9047,95 +9066,49 @@ class Qwen3DFlashAttention(Qwen3Attention):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        target_hidden: torch.Tensor,
         position_embeddings: Tuple[torch.Tensor, torch.Tensor],
         attention_mask: Optional[torch.Tensor] = None,
         past_key_values: Optional[Cache] = None,
-        cache_position: Optional[torch.LongTensor] = None,
+        block_length: Optional[torch.Tensor] = None,
         **kwargs: Unpack[TransformersKwargs],
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-        from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
-
-        bsz, q_len = hidden_states.shape[:-1]
-        ctx_len = target_hidden.shape[1]
-
-        query_states = self.q_proj(hidden_states).view(bsz, q_len, self.config.num_attention_heads, self.head_dim)
-        query_states = self.q_norm(query_states).transpose(1, 2)
-
-        kv_hidden_states = torch.cat([target_hidden, hidden_states], dim=1)
-        key_states = self.k_proj(kv_hidden_states).view(
-            bsz, ctx_len + q_len, self.config.num_key_value_heads, self.head_dim
-        )
-        value_states = self.v_proj(kv_hidden_states).view(
-            bsz, ctx_len + q_len, self.config.num_key_value_heads, self.head_dim
-        )
-        key_states = self.k_norm(key_states).transpose(1, 2)
-        value_states = value_states.transpose(1, 2)
+        input_shape = hidden_states.shape[:-1]
+        hidden_shape = (*input_shape, -1, self.head_dim)
+        query_states = self.q_norm(self.q_proj(hidden_states).view(hidden_shape)).transpose(1, 2)
+        key_states = self.k_norm(self.k_proj(hidden_states).view(hidden_shape)).transpose(1, 2)
+        value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
 
         cos, sin = position_embeddings
         query_states, key_states = _dflash_apply_rotary_pos_emb(query_states, key_states, cos, sin)
-        target_key_states, block_key_states = key_states.split([ctx_len, q_len], dim=2)
-        target_value_states, block_value_states = value_states.split([ctx_len, q_len], dim=2)
 
         if past_key_values is not None:
-            # Persist only committed target-prefix K/V; the speculative block is local,
-            # so rejection never needs a cache trim.
-            target_cache_position = cache_position[:ctx_len] if cache_position is not None else None
-            cache_kwargs = {"sin": sin[:, :ctx_len], "cos": cos[:, :ctx_len], "cache_position": target_cache_position}
-            target_key_states, target_value_states = past_key_values.update(
-                target_key_states,
-                target_value_states,
+            past_key, past_value = _dflash_past_key_value(past_key_values, self.layer_idx)
+            if past_key is not None:
+                key_states = torch.cat([past_key, key_states], dim=2)
+                value_states = torch.cat([past_value, value_states], dim=2)
+            # Persist only committed target-prefix K/V; the speculative block is local, so rejection never
+            # needs a cache trim. The cache is a slice of the same Concat that SDPA reads, which keeps one
+            # KV-cache Concat per layer (a second Concat of the cache breaks GPU in-place KV-cache fusion).
+            committed_length = key_states.shape[2] - block_length
+            _dflash_set_past_key_value(
+                past_key_values,
                 self.layer_idx,
-                cache_kwargs,
+                key_states[:, :, :committed_length],
+                value_states[:, :, :committed_length],
             )
 
-        if self.sliding_window is not None:
-            # Sliding layers need only the last `sliding_window` target tokens (a query
-            # at p attends to (p - window, p]). Slicing makes the concat and SDPA
-            # O(window) not O(context); the window mask below still trims within the kept
-            # set, so output is unchanged. Negative slice is a no-op while context <= window.
-            target_key_states = target_key_states[:, :, -self.sliding_window :, :]
-            target_value_states = target_value_states[:, :, -self.sliding_window :, :]
-
-        key_states = torch.cat([target_key_states, block_key_states], dim=2)
-        value_states = torch.cat([target_value_states, block_value_states], dim=2)
-        attention_mask = _dflash_attention_mask(
-            query_states,
-            key_states,
-            cache_position,
-            self.sliding_window,
-            attention_mask,
-        )
-
-        attention_interface = qwen3_eager_attention_forward
-        attention_module = self
-        if self.config._attn_implementation != "eager":
-            attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
-            if self.config._attn_implementation == "sdpa" and self.num_key_value_groups > 1:
-                # Re-pin static head / head_dim before repeat_kv: cldnn makes the
-                # cat([cache, block]) fully dynamic, hiding the KV head count from the GPU
-                # SDPA's GQA dispatch (slow ref kernel). A literal-dim Reshape restores it,
-                # so the repeat_kv fusion yields native-GQA SDPA (micro kernel).
-                key_states = key_states.reshape(bsz, self.config.num_key_value_heads, -1, self.head_dim)
-                value_states = value_states.reshape(bsz, self.config.num_key_value_heads, -1, self.head_dim)
-                key_states = _dflash_repeat_kv(key_states, self.num_key_value_groups)
-                value_states = _dflash_repeat_kv(value_states, self.num_key_value_groups)
-                attention_module = SimpleNamespace(is_causal=self.is_causal)
-
-        attn_output, attn_weights = attention_interface(
-            attention_module,
+        key_states = qwen3_repeat_kv(key_states, self.num_key_value_groups)
+        value_states = qwen3_repeat_kv(value_states, self.num_key_value_groups)
+        attn_output = torch.nn.functional.scaled_dot_product_attention(
             query_states,
             key_states,
             value_states,
-            attention_mask,
-            dropout=0.0 if not self.training else self.attention_dropout,
-            scaling=self.scaling,
-            sliding_window=self.sliding_window,
-            **kwargs,
+            attn_mask=attention_mask,
+            dropout_p=0.0 if not self.training else self.attention_dropout,
+            scale=self.scaling,
         )
-        attn_output = attn_output.reshape(bsz, q_len, -1)
-        attn_output = self.o_proj(attn_output)
-        return attn_output, attn_weights
+        attn_output = attn_output.transpose(1, 2).reshape(*input_shape, -1)
+        return self.o_proj(attn_output), None
 
 
 # adopted from https://github.com/z-lab/dflash/blob/main/dflash/model.py#L258
@@ -9152,26 +9125,23 @@ class Qwen3DFlashDecoderLayer(nn.Module):
         self,
         target_hidden: torch.Tensor,
         hidden_states: torch.Tensor,
+        is_block: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
         past_key_value: Optional[Cache] = None,
-        output_attentions: Optional[bool] = False,
-        use_cache: Optional[bool] = False,
-        cache_position: Optional[torch.LongTensor] = None,
+        block_length: Optional[torch.Tensor] = None,
         position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         **kwargs: Unpack[TransformersKwargs],
     ) -> torch.FloatTensor:
+        # Context rows always attend with the target features and block rows with their own normalized
+        # state. The selection is per row, so it holds whether tokens lie along the sequence axis
+        # (stateful SDPA) or along the batch axis (after SDPAToPagedAttention).
         residual = hidden_states
-        hidden_states = self.input_layernorm(hidden_states)
+        attention_input = torch.where(is_block, self.input_layernorm(hidden_states), target_hidden)
         hidden_states = self.self_attn(
-            hidden_states=hidden_states,
-            target_hidden=target_hidden,
+            hidden_states=attention_input,
             attention_mask=attention_mask,
-            position_ids=position_ids,
             past_key_values=past_key_value,
-            output_attentions=output_attentions,
-            use_cache=use_cache,
-            cache_position=cache_position,
+            block_length=block_length,
             position_embeddings=position_embeddings,
             **kwargs,
         )[0]
@@ -9214,12 +9184,35 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
         hidden_states: Optional[torch.Tensor] = None,
         past_key_values: Optional[Cache] = None,
         use_cache: Optional[bool] = None,
-        cache_position: Optional[torch.LongTensor] = None,
+        token_type_ids: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> BaseModelOutputWithPast:
+        """Runs the draft over the new rows [context delta ; block] of a single sequence.
+
+        With token_type_ids (0 for context rows, 1 for the block), noise_embedding and hidden_states are
+        per-row inputs covering all rows; the values in the rows of the other type are ignored. Without
+        token_type_ids, hidden_states holds only the context rows and noise_embedding only the block rows.
+        Returns the normalized hidden states of all rows.
+        """
+        if token_type_ids is None:
+            ctx_len, block_len = hidden_states.shape[1], noise_embedding.shape[1]
+            batch_size = noise_embedding.shape[0]
+            token_type_ids = torch.cat(
+                [
+                    torch.zeros((batch_size, ctx_len), dtype=torch.long, device=noise_embedding.device),
+                    torch.ones((batch_size, block_len), dtype=torch.long, device=noise_embedding.device),
+                ],
+                dim=1,
+            )
+            noise_embedding = torch.cat(
+                [noise_embedding.new_zeros(batch_size, ctx_len, noise_embedding.shape[-1]), noise_embedding], dim=1
+            )
+            hidden_states = torch.cat(
+                [hidden_states, hidden_states.new_zeros(batch_size, block_len, hidden_states.shape[-1])], dim=1
+            )
         noise_states = noise_embedding
-        target_hidden = hidden_states.to(noise_states.dtype)
-        target_hidden = self.hidden_norm(self.fc(target_hidden))
+        target_hidden = self.hidden_norm(self.fc(hidden_states.to(noise_states.dtype)))
+        is_block = (token_type_ids == 1)[..., None]
         use_cache = use_cache if use_cache is not None else self.config.use_cache
         if use_cache:
             if past_key_values is None:
@@ -9229,27 +9222,27 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
                     past_key_values = DynamicCache.from_legacy_cache(past_key_values)
                 else:
                     past_key_values = DynamicCache(past_key_values)
-        if use_cache and cache_position is None:
+        if attention_mask is None:
             past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
-            cache_position = torch.arange(
-                past_seen_tokens,
-                past_seen_tokens + target_hidden.shape[1] + noise_states.shape[1],
+            attention_mask = torch.ones(
+                (token_type_ids.shape[0], past_seen_tokens + token_type_ids.shape[1]),
+                dtype=torch.long,
                 device=noise_states.device,
             )
-        if attention_mask is not None and attention_mask.dim() == 2:
-            attention_mask = (1.0 - attention_mask[:, None, None, :].to(dtype=noise_states.dtype)) * torch.finfo(
-                noise_states.dtype
-            ).min
+        # the stateful cache keeps the committed context rows, i.e. all but the trailing block
+        block_length = (token_type_ids[0] == 1).sum()
+        full_mask, sliding_mask = _dflash_attention_masks(
+            attention_mask, token_type_ids, getattr(self.config, "sliding_window", None), noise_states.dtype
+        )
         position_embeddings = self.rotary_emb(noise_states, position_ids)
         for layer in self.layers:
             noise_states = layer(
-                hidden_states=noise_states,
                 target_hidden=target_hidden,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
+                hidden_states=noise_states,
+                is_block=is_block,
+                attention_mask=full_mask if layer.self_attn.sliding_window is None else sliding_mask,
                 past_key_value=past_key_values,
-                use_cache=use_cache,
-                cache_position=cache_position,
+                block_length=block_length,
                 position_embeddings=position_embeddings,
                 **kwargs,
             )
@@ -9278,6 +9271,7 @@ class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
         past_key_values: Optional[Cache] = None,
         use_cache: Optional[bool] = None,
         logits_to_keep: Optional[int] = None,
+        token_type_ids: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> BaseModelOutputWithPast:
         outputs = super().forward(
@@ -9287,14 +9281,23 @@ class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
             attention_mask=attention_mask,
             past_key_values=past_key_values,
             use_cache=use_cache,
+            token_type_ids=token_type_ids,
             **kwargs,
         )
-        # Drop the seed position so emitted hidden states align 1:1 with the draft
-        # candidate tokens that the grafted lm_head will score.
-        if logits_to_keep is None:
-            last_hidden_state = outputs.last_hidden_state[:, 1:, :]
+        # Keep the block rows and drop the seed so emitted hidden states align 1:1 with the draft candidate
+        # tokens that the grafted lm_head will score. The block trails the rows of the sequence, so the
+        # flattened rows are sliced, which holds whether tokens lie along the sequence or the batch axis.
+        all_hidden_states = outputs.last_hidden_state
+        if token_type_ids is None:
+            block_hidden_states = all_hidden_states[:, -inputs_embeds.shape[1] :, :]
         else:
-            last_hidden_state = outputs.last_hidden_state[:, -logits_to_keep:, :]
+            rows = all_hidden_states.reshape(-1, all_hidden_states.shape[-1])
+            block_length = (token_type_ids == 1).sum()
+            block_hidden_states = rows[rows.shape[0] - block_length :][None]
+        if logits_to_keep is None:
+            last_hidden_state = block_hidden_states[:, 1:, :]
+        else:
+            last_hidden_state = block_hidden_states[:, -logits_to_keep:, :]
         return BaseModelOutputWithPast(
             last_hidden_state=last_hidden_state,
             past_key_values=outputs.past_key_values,
