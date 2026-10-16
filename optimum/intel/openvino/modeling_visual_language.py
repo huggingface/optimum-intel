@@ -2650,7 +2650,9 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         # A temporal group is represented by one fixed set of resampler query tokens, so concatenate
         # its frame features and positions before inference instead of producing tokens for every frame.
         if temporal_groups is not None:
-            group_outputs = []
+            group_features = []
+            group_positions = []
+            group_masks = []
             frame_start = 0
             for group in temporal_groups:
                 group_ids = [int(temporal_id) for temporal_id in group]
@@ -2668,20 +2670,26 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
                 temporal_embed[np.asarray(group_ids) < 0] = 0
                 group_pos_embed += torch.from_numpy(temporal_embed).to(group_pos_embed.dtype).unsqueeze(1)
 
-                group_outputs.append(
-                    torch.from_numpy(
-                        self.resampler(
-                            image_feature=x[frame_start:frame_end].reshape(1, -1, x.shape[-1]),
-                            pos_embed=group_pos_embed.reshape(-1, self.embed_dim).unsqueeze(1),
-                            key_padding_mask=key_padding_mask[frame_start:frame_end].reshape(1, -1),
-                        )
-                    )
-                )
+                group_features.append(x[frame_start:frame_end].reshape(-1, x.shape[-1]))
+                group_positions.append(group_pos_embed.reshape(-1, self.embed_dim))
+                group_masks.append(key_padding_mask[frame_start:frame_end].reshape(-1))
                 frame_start = frame_end
 
             if frame_start != bs:
                 raise ValueError(f"Temporal groups cover {frame_start} frames, but {bs} were encoded")
-            return torch.cat(group_outputs, dim=0)
+
+            image_feature = torch.nn.utils.rnn.pad_sequence(group_features, batch_first=True, padding_value=0.0)
+            pos_embed = torch.nn.utils.rnn.pad_sequence(group_positions, batch_first=True, padding_value=0.0).permute(
+                1, 0, 2
+            )
+            key_padding_mask = torch.nn.utils.rnn.pad_sequence(group_masks, batch_first=True, padding_value=True)
+            return torch.from_numpy(
+                self.resampler(
+                    image_feature=image_feature,
+                    pos_embed=pos_embed,
+                    key_padding_mask=key_padding_mask,
+                )
+            )
 
         res = torch.from_numpy(self.resampler(image_feature=x, pos_embed=pos_embed, key_padding_mask=key_padding_mask))
         return res

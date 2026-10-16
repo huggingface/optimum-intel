@@ -986,9 +986,13 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         tgt_sizes = torch.tensor([[8, 8], [6, 5], [4, 4]], dtype=torch.int32)
         set_seed(SEED)
         image_features = torch.randn(3, 64, transformers_model.config.vision_config.hidden_size)
+        temporal_groups = [[0, 1], [100]] if model_arch == "minicpm_v4_5" else None
         with torch.no_grad():
-            transformers_outputs = transformers_model.resampler(image_features, tgt_sizes)
-        ov_outputs = ov_model.resampling(image_features, tgt_sizes)
+            if temporal_groups is None:
+                transformers_outputs = transformers_model.resampler(image_features, tgt_sizes)
+            else:
+                transformers_outputs = transformers_model.resampler(image_features, tgt_sizes, temporal_groups)
+        ov_outputs = ov_model.resampling(image_features, tgt_sizes, temporal_groups)
         max_diff = torch.abs(ov_outputs - transformers_outputs).max()
         self.assertLess(max_diff, 1e-4, f"Max abs diff {max_diff}")
 
