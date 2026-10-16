@@ -318,8 +318,9 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
         # verifier can roll back after a rejected block.
         dflash_hidden_states = None
         if getattr(self, "_dflash_hidden_state_names", None):
+            # Keyed like transformers' `hidden_states` tuple (entry 0 is the embeddings), so layer `i` is at `i + 1`.
             dflash_hidden_states = {
-                layer_id: torch.from_numpy(self.request.get_tensor(name).data).clone().to(self.device)
+                layer_id + 1: torch.from_numpy(self.request.get_tensor(name).data).clone().to(self.device)
                 for layer_id, name in zip(self._dflash_layer_ids, self._dflash_hidden_state_names)
             }
             past_key_values = OVStatefulCacheProxy(self)
@@ -334,10 +335,12 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
             ihs = self.request.get_tensor("intermediate_hidden_states").data
             intermediate_hidden = torch.from_numpy(ihs).clone().to(self.device)
 
-        result = CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
+        # transformers' `DFlashTokenCandidateGenerator` reads the target's hidden states from `hidden_states`. it is None outside DFlash
+        result = CausalLMOutputWithPast(
+            logits=logits, past_key_values=past_key_values, hidden_states=dflash_hidden_states
+        )
         result.last_hidden_state = hidden_states_out
         result.intermediate_hidden_state = intermediate_hidden
-        result.dflash_hidden_states = dflash_hidden_states
         return result
 
 

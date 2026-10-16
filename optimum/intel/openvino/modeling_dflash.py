@@ -14,31 +14,25 @@
 
 """OpenVINO runtime for DFlash speculative decoding.
 
-DFlash pairs a large target model with a small block-diffusion "drafter": the drafter
-reads the target's hidden states at a handful of layers plus the last decoded token, and
-denoises a whole block of `block_size` masked tokens in one forward pass. The target then
-verifies the block in a single forward, so several tokens can be committed per target
-call. Greedy DFlash is lossless - the accepted prefix plus the bonus token always
-reproduces the target's own greedy continuation.
+A DFlash drafter reads the target's hidden states at a few layers and drafts a block of
+`block_size` tokens in one forward pass; the target then verifies the block in one forward.
 
-The drafter ships without a token embedding and without an lm_head: it borrows the
-target's. With an OpenVINO export those two live inside other IR files - the embedding
-inside `openvino_text_embeddings_model.xml` (behind the embedding norm) and the lm_head
-fused into `openvino_language_model.xml`. This module extracts each as a small standalone
-`ov.Model` rather than requiring a different export or duplicating weights in float.
+The drafter has no token embedding or lm_head of its own and uses the target's. The
+embedding is the target's text-embeddings model; the lm_head lives inside the language
+model IR, so this module extracts it as a small standalone `ov.Model`.
 """
 
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 import numpy as np
 import openvino as ov
 import torch
 from openvino import opset13
 from transformers import AutoModel, GenerationConfig, PretrainedConfig
-from transformers.generation.candidate_generator import CandidateGenerator
+from transformers.generation.candidate_generator import DFlashTokenCandidateGenerator
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
+from ..utils.import_utils import is_transformers_version
 from .modeling_base import OVBaseModel
 
 
@@ -53,19 +47,6 @@ DFLASH_HIDDEN_STATE_PREFIX = "dflash_hidden_states"
 def is_dflash_draft_model(ov_model: ov.Model) -> bool:
     """Whether an IR was exported as a DFlash drafter."""
     return ov_model.has_rt_info(["dflash_mode"]) and ov_model.get_rt_info(["dflash_mode"]).value == "True"
-
-
-def read_dflash_rt_info(ov_model: ov.Model) -> Dict[str, Any]:
-    """Read the `dflash` RT-info block stamped onto a drafter export."""
-    info = {}
-    if ov_model.has_rt_info(["dflash", "mask_token_id"]):
-        info["mask_token_id"] = int(ov_model.get_rt_info(["dflash", "mask_token_id"]).value)
-    if ov_model.has_rt_info(["dflash", "block_size"]):
-        info["block_size"] = int(ov_model.get_rt_info(["dflash", "block_size"]).value)
-    if ov_model.has_rt_info(["dflash", "target_layer_ids"]):
-        raw = ov_model.get_rt_info(["dflash", "target_layer_ids"]).value
-        info["target_layer_ids"] = [int(part) for part in raw.split(",") if part != ""]
-    return info
 
 
 # --------------------------------------------------------------------------------------
@@ -127,22 +108,6 @@ def add_hidden_state_outputs(ov_model: ov.Model, layer_ids: List[int]) -> List[s
         # output can be looked up by name regardless of how the graph was serialized.
         added.get_tensor().set_names(added.get_names() | {name})
     return names
-
-
-def extract_raw_embedding_model(text_embeddings_model: ov.Model) -> ov.Model:
-    """Build a lookup-only embedding model from an exported text-embeddings IR.
-
-    Some architectures (MuseGlimmer among them) normalize or scale the embedding right
-    after the lookup, and the exported IR includes that. A DFlash drafter needs the *raw*
-    table - transformers spells this `F.embedding(ids, embed_tokens.weight)` - so the
-    graph is cut at the Gather and everything downstream is dropped.
-    """
-    gathers = [op for op in text_embeddings_model.get_ordered_ops() if op.get_type_name() == "Gather"]
-    if len(gathers) != 1:
-        raise ValueError(f"Expected exactly one Gather in the text-embeddings model, found {len(gathers)}.")
-    output = gathers[0].output(0)
-    output.get_tensor().set_names(output.get_names() | {"inputs_embeds"})
-    return ov.Model([output], text_embeddings_model.get_parameters(), "raw_text_embeddings")
 
 
 def extract_lm_head_model(language_model: ov.Model, hidden_size: int) -> ov.Model:
@@ -252,55 +217,30 @@ class OVAssistantForCausalLM(OVBaseModel):
 
     The exported IR takes the diffusion window's embeddings (`inputs_embeds`) and the
     target's concatenated hidden states (`hidden_states`) and returns `last_hidden_state`
-    for the drafted positions. Its KV cache holds only the target context, so - unlike the
+    for the drafted positions. `forward` follows the call signature of transformers'
+    `DFlashTokenCandidateGenerator`. Its KV cache holds only the target context, so - unlike the
     target's - it never needs to be rolled back after a rejected block.
     """
 
     export_feature = "text-generation-with-past"
     auto_model_class = AutoModel
 
-    def __init__(
-        self,
-        model: ov.Model,
-        config: PretrainedConfig = None,
-        device: str = "CPU",
-        dynamic_shapes: bool = None,
-        ov_config: Optional[Dict[str, str]] = None,
-        model_save_dir: Optional[Union[str, Path]] = None,
-        quantization_config: Optional[Dict] = None,
-        **kwargs,
-    ):
-        super().__init__(
-            model,
-            config=config,
-            device=device,
-            dynamic_shapes=dynamic_shapes,
-            ov_config=ov_config,
-            model_save_dir=model_save_dir,
-            quantization_config=quantization_config,
-            **kwargs,
-        )
-        rt_info = {}
-        if not self._compile_only:
-            if not is_dflash_draft_model(self.model):
-                raise ValueError(
-                    f"{model_save_dir} is not a DFlash draft model. Export one with "
-                    "`optimum-cli export openvino --task text-generation-with-past`, from a "
-                    "checkpoint whose architecture optimum-intel exports as a drafter."
-                )
-            rt_info = read_dflash_rt_info(self.model)
-
-        # The RT-info block is authoritative (it travels with the IR), the config is the
-        # fallback for drafters exported before it was stamped.
-        self.block_size = rt_info.get("block_size") or getattr(config, "block_size", None)
-        self.mask_token_id = rt_info.get("mask_token_id")
-        if self.mask_token_id is None:
-            self.mask_token_id = getattr(config, "mask_token_id", None)
-        self.target_layer_ids = rt_info.get("target_layer_ids") or getattr(config, "target_layer_ids", None)
-        if not self.block_size or self.mask_token_id is None or not self.target_layer_ids:
+    def __init__(self, model: ov.Model, config: PretrainedConfig = None, **kwargs):
+        super().__init__(model, config=config, **kwargs)
+        if not self._compile_only and not is_dflash_draft_model(self.model):
             raise ValueError(
-                "Could not determine the DFlash parameters (block_size, mask_token_id, target_layer_ids) "
-                f"of {model_save_dir}. Re-export the drafter with a recent optimum-intel."
+                f"{self.model_save_dir} is not a DFlash draft model. Export one with "
+                "`optimum-cli export openvino --task text-generation-with-past`, from a "
+                "checkpoint whose architecture optimum-intel exports as a drafter."
+            )
+        if (
+            not getattr(config, "block_size", None)
+            or getattr(config, "mask_token_id", None) is None
+            or not getattr(config, "target_layer_ids", None)
+        ):
+            raise ValueError(
+                f"The config of {self.model_save_dir} lacks the DFlash parameters "
+                "(block_size, mask_token_id, target_layer_ids)."
             )
         self.request = None if not self._compile_only else self.model.create_infer_request()
 
@@ -337,28 +277,31 @@ class OVAssistantForCausalLM(OVBaseModel):
 
     def forward(
         self,
-        inputs_embeds: torch.Tensor,
-        hidden_states: torch.Tensor,
+        noise_embeds: torch.Tensor,
+        context_hidden_states: torch.Tensor,
         position_ids: torch.Tensor,
         attention_mask: torch.Tensor,
+        past_key_values=None,
         **kwargs,
     ) -> BaseModelOutputWithPast:
+        # `past_key_values` is accepted for transformers' call signature only: the drafter's
+        # KV cache lives in the IR's variable states.
         self.compile()
         inputs = {
-            "inputs_embeds": np.ascontiguousarray(inputs_embeds.numpy()),
-            "hidden_states": np.ascontiguousarray(hidden_states.numpy()),
+            "inputs_embeds": np.ascontiguousarray(noise_embeds.numpy()),
+            "hidden_states": np.ascontiguousarray(context_hidden_states.numpy()),
             "position_ids": np.ascontiguousarray(position_ids.numpy()),
             "attention_mask": np.ascontiguousarray(attention_mask.numpy()),
         }
         if "beam_idx" in self.input_names:
-            inputs["beam_idx"] = np.arange(inputs_embeds.shape[0], dtype=np.int32)
+            inputs["beam_idx"] = np.arange(noise_embeds.shape[0], dtype=np.int32)
         self.request.start_async(inputs, share_inputs=True)
         self.request.wait()
         last_hidden_state = torch.from_numpy(self.request.get_tensor("last_hidden_state").data).clone()
+        # The IR drops the anchor position, while transformers' `DFlashTokenCandidateGenerator`
+        # slices it off itself (`last_hidden_state[:, 1:]`), so put a placeholder row back.
+        last_hidden_state = torch.cat([torch.zeros_like(last_hidden_state[:, :1]), last_hidden_state], dim=1)
         return BaseModelOutputWithPast(last_hidden_state=last_hidden_state)
-
-    def __call__(self, *args, **kwargs):
-        return self.forward(*args, **kwargs)
 
 
 # --------------------------------------------------------------------------------------
@@ -366,132 +309,82 @@ class OVAssistantForCausalLM(OVBaseModel):
 # --------------------------------------------------------------------------------------
 
 
-class OVDFlashCandidateGenerator(CandidateGenerator):
-    """DFlash candidate generator driving OpenVINO models.
+class OVDFlashTargetLayerWeight:
+    """Stands in for the `weight` tensor of an `OVDFlashTargetLayer`.
 
-    Adapted from `transformers.generation.candidate_generator.DFlashTokenCandidateGenerator`.
-    The drafting logic is identical; what differs is where the two borrowed pieces of the
-    target come from. Transformers reaches into the target's `nn.Module`s - `F.embedding`
-    against the embedding weight, and a call to the lm_head - which an OpenVINO target does
-    not have, because those weights live compressed inside its IR files. Here they are
-    small `ov.Model`s extracted from the target's own exports (see
-    `extract_raw_embedding_model` / `extract_lm_head_model`), so nothing is materialized in
-    float and no second export is needed.
-
-    The drafter's own KV cache lives inside its stateful IR, so there is no `DFlashCache`
-    to crop here; the export persists only the target context, never the diffusion window.
+    Transformers 5.15 uses the weight of the target's layers in two ways only: it reads the
+    lm_head's `weight.device`, and embeds tokens with `F.embedding(ids, embedding.weight)`.
+    PyTorch passes any torch call that receives an object defining `__torch_function__` to
+    that method, so the embedding lookup runs the OpenVINO layer instead.
     """
 
-    requires_model_outputs: bool = True
-    # The target must hand back the hidden states the drafter conditions on.
+    device = torch.device("cpu")
+
+    def __init__(self, layer: "OVDFlashTargetLayer"):
+        self._layer = layer
+
+    @classmethod
+    def __torch_function__(cls, func, types, args=(), kwargs=None):
+        if func is not torch.nn.functional.embedding:
+            return NotImplemented
+        input_ids, weight = args[0], args[1]
+        return weight._layer(input_ids)
+
+
+class OVDFlashTargetLayer:
+    """A layer of the target (embedding lookup or lm_head) run by OpenVINO, called on torch tensors."""
+
+    def __init__(self, run: Callable[[np.ndarray], np.ndarray]):
+        self._run = run
+        self.weight = OVDFlashTargetLayerWeight(self)
+
+    def __call__(self, inputs: torch.Tensor) -> torch.Tensor:
+        return torch.from_numpy(self._run(np.ascontiguousarray(inputs.numpy()))).clone()
+
+
+class OVDFlashCache:
+    """Replaces transformers' `DFlashCache`, which the OpenVINO drafter does not use.
+
+    The drafter IR keeps the target context in its variable states and never stores the
+    diffusion window, so there is nothing to crop between steps.
+    """
+
+    def set_previous_accepted_tokens(self, number_of_accepted_tokens: int) -> None:
+        return
+
+    def crop(self, tokens_to_remove: int) -> None:
+        return
+
+
+class OVDFlashCandidateGenerator(DFlashTokenCandidateGenerator):
+    """`DFlashTokenCandidateGenerator` driving OpenVINO models.
+
+    The drafter needs the target's raw embedding lookup, which is what the target's text-embeddings
+    model returns, and its lm_head, which is extracted from the language model IR. Nothing is
+    materialized in float and no second export is needed.
+    """
+
+    # The target exposes the drafter's hidden states as graph outputs (see `_setup_dflash`),
+    # so it does not need `output_hidden_states=True`.
     model_kwargs_overrides: Dict[str, Any] = {}
 
     def __init__(
         self,
         assistant_model: OVAssistantForCausalLM,
-        raw_embedding: "ov.CompiledModel",
-        lm_head: "ov.CompiledModel",
+        embed_tokens: Callable[[np.ndarray], np.ndarray],
+        lm_head: ov.CompiledModel,
         generation_config: GenerationConfig,
         logits_processor: Optional["LogitsProcessorList"] = None,
     ):
-        self.assistant_model = assistant_model
-        self.raw_embedding = raw_embedding
-        self.lm_head = lm_head
-        self.main_model_max_length = generation_config.max_length
-
-        self.target_layer_ids = assistant_model.target_layer_ids
-        self.block_size = assistant_model.block_size
-        self.mask_token_id = assistant_model.mask_token_id
-        self.noise_ids_mask = torch.tensor([self.mask_token_id] * (self.block_size - 1))[None, ...]
-
-        self.do_sample = generation_config.do_sample
-        self.logits_processor = logits_processor
-        self.is_main_model_prefill = True
+        super().__init__(
+            assistant_model=assistant_model,
+            main_model_input_embeddings=OVDFlashTargetLayer(embed_tokens),
+            main_model_output_embeddings=OVDFlashTargetLayer(lambda hidden_states: lm_head(hidden_states)[0]),
+            generation_config=generation_config,
+            logits_processor=logits_processor,
+        )
+        self.cache = OVDFlashCache()
         assistant_model.reset_state()
-
-    def get_candidates(
-        self,
-        input_ids: torch.LongTensor,
-        model_kwargs: Dict[str, Any],
-        model_outputs,
-        is_first_iteration: bool,
-        n_last_matches: int,
-        **kwargs,
-    ):
-        # The first loop of `_assisted_decoding` runs the target so that its hidden states
-        # exist for the drafter to condition on; nothing is drafted yet.
-        if is_first_iteration:
-            return input_ids, None
-
-        max_new_tokens = min(int(self.block_size), self.main_model_max_length - input_ids.shape[1] - 1)
-        if max_new_tokens <= 0:
-            return input_ids, None
-
-        hidden_states = getattr(model_outputs, "dflash_hidden_states", None)
-        if hidden_states is None:
-            raise ValueError("The target model did not return the hidden states DFlash needs.")
-
-        # The target's last forward covered all candidates; keep only the accepted ones.
-        num_last_main_model_tokens = n_last_matches + 1 if not self.is_main_model_prefill else input_ids.shape[1] - 1
-        context_hidden_states = torch.cat(
-            [hidden_states[layer_id][:, :num_last_main_model_tokens] for layer_id in self.target_layer_ids],
-            dim=-1,
-        )
-
-        # `position_ids`/`attention_mask` cover the full sequence including the bonus token
-        # the target just produced; the drafter sees the tokens the target processed plus
-        # the diffusion window that follows them.
-        position_ids = model_kwargs["position_ids"][:, -num_last_main_model_tokens - 1 : -1]
-        attention_mask = model_kwargs["attention_mask"][:, :-1]
-
-        # The window is the last decoded token ("anchor") followed by mask tokens.
-        noise_ids = torch.cat([input_ids[:, -1:], self.noise_ids_mask.to(input_ids.device)], dim=-1)
-        noise_embeds = torch.from_numpy(self.raw_embedding(np.ascontiguousarray(noise_ids.numpy()))[0]).clone()
-
-        noise_position_ids = torch.arange(self.block_size, device=position_ids.device) + position_ids[..., -1:] + 1
-        position_ids = torch.cat([position_ids, noise_position_ids], dim=-1)
-        noise_attention_mask = torch.ones(
-            attention_mask.shape[0], self.block_size, device=attention_mask.device, dtype=attention_mask.dtype
-        )
-        attention_mask = torch.cat([attention_mask, noise_attention_mask], dim=-1)
-
-        outputs = self.assistant_model(
-            inputs_embeds=noise_embeds,
-            hidden_states=context_hidden_states,
-            position_ids=position_ids,
-            attention_mask=attention_mask,
-        )
-        self.is_main_model_prefill = False
-
-        # The export already dropped the anchor position, so these states line up 1:1 with
-        # the drafted tokens.
-        candidate_logits = torch.from_numpy(
-            self.lm_head(np.ascontiguousarray(outputs.last_hidden_state.numpy()))[0]
-        ).clone()
-
-        if self.logits_processor is not None and len(self.logits_processor) > 0:
-            candidate_ids = input_ids
-            for i in range(candidate_logits.shape[1]):
-                next_token_logits = self.logits_processor(candidate_ids, candidate_logits[:, i, :].float())
-                if self.do_sample:
-                    probs = torch.nn.functional.softmax(next_token_logits, dim=-1, dtype=torch.float32)
-                    next_token = torch.multinomial(probs, num_samples=1)
-                else:
-                    next_token = torch.argmax(next_token_logits, dim=-1, keepdim=True)
-                candidate_ids = torch.cat([candidate_ids, next_token], dim=-1)
-        else:
-            if self.do_sample:
-                probs = torch.nn.functional.softmax(candidate_logits, dim=-1, dtype=torch.float32)
-                # Assisted decoding is batch-size 1, and multinomial needs a 2D input.
-                candidate_ids = torch.multinomial(probs.squeeze(0), num_samples=1)
-            else:
-                candidate_ids = candidate_logits.argmax(dim=-1)
-            candidate_ids = torch.cat([input_ids, candidate_ids], dim=-1)
-
-        return candidate_ids, candidate_logits
-
-    def update_candidate_strategy(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, num_matches: int):
-        return
 
 
 # --------------------------------------------------------------------------------------
@@ -508,8 +401,13 @@ class OVDFlashTargetMixin:
     """
 
     def _setup_dflash(self, assistant_model: OVAssistantForCausalLM) -> None:
+        if is_transformers_version(">=", "5.16"):
+            raise ValueError(
+                "DFlash speculative decoding with OpenVINO models requires transformers 5.15.x, "
+                "as later versions changed `DFlashTokenCandidateGenerator`."
+            )
         language_model = self.language_model
-        layer_ids = list(assistant_model.target_layer_ids)
+        layer_ids = list(assistant_model.config.target_layer_ids)
         if getattr(language_model, "_dflash_layer_ids", None) == layer_ids:
             return
         if language_model._compile_only:
@@ -530,25 +428,16 @@ class OVDFlashTargetMixin:
         self._dflash_lm_head = core.compile_model(
             extract_lm_head_model(language_model.model, hidden_size), language_model._device, ov_config
         )
-        self._dflash_raw_embedding = core.compile_model(
-            extract_raw_embedding_model(language_model.text_emb_model), language_model._device, ov_config
-        )
 
     def generate(self, *args, **kwargs):
-        # `speculation_type="dflash"` is what tells transformers' assisted decoding that
-        # the drafter is a block-diffusion model rather than a small copy of the target
-        # (and so that they need not share a tokenizer). It is implied by passing an
-        # `OVAssistantForCausalLM`, so callers do not have to spell it out.
         assistant_model = kwargs.get("assistant_model")
         if isinstance(assistant_model, OVAssistantForCausalLM):
+            # Selects transformers' DFlash candidate generator.
             kwargs.setdefault("speculation_type", "dflash")
             self._setup_dflash(assistant_model)
 
-            # Assisted decoding insists on a Cache object it can roll back, and refuses to
-            # start without one. The OpenVINO target keeps its KV cache in variable states
-            # instead, so seed the proxy that exposes them; transformers leaves a
-            # caller-provided cache alone. Seeding it also means the target's forward will
-            # not see `past_key_values=None`, so reset the state here as that branch would.
+            # Assisted decoding needs a cache it can crop. Pass the proxy over the target's
+            # variable states, and reset them as the target does when `past_key_values=None`.
             language_model = self.language_model
             language_model.compile()
             language_model.request.reset_state()
@@ -581,7 +470,7 @@ class OVDFlashTargetMixin:
         self._setup_dflash(assistant_model)
         return OVDFlashCandidateGenerator(
             assistant_model=assistant_model,
-            raw_embedding=self._dflash_raw_embedding,
+            embed_tokens=self.language_model.embed_tokens,
             lm_head=self._dflash_lm_head,
             generation_config=generation_config,
             logits_processor=logits_processor,
