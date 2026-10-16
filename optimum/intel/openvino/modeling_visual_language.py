@@ -1648,6 +1648,7 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
         video: Optional["VideoInput"] = None,
+        video_temporal_ids: Optional[List[List[int]]] = None,
         audio: Optional[np.ndarray] = None,
     ):
         if processor is None:
@@ -2801,6 +2802,7 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
         video: Optional["VideoInput"] = None,
+        video_temporal_ids: Optional[List[List[int]]] = None,
         audio: Optional[np.ndarray] = None,
     ):
         if processor is None:
@@ -2820,10 +2822,15 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
             image_inputs = [] if image is None else image if isinstance(image, list) else [image]
             visual_inputs = image_inputs + video_frames
             temporal_ids = [[-1] for _ in image_inputs]
-            temporal_ids.extend(
-                list(range(group_start, min(group_start + 6, len(video_frames))))
-                for group_start in range(0, len(video_frames), 6)
-            )
+            if video_temporal_ids is None:
+                temporal_ids.extend(
+                    list(range(group_start, min(group_start + 6, len(video_frames))))
+                    for group_start in range(0, len(video_frames), 6)
+                )
+            else:
+                if sum(len(group) for group in video_temporal_ids) != len(video_frames):
+                    raise ValueError("video_temporal_ids must contain one ID for every video frame")
+                temporal_ids.extend(video_temporal_ids)
             messages = [
                 {
                     "role": "user",

@@ -915,11 +915,14 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 num_frames = 32
             input_video, _ = load_video(video_path, num_frames=num_frames, backend="opencv")
             question = "Why is this video funny?"
-            inputs = ov_model.preprocess_inputs(**preprocessors, text=question, video=input_video)
+            video_kwargs = {"video_temporal_ids": [[0, 100]]} if model_arch == "minicpm_v4_5" else {}
+            inputs = ov_model.preprocess_inputs(**preprocessors, text=question, video=input_video, **video_kwargs)
             compare_outputs(inputs, ov_model, transformers_model, gen_config)
 
             # check video+image scenario
-            inputs = ov_model.preprocess_inputs(**preprocessors, text=question, video=input_video, image=image)
+            inputs = ov_model.preprocess_inputs(
+                **preprocessors, text=question, video=input_video, image=image, **video_kwargs
+            )
             compare_outputs(inputs, ov_model, transformers_model, gen_config)
 
         if model_arch in self.SUPPORT_AUDIO:
