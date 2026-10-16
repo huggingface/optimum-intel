@@ -18,6 +18,7 @@ import os
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import numpy as np
 import openvino
@@ -37,6 +38,7 @@ from transformers import (
     AutoModelForTextToSpectrogram,
     AutoProcessor,
     AutoTokenizer,
+    BatchFeature,
     GenerationConfig,
     PretrainedConfig,
     pipeline,
@@ -1375,6 +1377,97 @@ class OVModelForMultimodalLMIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES["llava"]
         with self.assertRaises(ValueError):
             OVModelForMultimodalLM.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
+
+
+@pytest.mark.skipif(is_transformers_version("<", "5.0"), reason="OVModelForMultimodalLM requires transformers >= 5.0")
+class OVQwen3OmniMoeMRopeTest(unittest.TestCase):
+    """Compares the thinker position ids at every generation step, and the greedy output, with transformers."""
+
+    NEW_TOKENS = 8
+    SAMPLING_RATE = 16000
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        from transformers import Qwen3OmniMoeForConditionalGeneration
+
+        model_id = MODEL_NAMES["qwen3_omni_moe"]
+        cls.processor = AutoProcessor.from_pretrained(model_id)
+        cls.processor.tokenizer.padding_side = "left"
+        cls.hf_model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(model_id).eval()
+        cls.ov_model = OVModelForMultimodalLM.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
+
+        rng = np.random.default_rng(SEED)
+        cls.image = Image.fromarray(rng.integers(0, 256, (224, 224, 3), dtype=np.uint8))
+        t = np.linspace(0, 2.0, 2 * cls.SAMPLING_RATE, endpoint=False)
+        cls.audio = 0.5 * np.sin(2 * np.pi * 220 * t)
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        del cls.hf_model, cls.ov_model
+        gc.collect()
+
+    def _prompt(self, text: str, with_media: bool) -> str:
+        content = [{"type": "text", "text": text}]
+        if with_media:
+            content = [{"type": "audio"}, {"type": "image"}] + content
+        return self.processor.apply_chat_template([{"role": "user", "content": content}], add_generation_prompt=True)
+
+    def _build_inputs(self, case: str) -> BatchFeature:
+        if case == "text_only":
+            return self.processor(text=[self._prompt("Hello there", False)], return_tensors="pt")
+        media = {"images": [self.image], "audio": [self.audio], "sampling_rate": self.SAMPLING_RATE}
+        if case == "image_audio":
+            return self.processor(text=[self._prompt("Describe", True)], return_tensors="pt", **media)
+        # The shorter text-only row is left-padded, which shifts its decode-time rope delta.
+        texts = [self._prompt("Describe", True), self._prompt("Hi", False)]
+        return self.processor(text=texts, padding=True, return_tensors="pt", **media)
+
+    def _hf_generate(self, inputs: BatchFeature) -> tuple[torch.Tensor, list[torch.Tensor]]:
+        positions = []
+        hook = self.hf_model.thinker.model.register_forward_pre_hook(
+            lambda _module, _args, kwargs: positions.append(kwargs["position_ids"]), with_kwargs=True
+        )
+        try:
+            with torch.no_grad():
+                output_ids = self.hf_model.generate(
+                    **inputs,
+                    return_audio=False,
+                    thinker_do_sample=False,
+                    thinker_max_new_tokens=self.NEW_TOKENS,
+                    thinker_min_new_tokens=self.NEW_TOKENS,
+                )
+        finally:
+            hook.remove()
+        return output_ids, positions
+
+    def _ov_generate(self, inputs: BatchFeature) -> tuple[torch.Tensor, list[torch.Tensor]]:
+        language_model = self.ov_model.language_model
+        with patch.object(language_model, "forward", wraps=language_model.forward) as forward:
+            output_ids = self.ov_model.generate(
+                **inputs, do_sample=False, max_new_tokens=self.NEW_TOKENS, min_new_tokens=self.NEW_TOKENS
+            )
+        return output_ids, [call.kwargs["position_ids"] for call in forward.call_args_list]
+
+    @parameterized.expand(["text_only", "image_audio", "left_padded_batch"])
+    def test_compare_to_transformers(self, case: str) -> None:
+        inputs = self._build_inputs(case)
+        hf_ids, hf_positions = self._hf_generate(inputs)
+        ov_ids, ov_positions = self._ov_generate(inputs)
+
+        self.assertEqual(len(ov_positions), len(hf_positions))
+        for step, (hf_step, ov_step) in enumerate(zip(hf_positions, ov_positions)):
+            # HF feeds the three mRoPE rows; the OV language model takes an extra leading text row equal to the temporal one.
+            # Only values matter: the OV request casts position_ids to its input type.
+            expected = torch.cat([hf_step[:1], hf_step])
+            torch.testing.assert_close(
+                ov_step,
+                expected,
+                rtol=0,
+                atol=0,
+                check_dtype=False,
+                msg=lambda details: f"position_ids at step {step}: {details}",
+            )
+        torch.testing.assert_close(ov_ids, hf_ids, rtol=0, atol=0)
 
 
 class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
