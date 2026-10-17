@@ -334,6 +334,7 @@ HUB_MODEL_NAMES = {
     "sam": "optimum-intel-internal-testing/sam-vit-tiny-random",
     "smollm3": "optimum-intel-internal-testing/tiny-random-smollm3",
     "smolvlm": "optimum-intel-internal-testing/tiny-random-smolvlm2",
+    "spark2_5": "bharqav/tiny-random-spark2_5",
     "speecht5": "optimum-intel-internal-testing/tiny-random-SpeechT5ForTextToSpeech",
     "speech_to_text": "optimum-intel-internal-testing/tiny-random-Speech2TextModel",
     "squeezebert": "optimum-intel-internal-testing/tiny-random-squeezebert",
@@ -392,6 +393,43 @@ HUB_MODEL_NAMES = {
     "qwen3_vl_eagle3_target": "optimum-intel-internal-testing/tiny-random-qwen3-vl-layer10",
     "videochat_flash_qwen": "optimum-intel-internal-testing/tiny-videochat-flash-qwen",
 }
+
+
+REMOTE_CODE_MODELS = (
+    "chatglm",
+    "minicpm",
+    "baichuan2",
+    "baichuan2-13b",
+    "jais",
+    "qwen",
+    "internlm2",
+    "orion",
+    "aquila",
+    "aquila2",
+    "xverse",
+    "internlm",
+    "codegen2",
+    "arctic",
+    "chatglm4",
+    "exaone",
+    "exaone4",
+    "decilm",
+    "minicpm3",
+    "deepseek",
+    "qwen3_dflash",
+    "qwen3_5_dflash",
+    "qwen3_5_moe_dflash",
+    "gemma4_dflash",
+    "qwen3_eagle3",
+    "qwen3_vl_eagle3",
+    "qwen3_asr",
+    "fun_asr",
+    "spark2_5",
+    "videochat_flash_qwen",
+)
+
+if is_transformers_version("<", "5"):
+    REMOTE_CODE_MODELS += ("afmoe", "ouro")
 
 
 def _resolve_cached_model_paths(model_names: dict) -> dict:
@@ -746,6 +784,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_model": 3,
     },
     "ouro": {"model": 34},
+    "spark2_5": {"model": 98},
     "qwen3_asr": {
         "audio_encoder": 36,
         "text_embeddings": 2,
@@ -803,8 +842,6 @@ REMOTE_CODE_MODELS = (
     "gemma3n",
 )
 
-if is_transformers_version("<", "5"):
-    REMOTE_CODE_MODELS += ("afmoe", "ouro")
 
 
 ARCH_TO_MODEL_CLASS = {
