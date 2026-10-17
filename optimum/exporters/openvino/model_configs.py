@@ -47,10 +47,14 @@ from optimum.exporters.openvino.input_generators import (
     DummyDeepseekOCR2VisionTilesInputGenerator,
     DummyFluxTextInputGenerator,
     DummyFluxTransformerInputGenerator,
+    DummyGemma4AudioInputGenerator,
+    DummyGemma4UnifiedAudioInputGenerator,
     DummyGemma4UnifiedVisionInputGenerator,
     DummyGemma4VisionInputGenerator,
     DummyKokoroInputGenerator,
     DummyLLavaMultiModalProjectorInputGenerator,
+    DummyMiniCPMV4_7LMInputGenerator,
+    DummyMiniCPMV4_7VisionInputGenerator,
     DummyMiniCPMVImageInputGenerator,
     DummyMiniCPMVResampleInputGenerator,
     DummyMistral3MultiModalProjectorInputGenerator,
@@ -68,6 +72,9 @@ from optimum.exporters.openvino.input_generators import (
     DummyQwen3TTSDecoderStackInputGenerator,
     DummyQwen3VLLMInputGenerator,
     DummyQwen3VLVisionEmbedInputGenerator,
+    DummyQwenImage21I2ITextInputGenerator,
+    DummyQwenImage21TransformerInputGenerator,
+    DummyQwenImage21VisionInputGenerator,
     DummyQwenImageResolutionInputGenerator,
     DummyQwenImageTextInputGenerator,
     DummyQwenImageTransformerVisionInputGenerator,
@@ -108,6 +115,8 @@ from optimum.exporters.openvino.input_generators import (
     Qwen3ASRDummySeq2SeqPastKeyValuesGenerator,
     Qwen3NextDummyPastKeyValuesGenerator,
     QwenDummyPastKeyValuesGenerator,
+    QwenImage21VaeDummyInputGenerator,
+    SenseVoiceDummyInputGenerator,
     Zamba2DummyPastKeyValuesGenerator,
 )
 from optimum.exporters.openvino.model_patcher import (
@@ -165,6 +174,9 @@ from optimum.exporters.openvino.model_patcher import (
     MambaPatcher,
     MiniCPM3Patcher,
     MiniCPMModelPatcher,
+    MiniCPMV4_7LanguageModelPatcher,
+    MiniCPMV4_7VisionEmbeddingsModule,
+    MiniCPMV4_7VisionEmbeddingsPatcher,
     MiniCPMVImageEmbeddingsModelPatcher,
     MiniCPMVResamplerModelPatcher,
     Mistral3ImageEmbeddingModelPatcher,
@@ -195,7 +207,7 @@ from optimum.exporters.openvino.model_patcher import (
     Qwen3_5MTPModelPatcher,
     Qwen3_5MTPModule,
     Qwen3_5VisionEmbMergerPatcher,
-    Qwen3ASRModelPatcher,
+    Qwen3ASRLanguageModelPatcher,
     Qwen3MoeModelPatcher,
     Qwen3NextModelPatcher,
     Qwen3OmniMoeAudioEncoderPatcher,
@@ -210,6 +222,11 @@ from optimum.exporters.openvino.model_patcher import (
     Qwen3TTSSpeakerEncoderPatcher,
     Qwen3VLLanguageModelPatcher,
     Qwen3VLVisionEmbMergerPatcher,
+    QwenImage21I2ITextEncoderModelPatcher,
+    QwenImage21TextEncoderModelPatcher,
+    QwenImage21TransformerModelPatcher,
+    QwenImage21VaeModelPatcher,
+    QwenImage21VisionModelPatcher,
     QwenImageTextEncoderModelPatcher,
     QwenImageTransformerModelPatcher,
     QwenImageVaeModelPatcher,
@@ -236,7 +253,6 @@ from optimum.utils.input_generators import (
     ASTDummyAudioInputGenerator,
     BartDummyTextInputGenerator,
     BloomDummyPastKeyValuesGenerator,
-    DummyAudioInputGenerator,
     DummyDecoderTextInputGenerator,
     DummyInputGenerator,
     DummyPastKeyValuesGenerator,
@@ -478,14 +494,26 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
             preprocessors=preprocessors,
         )
         archs = getattr(config, "architectures", None)
-        self.dflash = isinstance(archs, list) and len(archs) > 0 and archs[0] == "DFlashDraftModel"
+        self.dflash = False
+        if isinstance(archs, list) and len(archs) > 0:
+            if "dflash" in archs[0].lower():
+                self.dflash = True
+                self.candidate_position_offset = 1
+            elif archs[0] == "Qwen3DSparkModel":
+                if getattr(config, "markov_rank", 0) != 0:
+                    raise ValueError(
+                        "Exporting Qwen3DSparkModel is only supported for DFlash mode (markov_rank == 0). "
+                        "DSpark export is not supported yet (got markov_rank != 0)."
+                    )
+                self.dflash = True
+                self.candidate_position_offset = 0
         if self.dflash:
             model_type = getattr(config, "model_type", "")
             if model_type != "qwen3":
                 raise ValueError(f"DFlash export supports only Qwen3-based draft models, got model_type={model_type}.")
-            dflash_config = getattr(config, "dflash_config", {}) or {}
+            dflash_config = getattr(config, "dflash_config", None) or config.to_dict()
             if not dflash_config.get("target_layer_ids", []):
-                raise ValueError("DFlash export requires non-empty dflash_config['target_layer_ids'].")
+                raise ValueError("DFlash export requires non-empty target_layer_ids in dflash_config or config.")
             # DFlash draft checkpoints still advertise model_type="qwen3"; the
             # architecture and dflash_config fields identify the draft variant.
             self.DUMMY_INPUT_GENERATOR_CLASSES = (
@@ -595,6 +623,20 @@ class Qwen3OmniMoeTextOpenVINOConfig(Qwen3VLTextOpenVINOConfig):
     # Qwen3-Omni-MoE support requires Transformers 5.0+ (the fused-experts / router API);
     # override the Qwen3VL parent's 4.57.0 floor so 4.x fails fast with a clear message.
     MIN_TRANSFORMERS_VERSION = "5.0"
+
+
+@register_in_tasks_manager(
+    "qwen3_asr_text",
+    *["text-generation", "text-generation-with-past"],
+    library_name="transformers",
+)
+class Qwen3ASRTextOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen2VLLMInputGenerator, Qwen3ASRDummySeq2SeqPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = Qwen3ASRDummySeq2SeqPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    MIN_TRANSFORMERS_VERSION = "4.57.6"
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
+    _MODEL_PATCHER = OVDecoderModelPatcher
 
 
 @register_in_tasks_manager(
@@ -1392,6 +1434,16 @@ class MistralOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     ) + TextDecoderOpenVINOConfig.DUMMY_INPUT_GENERATOR_CLASSES
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     _MODEL_PATCHER = MistralModelPatcher
+
+
+@register_in_tasks_manager(
+    "ministral3",
+    "text-generation-with-past",
+    library_name="transformers",
+)
+class Ministral3OpenVINOConfig(MistralOpenVINOConfig):
+    # ministral3 is the text-decoder config used inside Mistral3ForConditionalGeneration (Mistral3 VLM family).
+    MIN_TRANSFORMERS_VERSION = "5.0.0"
 
 
 @register_in_tasks_manager(
@@ -2312,7 +2364,8 @@ class MairaOpenVINOConfig(LlavaOpenVINOConfig):
 
 @register_in_tasks_manager("internvl_chat", *["image-text-to-text"], library_name="transformers")
 class InternVLChatOpenVINOConfig(BaseVLMOpenVINOConfig):
-    MAX_TRANSFORMERS_VERSION = "4.57.6"
+    MIN_TRANSFORMERS_VERSION = "4.53.3"
+    MAX_TRANSFORMERS_VERSION = "4.53.3"
 
     def __init__(
         self,
@@ -2353,7 +2406,11 @@ class InternVLChatOpenVINOConfig(BaseVLMOpenVINOConfig):
         if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
             model_type = self._orig_config.llm_config.model_type
             return get_vlm_text_embeddings_config(
-                model_type, self._orig_config.llm_config, self.int_dtype, self.float_dtype
+                model_type,
+                self._orig_config.llm_config,
+                self.int_dtype,
+                self.float_dtype,
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
             )
 
         if behavior == VLMConfigBehavior.LANGUAGE:
@@ -2364,6 +2421,7 @@ class InternVLChatOpenVINOConfig(BaseVLMOpenVINOConfig):
                 self.int_dtype,
                 self.float_dtype,
                 InternVL2ChatLangModelPatcher,
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
             )
 
         if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
@@ -3157,6 +3215,165 @@ class QwenImageVaeDecoderOpenVINOConfig(VisionOpenVINOConfig):
         }
 
 
+@register_in_tasks_manager("qwenimage21-transformer", *["semantic-segmentation"], library_name="diffusers")
+class QwenImage21TransformerOpenVINOConfig(UNetOpenVINOConfig):
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
+        image_size="sample_size",
+        num_channels="in_channels",
+        hidden_size="context_in_dim",
+        vocab_size="attention_head_dim",
+        allow_new=True,
+    )
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwenImage21TransformerInputGenerator,)
+    _MODEL_PATCHER = QwenImage21TransformerModelPatcher
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        return OpenVINOConfig.generate_dummy_inputs(self, framework=framework, **kwargs)
+
+    @property
+    def inputs(self):
+        return {
+            "hidden_states": {0: "batch_size", 1: "packed_height_width", 2: "in_channels"},
+            "encoder_hidden_states": {0: "batch_size", 1: "text_sequence_length", 2: "context_in_dim"},
+            "timestep": {0: "batch_size"},
+            "cos": {1: "joint_sequence_length"},
+            "sin": {1: "joint_sequence_length"},
+            "gather_idx": {0: "joint_sequence_length"},
+            "attn_mask": {0: "batch_size", 2: "joint_sequence_length", 3: "joint_sequence_length"},
+            "modulation_mask": {0: "joint_sequence_length"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "out_hidden_states": {0: "batch_size", 1: "joint_sequence_length"},
+        }
+
+
+@register_in_tasks_manager("qwenimage21-text-encoder", *["feature-extraction"], library_name="diffusers")
+class QwenImage21TextEncoderOpenVINOConfig(CLIPTextOpenVINOConfig):
+    # QwenImage2.1 uses a Qwen3-VL model run text-only for the prompt embeddings. Only the language model
+    # (`text_encoder.model.language_model`, a `Qwen3VLTextModel`) is exported. The patcher drops the final
+    # norm (the pipeline reads the pre-norm hidden state), forces SDPA and installs the vmap-free mask so the
+    # traced attention fuses and stays numerically consistent under OpenVINO.
+    _MODEL_PATCHER = QwenImage21TextEncoderModelPatcher
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator,)
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "last_hidden_state": {0: "batch_size", 1: "sequence_length"},
+        }
+
+
+@register_in_tasks_manager("qwenimage21-vision-encoder", *["feature-extraction"], library_name="diffusers")
+class QwenImage21VisionEncoderOpenVINOConfig(OpenVINOConfig):
+    # Qwen3-VL vision tower for QwenImage2.1 image-to-image. The traceable graph consumes host-precomputed
+    # grid-derived tensors (bilinear position-embedding gather indices/weights and rotary cos/sin) and the
+    # flattened patch pixels. It returns the merged image embeddings plus one DeepStack feature per
+    # DeepStack layer. The patcher swaps the eager cu_seqlens attention for a single fusable SDPA.
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwenImage21VisionInputGenerator,)
+    _MODEL_PATCHER = QwenImage21VisionModelPatcher
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        return OpenVINOConfig.generate_dummy_inputs(self, framework=framework, **kwargs)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "pixel_values": {0: "sequence_length"},
+            "bilinear_indices": {1: "sequence_length"},
+            "bilinear_weights": {1: "sequence_length"},
+            "cos": {0: "sequence_length"},
+            "sin": {0: "sequence_length"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        n_deep = len(self._normalized_config.config.deepstack_visual_indexes)
+        outputs = {"image_embeds": {0: "merged_sequence_length"}}
+        for i in range(n_deep):
+            outputs[f"deepstack_{i}"] = {0: "merged_sequence_length"}
+        return outputs
+
+
+@register_in_tasks_manager("qwenimage21-text-encoder-i2i", *["feature-extraction"], library_name="diffusers")
+class QwenImage21I2ITextEncoderOpenVINOConfig(OpenVINOConfig):
+    # Qwen3-VL language model for QwenImage2.1 image-to-image. Unlike the t2i text encoder (input_ids only)
+    # this graph takes host-precomputed `inputs_embeds` (vision embeds already scattered), 3D M-RoPE
+    # `position_ids`, and the DeepStack visual features as a dense additive tensor. The passed config is the
+    # top-level Qwen3-VL config (it carries both `text_config` and `vision_config`).
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwenImage21I2ITextInputGenerator,)
+    _MODEL_PATCHER = QwenImage21I2ITextEncoderModelPatcher
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        return OpenVINOConfig.generate_dummy_inputs(self, framework=framework, **kwargs)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            "image_embeds": {0: "num_image_tokens"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
+            "position_ids": {1: "batch_size", 2: "sequence_length"},
+            "deepstack_dense": {1: "batch_size", 2: "sequence_length"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "last_hidden_state": {0: "batch_size", 1: "sequence_length"},
+        }
+
+
+@register_in_tasks_manager("qwenimage21-vae-encoder", *["semantic-segmentation"], library_name="diffusers")
+class QwenImage21VaeEncoderOpenVINOConfig(VisionOpenVINOConfig):
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(num_channels="in_channels", allow_new=True)
+    DUMMY_INPUT_GENERATOR_CLASSES = (QwenImage21VaeDummyInputGenerator,)
+    _MODEL_PATCHER = QwenImage21VaeModelPatcher
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "sample": {0: "batch_size", 2: "num_frames", 3: "height", 4: "width"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "latent_parameters": {0: "batch_size", 2: "num_frames", 3: "height_latent", 4: "width_latent"},
+        }
+
+
+@register_in_tasks_manager("qwenimage21-vae-decoder", *["semantic-segmentation"], library_name="diffusers")
+class QwenImage21VaeDecoderOpenVINOConfig(VisionOpenVINOConfig):
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(num_channels="z_dim", allow_new=True)
+    DUMMY_INPUT_GENERATOR_CLASSES = (QwenImage21VaeDummyInputGenerator,)
+    _MODEL_PATCHER = QwenImage21VaeModelPatcher
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "latent_sample": {0: "batch_size", 2: "num_frames", 3: "latent_height", 4: "latent_width"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "sample": {0: "batch_size", 2: "num_frames", 3: "height", 4: "width"},
+        }
+
+
 @register_in_tasks_manager("ltx2-vae-decoder", *["semantic-segmentation"], library_name="diffusers")
 class LTX2VaeDecoderOpenVINOConfig(VaeDecoderOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (LTX2VaeDummyInputGenerator,)
@@ -3438,6 +3655,140 @@ class MiniCPMVOpenVINOConfig(BaseVLMOpenVINOConfig):
 class MiniCPMOOpenVINOConfig(MiniCPMVOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.51.0"
     MAX_TRANSFORMERS_VERSION = "4.51.3"
+
+
+class MiniCPMV4_7ConfigBehavior(str, enum.Enum):
+    LANGUAGE = "language"
+    VISION_EMBEDDINGS = "vision_embeddings"
+    TEXT_EMBEDDINGS = "text_embeddings"
+
+
+@register_in_tasks_manager("minicpmv4_7", *["image-text-to-text"], library_name="transformers")
+class MiniCPMV4_7OpenVINOConfig(BaseVLMOpenVINOConfig):
+    """
+    MiniCPM-V 4.7: a SigLIP-style vision tower with a ViT window-attention merger and an MLP merger, on top of a
+    Qwen3.5 (hybrid Gated DeltaNet + full attention) language model with canvas M-RoPE. The language model is either
+    dense (`qwen3_5_text`) or MoE (`qwen3_5_moe_text`).
+
+    Uses the native transformers implementation (no remote code). The vision graph encodes one crop at a time, see
+    `MiniCPMV4_7VisionEmbeddingsPatcher`.
+    """
+
+    MIN_TRANSFORMERS_VERSION = "5.18.0"
+    MAX_TRANSFORMERS_VERSION = None
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in MiniCPMV4_7ConfigBehavior]
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyMiniCPMV4_7VisionInputGenerator,)
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: MiniCPMV4_7ConfigBehavior = MiniCPMV4_7ConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self._behavior = behavior
+        self._orig_config = config
+        if self._behavior == MiniCPMV4_7ConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == MiniCPMV4_7ConfigBehavior.VISION_EMBEDDINGS:
+            return {
+                "pixel_values": {3: "patches_width"},
+                "position_ids": {0: "num_patches"},
+                "window_index": {0: "num_patches"},
+                "merge_index": {0: "num_merged_patches"},
+            }
+        return {}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == MiniCPMV4_7ConfigBehavior.VISION_EMBEDDINGS:
+            return {"last_hidden_state": {0: "num_tokens"}}
+        return {}
+
+    def with_behavior(
+        self,
+        behavior: Union[str, MiniCPMV4_7ConfigBehavior],
+    ):
+        """
+        Creates a config for different behaviour.
+        Args:
+            behavior ([`ConfigBehavior`]):
+                The behavior to use for the new instance.
+        """
+        if isinstance(behavior, str) and not isinstance(behavior, MiniCPMV4_7ConfigBehavior):
+            behavior = MiniCPMV4_7ConfigBehavior(behavior)
+
+        # qwen3_5_text for the dense checkpoints, qwen3_5_moe_text for the MoE ones (e.g. MiniCPM-V-4.7-35B-A3B)
+        text_model_type = self._orig_config.text_config.model_type
+
+        if behavior == MiniCPMV4_7ConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config(
+                text_model_type,
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
+                max_transformers_version=self.MAX_TRANSFORMERS_VERSION,
+            )
+
+        if behavior == MiniCPMV4_7ConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                text_model_type,
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=MiniCPMV4_7LanguageModelPatcher,
+                dummy_input_generator=DummyMiniCPMV4_7LMInputGenerator,
+                inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
+                max_transformers_version=self.MAX_TRANSFORMERS_VERSION,
+            )
+
+        if behavior == MiniCPMV4_7ConfigBehavior.VISION_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
+
+    @staticmethod
+    def get_model_for_behavior(model, behavior: Union[str, MiniCPMV4_7ConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, MiniCPMV4_7ConfigBehavior):
+            behavior = MiniCPMV4_7ConfigBehavior(behavior)
+
+        if behavior == MiniCPMV4_7ConfigBehavior.LANGUAGE:
+            return model
+
+        if behavior == MiniCPMV4_7ConfigBehavior.VISION_EMBEDDINGS:
+            return MiniCPMV4_7VisionEmbeddingsModule(model)
+
+        if behavior == MiniCPMV4_7ConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.model.language_model.embed_tokens
+            text_embedding.config = model.config.text_config
+            return text_embedding
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior == MiniCPMV4_7ConfigBehavior.VISION_EMBEDDINGS:
+            return MiniCPMV4_7VisionEmbeddingsPatcher(self, model, model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
 
 
 class Phi3VisionConfigBehavior(str, enum.Enum):
@@ -4620,6 +4971,12 @@ class WhisperOpenVINOConfig(AudioToTextOpenVINOConfig):
         return common_outputs
 
 
+class Qwen3ASRConfigBehavior(str, enum.Enum):
+    AUDIO_ENCODER = "audio_encoder"
+    TEXT_EMBEDDINGS = "text_embeddings"
+    LANGUAGE = "language"
+
+
 @register_in_tasks_manager(
     "qwen3_asr",
     *[
@@ -4628,27 +4985,14 @@ class WhisperOpenVINOConfig(AudioToTextOpenVINOConfig):
     ],
     library_name="transformers",
 )
-class Qwen3ASROpenVINOConfig(AudioToTextOpenVINOConfig):
+class Qwen3ASROpenVINOConfig(BaseVLMOpenVINOConfig):
     """OpenVINO export config for Qwen3-ASR model."""
 
-    DUMMY_INPUT_GENERATOR_CLASSES = (
-        DummyAudioInputGenerator,
-        DummySeq2SeqDecoderTextInputGenerator,
-        Qwen3ASRDummySeq2SeqPastKeyValuesGenerator,
-    )
-
-    NORMALIZED_CONFIG_CLASS = NormalizedSeq2SeqConfig.with_args(
-        encoder_num_layers="encoder_layers",
-        decoder_num_layers="num_hidden_layers",
-        num_attention_heads="num_attention_heads",
-        # Use num_key_value_heads for KV cache shape generation (GQA)
-        decoder_num_attention_heads="num_key_value_heads",
-        feature_size="num_mel_bins",
-        allow_new=True,
-    )
+    SUPPORTED_BEHAVIORS = [behavior.value for behavior in Qwen3ASRConfigBehavior]
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3OmniMoeAudioInputGenerator,)
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig
     MIN_TRANSFORMERS_VERSION = "4.57.6"
     MAX_TRANSFORMERS_VERSION = "4.57.6"
-    _MODEL_PATCHER = Qwen3ASRModelPatcher
 
     def __init__(
         self,
@@ -4656,56 +5000,90 @@ class Qwen3ASROpenVINOConfig(AudioToTextOpenVINOConfig):
         task: str = "automatic-speech-recognition",
         int_dtype: str = "int64",
         float_dtype: str = "fp32",
+        behavior: Qwen3ASRConfigBehavior = Qwen3ASRConfigBehavior.AUDIO_ENCODER,
         preprocessors: Optional[List[Any]] = None,
         **kwargs,
     ):
-        # Flatten nested config for NormalizedSeq2SeqConfig
-        thinker = getattr(config, "thinker_config", config)
-        audio_config = getattr(thinker, "audio_config", None)
-        text_config = getattr(thinker, "text_config", None)
-
-        if audio_config is not None:
-            config.encoder_layers = audio_config.encoder_layers
-            config.num_mel_bins = audio_config.num_mel_bins
-            # Use output_dim (post-projection) as d_model since that's the actual encoder output size
-            config.d_model = getattr(audio_config, "output_dim", audio_config.d_model)
-            config.n_window = getattr(audio_config, "n_window", None)
-
-        if text_config is not None:
-            config.num_hidden_layers = text_config.num_hidden_layers
-            config.hidden_size = text_config.hidden_size
-            config.num_attention_heads = text_config.num_attention_heads
-            config.num_key_value_heads = getattr(text_config, "num_key_value_heads", text_config.num_attention_heads)
-            config.head_dim = getattr(
-                text_config, "head_dim", text_config.hidden_size // text_config.num_attention_heads
-            )
-            config.decoder_start_token_id = getattr(text_config, "bos_token_id", None) or 0
-            config.vocab_size = text_config.vocab_size
-
         super().__init__(
             config=config,
             task=task,
             int_dtype=int_dtype,
             float_dtype=float_dtype,
             preprocessors=preprocessors,
-            **kwargs,
+        )
+        self._behavior = behavior
+        self._orig_config = config
+        thinker_config = getattr(config, "thinker_config", config)
+        audio_config = getattr(thinker_config, "audio_config", None)
+        if behavior == Qwen3ASRConfigBehavior.AUDIO_ENCODER and audio_config is not None:
+            self._config = audio_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(audio_config)
+
+    @staticmethod
+    def get_model_for_behavior(model, behavior: Union[str, Qwen3ASRConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, Qwen3ASRConfigBehavior):
+            behavior = Qwen3ASRConfigBehavior(behavior)
+
+        if behavior == Qwen3ASRConfigBehavior.LANGUAGE:
+            return model
+        if behavior == Qwen3ASRConfigBehavior.TEXT_EMBEDDINGS:
+            text_embeddings = model.thinker.model.get_input_embeddings()
+            text_embeddings.config = model.thinker.config.text_config
+            return text_embeddings
+        if behavior == Qwen3ASRConfigBehavior.AUDIO_ENCODER:
+            audio_encoder = model.thinker.audio_tower
+            audio_encoder.config = model.thinker.config.audio_config
+            return audio_encoder
+        raise ValueError(f"Unsupported Qwen3-ASR behavior: {behavior}")
+
+    def with_behavior(self, behavior: Union[str, Qwen3ASRConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, Qwen3ASRConfigBehavior):
+            behavior = Qwen3ASRConfigBehavior(behavior)
+
+        thinker_config = getattr(self._orig_config, "thinker_config", self._orig_config)
+        if behavior == Qwen3ASRConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config(
+                "qwen3_asr_text", thinker_config.text_config, self.int_dtype, self.float_dtype
+            )
+        if behavior == Qwen3ASRConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                "qwen3_asr_text",
+                thinker_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=Qwen3ASRLanguageModelPatcher,
+                inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+            )
+        return self.__class__(
+            self._orig_config,
+            task=self.task,
+            int_dtype=self.int_dtype,
+            float_dtype=self.float_dtype,
+            behavior=behavior,
+            preprocessors=self._preprocessors,
         )
 
-    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
-        """Override to exclude encoder KV cache since Qwen3-ASR has no cross-attention."""
-        if direction not in ["inputs", "outputs"]:
-            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        if self._behavior == Qwen3ASRConfigBehavior.AUDIO_ENCODER:
+            return Qwen3OmniMoeAudioEncoderPatcher(self, model, model_kwargs or {})
+        return super().patch_model_for_export(model, model_kwargs)
 
-        if direction == "inputs":
-            decoder_sequence_name = "past_decoder_sequence_length"
-            name = "past_key_values"
-        else:
-            decoder_sequence_name = "past_decoder_sequence_length + decoder_sequence_length"
-            name = "present"
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == Qwen3ASRConfigBehavior.AUDIO_ENCODER:
+            return {
+                "padded_feature": {0: "num_chunks", 2: "audio_sequence_length"},
+                "padded_mask_after_cnn": {0: "num_chunks", 1: "aftercnn_sequence_length"},
+                "aftercnn_lens": {0: "batch_size"},
+                "cu_seqlens": {0: "num_windows + 1"},
+            }
+        raise ValueError(f"Inputs are defined by the config for Qwen3-ASR behavior {self._behavior}")
 
-        for i in range(self._normalized_config.decoder_num_layers):
-            inputs_or_outputs[f"{name}.{i}.decoder.key"] = {0: "batch_size", 2: decoder_sequence_name}
-            inputs_or_outputs[f"{name}.{i}.decoder.value"] = {0: "batch_size", 2: decoder_sequence_name}
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == Qwen3ASRConfigBehavior.AUDIO_ENCODER:
+            return {"audio_features": {0: "num_chunks", 1: "aftercnn_sequence_length"}}
+        raise ValueError(f"Outputs are defined by the config for Qwen3-ASR behavior {self._behavior}")
 
 
 @register_in_tasks_manager(
@@ -4772,6 +5150,40 @@ class FunASROpenVINOConfig(AudioToTextOpenVINOConfig):
         for i in range(self._normalized_config.decoder_num_layers):
             inputs_or_outputs[f"{name}.{i}.decoder.key"] = {0: "batch_size", 2: decoder_sequence_name}
             inputs_or_outputs[f"{name}.{i}.decoder.value"] = {0: "batch_size", 2: decoder_sequence_name}
+
+
+@register_in_tasks_manager(
+    "sense_voice",
+    *["automatic-speech-recognition"],
+    library_name="funasr",
+)
+class SenseVoiceOpenVINOConfig(AudioOpenVINOConfig):
+    """OpenVINO export config for SenseVoiceSmall.
+
+    SenseVoiceSmall is encoder-only: fbank features (batch, num_frames, feature_size), the per-sample valid
+    frame counts (`speech_lengths`) and two integer prefix-query selectors (`language`, `textnorm`) are
+    consumed by a SANM encoder + CTC head, producing per-frame token logits and the per-sample encoder
+    output lengths. `speech_lengths` drives the SANM padding mask, so a padded batch decodes correctly.
+    """
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (SenseVoiceDummyInputGenerator,)
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(feature_size="num_mel_bins", allow_new=True)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "input_features": {0: "batch_size", 1: "encoder_sequence_length"},
+            "speech_lengths": {0: "batch_size"},
+            "language": {0: "batch_size"},
+            "textnorm": {0: "batch_size"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "logits": {0: "batch_size", 1: "logits_sequence_length"},
+            "encoder_out_lens": {0: "batch_size"},
+        }
 
 
 @register_in_tasks_manager(
@@ -5207,6 +5619,7 @@ class Gemma3OpenVINOConfig(BaseVLMOpenVINOConfig):
 
 
 class Gemma4ConfigBehavior(str, enum.Enum):
+    AUDIO_EMBEDDINGS = "audio_embeddings"
     VISION_EMBEDDINGS = "vision_embeddings"
     TEXT_EMBEDDINGS = "text_embeddings"
     LANGUAGE = "language"
@@ -5237,6 +5650,10 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
             behavior=behavior,
         )
         self._behavior = behavior
+        self.SUPPORTED_BEHAVIORS = list(type(self).SUPPORTED_BEHAVIORS)
+        audio_config = getattr(config, "audio_config", None)
+        if audio_config is None:
+            self.SUPPORTED_BEHAVIORS.remove(Gemma4ConfigBehavior.AUDIO_EMBEDDINGS.value)
         if self._behavior == Gemma4ConfigBehavior.VISION_EMBEDDINGS and config.model_type == "gemma4":
             self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyGemma4VisionInputGenerator,)
             # Attach image_seq_length from preprocessor to normalized config so
@@ -5273,6 +5690,10 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
             self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator,)
             self._config = config.text_config
             self._normalized_config = NormalizedTextConfig(self._config)
+        elif self._behavior == Gemma4ConfigBehavior.AUDIO_EMBEDDINGS:
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyGemma4AudioInputGenerator,)
+            self._config = audio_config
+            self._normalized_config = NormalizedConfig(self._config)
 
     @staticmethod
     def _get_language_model(model):
@@ -5311,11 +5732,38 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
                 preprocessors=self._preprocessors,
             )
             return config
+        if behavior == Gemma4ConfigBehavior.AUDIO_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
         return super().with_behavior(behavior)
 
     def get_model_for_behavior(self, model, behavior: Union[str, VLMConfigBehavior]):
+        if behavior == Gemma4ConfigBehavior.AUDIO_EMBEDDINGS:
+
+            class AudioEmbeddingsModule(torch.nn.Module):
+                def __init__(self, model):
+                    super().__init__()
+                    self.audio_tower = model.model.audio_tower
+                    self.embed_audio = model.model.embed_audio
+
+                def forward(self, input_features: torch.Tensor, input_features_mask: torch.Tensor):
+                    audio_outputs = self.audio_tower(input_features, input_features_mask, return_dict=True)
+                    audio_features = self.embed_audio(inputs_embeds=audio_outputs.last_hidden_state)
+                    audio_mask = getattr(audio_outputs, "attention_mask", None)
+                    if audio_mask is None:
+                        audio_mask = audio_outputs.audio_mel_mask
+                    return audio_features, audio_mask
+
+            audio_embeddings = AudioEmbeddingsModule(model)
+            audio_embeddings.config = model.config.audio_config
+            return audio_embeddings
         if behavior == Gemma4ConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
-            import torch
 
             class PerLayerInputsModule(torch.nn.Module):
                 def __init__(self, language_model, vocab_size_per_layer_input: int, config):
@@ -5366,7 +5814,6 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
         if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return model
         if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
-            import torch
 
             class TextEmbeddingsModule(torch.nn.Module):
                 def __init__(self, model):
@@ -5393,6 +5840,11 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == Gemma4ConfigBehavior.AUDIO_EMBEDDINGS:
+            return {
+                "input_features": {0: "num_audios", 1: "audio_sequence_length"},
+                "input_features_mask": {0: "num_audios", 1: "audio_sequence_length"},
+            }
         if self._behavior == Gemma4ConfigBehavior.LANGUAGE:
             return super().inputs
         if self._behavior == Gemma4ConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
@@ -5408,6 +5860,11 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == Gemma4ConfigBehavior.AUDIO_EMBEDDINGS:
+            return {
+                "last_hidden_state": {0: "num_audios", 1: "audio_output_sequence_length"},
+                "attention_mask": {0: "num_audios", 1: "audio_output_sequence_length"},
+            }
         if self._behavior == Gemma4ConfigBehavior.TEXT_EMBEDDINGS_PER_LAYER:
             return {"text_embeds_per_layer": {}}
         return super().outputs
@@ -5416,6 +5873,9 @@ class Gemma4OpenVINOConfig(Gemma3OpenVINOConfig):
 @register_in_tasks_manager("gemma3n", *["image-text-to-text"], library_name="transformers")
 class Gemma3nOpenVINOConfig(Gemma4OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "5.0"
+    SUPPORTED_BEHAVIORS = [
+        behavior.value for behavior in Gemma4ConfigBehavior if behavior != Gemma4ConfigBehavior.AUDIO_EMBEDDINGS
+    ]
 
     def __init__(
         self,
@@ -5537,12 +5997,18 @@ class Gemma3nOpenVINOConfig(Gemma4OpenVINOConfig):
         return super().inputs
 
 
+class Gemma4UnifiedConfigBehavior(str, enum.Enum):
+    AUDIO_EMBEDDINGS = "audio_embeddings"
+    LANGUAGE = "language"
+    TEXT_EMBEDDINGS = "text_embeddings"
+    VISION_EMBEDDINGS = "vision_embeddings"
+
+
 @register_in_tasks_manager("gemma4_unified", *["image-text-to-text"], library_name="transformers")
 class Gemma4UnifiedOpenVINOConfig(Gemma3OpenVINOConfig):
     # gemma4_unified (e.g. google/gemma-4-12B) reuses the gemma3 VLM scaffolding but has an
-    # encoder-free vision embedder and no per-layer text embeddings. We only support text and
-    # vision (audio is not exported).
-    SUPPORTED_BEHAVIORS = [model_type.value for model_type in VLMConfigBehavior]
+    # encoder-free vision and audio embedders and no per-layer text embeddings.
+    SUPPORTED_BEHAVIORS = [model_type.value for model_type in Gemma4UnifiedConfigBehavior]
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator, DummyTextInputGenerator)
     MIN_TRANSFORMERS_VERSION = "5.10"
     MAX_TRANSFORMERS_VERSION = "5.10.99"
@@ -5553,7 +6019,7 @@ class Gemma4UnifiedOpenVINOConfig(Gemma3OpenVINOConfig):
         task: str = "feature-extraction",
         int_dtype: str = "int64",
         float_dtype: str = "fp32",
-        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
+        behavior: Gemma4UnifiedConfigBehavior = Gemma4UnifiedConfigBehavior.VISION_EMBEDDINGS,
         preprocessors: Optional[List[Any]] = None,
     ):
         super().__init__(
@@ -5565,6 +6031,10 @@ class Gemma4UnifiedOpenVINOConfig(Gemma3OpenVINOConfig):
             behavior=behavior,
         )
         self._behavior = behavior
+        self.SUPPORTED_BEHAVIORS = list(type(self).SUPPORTED_BEHAVIORS)
+        audio_config = getattr(config, "audio_config", None)
+        if audio_config is None:
+            self.SUPPORTED_BEHAVIORS.remove(Gemma4UnifiedConfigBehavior.AUDIO_EMBEDDINGS.value)
         if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyGemma4UnifiedVisionInputGenerator,)
             self._config = config.vision_config
@@ -5586,10 +6056,14 @@ class Gemma4UnifiedOpenVINOConfig(Gemma3OpenVINOConfig):
             self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator,)
             self._config = config.text_config
             self._normalized_config = NormalizedTextConfig(self._config)
+        elif self._behavior == Gemma4UnifiedConfigBehavior.AUDIO_EMBEDDINGS:
+            self.DUMMY_INPUT_GENERATOR_CLASSES = (DummyGemma4UnifiedAudioInputGenerator,)
+            self._config = audio_config
+            self._normalized_config = NormalizedConfig(self._config)
 
-    def with_behavior(self, behavior: Union[str, VLMConfigBehavior]):
-        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
-            behavior = VLMConfigBehavior(behavior)
+    def with_behavior(self, behavior: Union[str, Gemma4UnifiedConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, Gemma4UnifiedConfigBehavior):
+            behavior = Gemma4UnifiedConfigBehavior(behavior)
 
         if behavior == VLMConfigBehavior.LANGUAGE:
             inputs_update = {}
@@ -5603,11 +6077,20 @@ class Gemma4UnifiedOpenVINOConfig(Gemma3OpenVINOConfig):
                 model_patcher=Gemma4UnifiedLMModelPatcher,
                 inputs_update=inputs_update,
             )
+        if behavior == Gemma4UnifiedConfigBehavior.AUDIO_EMBEDDINGS:
+            return self.__class__(
+                self._orig_config,
+                task=self.task,
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                behavior=behavior,
+                preprocessors=self._preprocessors,
+            )
         return super().with_behavior(behavior)
 
-    def get_model_for_behavior(self, model, behavior: Union[str, VLMConfigBehavior]):
-        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
-            behavior = VLMConfigBehavior(behavior)
+    def get_model_for_behavior(self, model, behavior: Union[str, Gemma4UnifiedConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, Gemma4UnifiedConfigBehavior):
+            behavior = Gemma4UnifiedConfigBehavior(behavior)
 
         if behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return model
@@ -5626,6 +6109,20 @@ class Gemma4UnifiedOpenVINOConfig(Gemma3OpenVINOConfig):
             text_embedding.config = model.model.language_model.config
             return text_embedding
 
+        if behavior == Gemma4UnifiedConfigBehavior.AUDIO_EMBEDDINGS:
+
+            class AudioEmbeddingsModule(torch.nn.Module):
+                def __init__(self, model):
+                    super().__init__()
+                    self.embed_audio = model.model.embed_audio
+
+                def forward(self, input_features: torch.Tensor):
+                    return self.embed_audio(inputs_embeds=input_features)
+
+            audio_embeddings = AudioEmbeddingsModule(model)
+            audio_embeddings.config = model.config.audio_config
+            return audio_embeddings
+
         return super().get_model_for_behavior(model, behavior)
 
     def patch_model_for_export(self, model, model_kwargs=None):
@@ -5636,12 +6133,20 @@ class Gemma4UnifiedOpenVINOConfig(Gemma3OpenVINOConfig):
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == Gemma4UnifiedConfigBehavior.AUDIO_EMBEDDINGS:
+            return {"input_features": {0: "num_audios", 1: "audio_sequence_length"}}
         if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS:
             return {
                 "pixel_values": {0: "batch_size", 1: "num_patches"},
                 "image_position_ids": {0: "batch_size", 1: "num_patches"},
             }
         return super().inputs
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == Gemma4UnifiedConfigBehavior.AUDIO_EMBEDDINGS:
+            return {"last_hidden_state": {0: "num_audios", 1: "audio_sequence_length"}}
+        return super().outputs
 
 
 @register_in_tasks_manager("idefics3", *["image-text-to-text"], library_name="transformers")

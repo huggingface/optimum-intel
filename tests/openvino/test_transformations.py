@@ -110,7 +110,6 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
         "compile": [
             "ConvertMatMulToFC",
             "ConvertToCPUSpecificOpset",
-            "ConvertToPowerStatic",
             "ConvertToSwishCPU",
             "Snippets",
             "Tokenization",
@@ -321,6 +320,32 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "ConvertToSwishCPU",
         ],
     },
+    "minicpmv4_7": {
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+            "CommonFusions",
+            "TransposeConvert",
+        ],
+        "compile": [
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "CommonDecompositions",
+            "MultiplyFusions",
+            "ConvertSoftMax8ToSoftMax1",
+            "ConvertBroadcast3",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "RMSFusion",
+            "GatedDeltaNetFusion",
+            "ConvertTiledMoeBlockToGatherMatmuls",
+            "ConvertMatMulToFC",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+        ],
+    },
     "deepseek_ocr2": {
         "model_class": "OVModelForVisualCausalLM",
         "convert": [
@@ -338,6 +363,33 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "CausalMaskPreprocessFusion",
             "ConvertSoftMax8ToSoftMax1",
             "ConvertScatterElementsUpdate12ToScatterElementsUpdate3",
+            "ConvertBroadcast3",
+            "ConvertMatMulToFC",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+        ],
+    },
+    "ministral3": {
+        # ministral3 is the text-decoder config used inside Mistral3ForConditionalGeneration, so it
+        # is loaded through the VLM class even though the checked transformations are all in its
+        # decoder submodel (dense Mistral attention/RoPE/RMSNorm, no MoE routing).
+        "model_class": "OVModelForVisualCausalLM",
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+            "DecompressionHandling",
+        ],
+        "compile": [
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "CommonDecompositions",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "RMSFusion",
+            "MultiplyFusions",
+            "ConvertSoftMax8ToSoftMax1",
             "ConvertBroadcast3",
             "ConvertMatMulToFC",
             "ConvertToPowerStatic",
@@ -382,6 +434,35 @@ if is_diffusers_version(">=", "0.35.0"):
         ],
     }
 
+# Qwen-Image-2.1 rotates interleaved pairs; the exported graph de-interleaves them into the same rotate-half
+# layout, so its transformer RoPE fuses through the same GPT-NeoX matcher.
+if is_diffusers_version(">=", "0.41.0.dev0"):
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["qwenimage21"] = {
+        "model_class": "OVDiffusionPipeline",
+        "convert": [
+            "CommonFusions",
+            "ConstantFolding",
+            "MOC",
+            "MultiplyFusions",
+            "ReshapeOptimizations",
+            "SDPAFusion",
+            "ShapeOfConstFolding",
+            "SharedOpOptimization",
+            "SmartReshape",
+        ],
+        "compile": [
+            "CommonDecompositions",
+            "CommonOptimizations",
+            "FullyConnectedBiasFusion",
+            "FuseTransposeBrgemm",
+            "RMSFusion",
+            "RoPEFusion",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "SDPASubgraphFusion",
+        ],
+    }
+
 
 if is_diffusers_version(">=", "0.38.0"):
     ARCH_TO_EXPECTED_TRANSFORMATIONS["ltx2"] = {
@@ -391,7 +472,6 @@ if is_diffusers_version(">=", "0.38.0"):
             "PackMultiHeadAttention",
             "CommonFusions",
             "TransposeConvert",
-            "TransposeFuse",
             "ReverseInputChannelsFusion",
             "BroadcastTransition",
         ],
@@ -435,8 +515,10 @@ if is_diffusers_version(">=", "0.37.0"):
             "ConvertToSwishCPU",
             "DecompressionHandling",
             "MultiplyFusions",
+            "RMSFusion",
             "RoPEFusion",
             "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
             "SDPASubgraphFusion",
             "Snippets",
             "Tokenization",

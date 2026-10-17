@@ -36,6 +36,7 @@ from optimum.intel.utils.import_utils import (
     is_diffusers_available,
     is_nncf_available,
     is_openvino_tokenizers_available,
+    is_openvino_version,
     is_transformers_version,
 )
 from optimum.intel.utils.modeling_utils import (
@@ -97,7 +98,15 @@ def infer_task(
             # Use the with-past task so the encoder-decoder export is stateful (KV cache hidden in
             # OpenVINO state). Without the `-with-past` suffix the decoder is exported stateless and
             # incremental generation breaks (only the first token is correct).
-            task = "automatic-speech-recognition-with-past"
+            from optimum.intel.openvino.modeling_funasr import _is_sensevoice_source
+
+            if _is_sensevoice_source(
+                model_name_or_path, cache_dir=cache_dir, token=token, subfolder=subfolder, revision=revision
+            ):
+                # SenseVoiceSmall is a non-autoregressive (CTC encoder-only) model exported as a single stateless graph.
+                task = "automatic-speech-recognition"
+            else:
+                task = "automatic-speech-recognition-with-past"
         else:
             try:
                 task = TasksManager._infer_task_from_model_name_or_path(
@@ -223,6 +232,7 @@ _CUSTOM_DRAFT_MODEL_MAP = {
     "LlamaForCausalLMEagle3": ("LlamaEagle3Model", "LlamaEagle3ForCausalLM"),
     "Eagle3LlamaForCausalLM": ("LlamaEagle3Model", "LlamaEagle3ForCausalLM"),
     "DFlashDraftModel": ("Qwen3DFlashDraftModel", "Qwen3DFlashForCausalLM"),
+    "Qwen3DSparkModel": ("Qwen3DFlashDraftModel", "Qwen3DSparkForCausalLM"),
 }
 
 
@@ -415,10 +425,28 @@ def main_export(
             dtype = torch.bfloat16
             loading_kwargs["quantization_config"] = Mxfp4Config(dequantize=True)
 
-        supported_quant_methods = ["gptq", "awq", "bitnet"]
+        supported_quant_methods = ["gptq", "awq", "bitnet", "compressed-tensors"]
         do_quant_patching = quant_method in supported_quant_methods
         do_gptq_patching = quant_method == "gptq"
         do_bitnet_patching = quant_method == "bitnet"
+        do_ct_patching = quant_method == "compressed-tensors"
+
+        # compressed-tensors export relies on the OpenVINO PyTorch frontend
+        # compressed-tensors patcher, which is only available since 2026.3.
+        if do_ct_patching and is_openvino_version("<", "2026.3"):
+            raise RuntimeError(
+                "Exporting compressed-tensors quantized models requires OpenVINO 2026.3 or newer, "
+                "but the installed OpenVINO does not meet this requirement. "
+                "Please upgrade OpenVINO, e.g. `pip install --upgrade openvino`."
+            )
+
+        # Loading a compressed-tensors model and keeping its packed weights intact
+        # requires the `compressed_tensors` package.
+        if do_ct_patching and importlib.util.find_spec("compressed_tensors") is None:
+            raise RuntimeError(
+                "Exporting compressed-tensors quantized models requires the `compressed_tensors` "
+                "package, which is not installed. Please install it, e.g. `pip install compressed_tensors`."
+            )
 
         if is_transformers_version(">=", "4.56") and config.model_type in {"qwen2_vl_text", "qwen2_5_vl_text"}:
             patch_qwenvl_configs()
@@ -553,6 +581,32 @@ def main_export(
                     return state_dict
 
                 AutoBitLinear.load_hook = bitnet_load_hook
+            if do_ct_patching:
+                from transformers.quantizers.quantizer_compressed_tensors import (
+                    CompressedTensorsHfQuantizer,
+                )
+
+                orig_ct_process = CompressedTensorsHfQuantizer._process_model_after_weight_loading
+
+                # Skip decompression so that weight_packed buffers remain intact for
+                # the OV PT frontend compressed-tensors patcher (quantized.py) to
+                # convert them to u4 constants during tracing.
+                CompressedTensorsHfQuantizer._process_model_after_weight_loading = lambda self, model, **kwargs: model
+
+                # In compressed-tensors >= 0.15, compress_model() installs a forward
+                # pre-hook (ct_decompress_hook) that lazily decompresses weights on
+                # the first forward pass.  We must suppress it so that weight_packed
+                # buffers stay intact for the OV traced graph. Older versions do not
+                # define the method, so nothing needs to be patched there.
+                orig_add_decompress_hook = None
+                try:
+                    from compressed_tensors import ModelCompressor
+
+                    if hasattr(ModelCompressor, "add_decompress_hook"):
+                        orig_add_decompress_hook = ModelCompressor.add_decompress_hook
+                        ModelCompressor.add_decompress_hook = lambda self, model: None
+                except ImportError:
+                    pass
     elif library_name == "diffusers":
         _loading_kwargs = {} if variant is None else {"variant": variant}
         if dtype == "auto" or dtype is None:
@@ -585,9 +639,18 @@ def main_export(
         elif library_name == "kokoro":
             model = _KokoroForTextToSpeech.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
         elif library_name == "funasr":
-            from optimum.intel.openvino.modeling_funasr import _FunASRForSpeechSeq2Seq
+            from optimum.intel.openvino.modeling_funasr import (
+                _FunASRForSpeechSeq2Seq,
+                _is_sensevoice_source,
+                _SenseVoiceForCTC,
+            )
 
-            model = _FunASRForSpeechSeq2Seq.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
+            if _is_sensevoice_source(
+                model_name_or_path, cache_dir=cache_dir, token=token, subfolder=subfolder, revision=revision
+            ):
+                model = _SenseVoiceForCTC.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
+            else:
+                model = _FunASRForSpeechSeq2Seq.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
         elif library_name == "qwen3_tts":
             # Without an explicit request the checkpoint's own precision is kept, so the IRs
             # come out at the precision the model was published in rather than upcast. A
@@ -702,6 +765,10 @@ def main_export(
                 GPTQQuantizer.post_init_model = orig_post_init_model
             if do_bitnet_patching:
                 AutoBitLinear.load_hook = orig_load_hook
+            if do_ct_patching:
+                CompressedTensorsHfQuantizer._process_model_after_weight_loading = orig_ct_process
+                if orig_add_decompress_hook is not None:
+                    ModelCompressor.add_decompress_hook = orig_add_decompress_hook
 
 
 def _main_quantize(
@@ -863,7 +930,28 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
     from optimum.exporters.openvino.convert import export_tokenizer
 
     if is_openvino_tokenizers_available():
-        if library_name != "diffusers" and preprocessors:
+        if (
+            library_name == "funasr"
+            and model is not None
+            and getattr(model.config, "export_model_type", None) == "sense_voice"
+        ):
+            # SenseVoiceSmall ships a SentencePiece BPE model rather than a transformers tokenizer, so it
+            # is not among ``preprocessors``. It has no text input, so build only the OV detokenizer IR from
+            # that BPE model.
+            from optimum.intel.openvino.modeling_funasr import export_sensevoice_tokenizers
+
+            source = getattr(model, "_sensevoice_source", None)
+            if source is None:
+                logger.warning("SenseVoice source path unknown; OpenVINO detokenizer model won't be generated.")
+            else:
+                try:
+                    export_sensevoice_tokenizers(source, output)
+                except Exception as exception:
+                    logger.warning(
+                        "Could not convert the SenseVoice tokenizer. OpenVINO detokenizer "
+                        f"model won't be generated. Exception: {exception}"
+                    )
+        elif library_name != "diffusers" and preprocessors:
             processor_chat_template = None
             tokenizer = next(filter(lambda it: isinstance(it, PreTrainedTokenizerBase), preprocessors), None)
             if len(preprocessors) > 1:
@@ -888,6 +976,19 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
                 tokenizer = getattr(model, tokenizer_name, None)
                 if tokenizer:
                     export_tokenizer(tokenizer, output / tokenizer_name, task=task)
+            # Some diffusion pipelines (e.g. QwenImage2.1) register a `processor` instead of a bare
+            # `tokenizer`; its tokenizer files are saved under the `processor` subfolder, so the OV
+            # tokenizer/detokenizer IRs must be written there too.
+            processor = getattr(model, "processor", None)
+            processor_tokenizer = getattr(processor, "tokenizer", None) if processor is not None else None
+            if processor_tokenizer is not None:
+                processor_chat_template = getattr(processor, "chat_template", None)
+                export_tokenizer(
+                    processor_tokenizer,
+                    output / "processor",
+                    task=task,
+                    processor_chat_template=processor_chat_template,
+                )
     else:
         logger.warning("Tokenizer won't be converted.")
 
