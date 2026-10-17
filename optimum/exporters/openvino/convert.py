@@ -30,6 +30,7 @@ from transformers.utils import is_torch_available
 from openvino import Model, save_model
 from openvino.exceptions import OVTypeError
 from openvino.tools.ovc import convert_model
+from optimum.exporters.openvino.dflash_utils import DSPARK_ARCHITECTURES, parse_and_validate_dspark_config
 from optimum.exporters.openvino.utils import (
     MULTI_MODAL_TEXT_GENERATION_MODELS,
     ONNX_SUPPORTED_ARCHITECTURES,
@@ -115,6 +116,8 @@ def _set_runtime_options(
         _, sub_export_config = models_and_export_configs[model_name]
         if not hasattr(sub_export_config, "runtime_options"):
             sub_export_config.runtime_options = {}
+        if getattr(sub_export_config, "dflash_interface", None) is not None:
+            continue
         if (
             "text-generation" in task
             or ("image-text-to-text" in task and model_name == "language_model")
@@ -162,15 +165,24 @@ def _save_model(
             config._config,
             candidate_position_offset=getattr(config, "candidate_position_offset", 1),
         )
-    if source_model is not None and getattr(getattr(source_model, "config", None), "model_type", None) in {
-        "qwen3",
-        "qwen3_moe",
-        "qwen3_5",
-        "qwen3_5_moe",
-        "qwen3_5_text",
-        "qwen3_5_moe_text",
-        "gemma4",
-    }:
+    dflash_interface = getattr(config, "dflash_interface", None)
+    if dflash_interface is not None:
+        model = _add_dflash_interface_to_rt_info(model, config)
+    if (
+        source_model is not None
+        and dflash_interface is None
+        and getattr(getattr(source_model, "config", None), "model_type", None)
+        in {
+            "qwen3",
+            "qwen3_moe",
+            "qwen3_5",
+            "qwen3_5_moe",
+            "qwen3_5_text",
+            "qwen3_5_moe_text",
+            "gemma4",
+            "minicpmv4_7",
+        }
+    ):
         add_hidden_states_rt_info(source_model, model, config)
 
     save_model(model, path, compress_to_fp16)
@@ -1070,6 +1082,32 @@ def _add_dflash_mode_to_rt_info(model: Model, hf_config: "PretrainedConfig", can
     except Exception:
         pass
 
+    architectures = getattr(hf_config, "architectures", None)
+    if isinstance(architectures, list) and architectures and architectures[0] in DSPARK_ARCHITECTURES:
+        dspark_config = parse_and_validate_dspark_config(hf_config)
+        # The Markov keys let runtimes detect a DSpark draft that is loaded without its separately exported
+        # Markov head model. A draft with markov_rank == 0 is a plain DFlash draft and gets none.
+        if dspark_config.markov_rank > 0:
+            model.set_rt_info(str(dspark_config.markov_rank), ["dflash", "markov_rank"])
+            model.set_rt_info(dspark_config.markov_head_type, ["dflash", "markov_head_type"])
+
+    return model
+
+
+def _add_dflash_interface_to_rt_info(model: Model, config: "OpenVINOConfig") -> Model:
+    """
+    Add the DFlash metadata of the DSpark Markov-head model.
+
+    The model does not set dflash_mode, which marks the draft backbone; dflash/interface names its contract
+    and dflash/top_k is the K of the exported TopK.
+    """
+    hf_config = config._config
+    dspark_config = parse_and_validate_dspark_config(hf_config)
+    model.set_rt_info(config.dflash_interface, ["dflash", "interface"])
+    model.set_rt_info(str(config.markov_head_top_k), ["dflash", "top_k"])
+    model.set_rt_info(str(dspark_config.markov_rank), ["dflash", "markov_rank"])
+    model.set_rt_info(dspark_config.markov_head_type, ["dflash", "markov_head_type"])
+    model.set_rt_info(str(hf_config.vocab_size), ["dflash", "vocab_size"])
     return model
 
 
@@ -1214,6 +1252,25 @@ def _get_submodels_and_export_configs(
         exporter,
     )
     stateful_per_model = [stateful] * len(models_for_export)
+
+    architectures = getattr(getattr(model, "config", None), "architectures", None)
+    architecture = architectures[0] if isinstance(architectures, list) and architectures else None
+    if architecture in DSPARK_ARCHITECTURES and getattr(model, "markov_head", None) is not None:
+        from optimum.exporters.openvino.model_configs import DSparkMarkovHeadOpenVINOConfig
+        from optimum.exporters.openvino.model_patcher import DSparkVanillaMarkovHeadForExport
+
+        markov_head_config = DSparkMarkovHeadOpenVINOConfig(
+            model.config,
+            task="feature-extraction",
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        models_for_export["markov_head_model"] = (
+            DSparkVanillaMarkovHeadForExport(model.markov_head, model.config, markov_head_config.markov_head_top_k),
+            markov_head_config,
+        )
+        stateful_per_model.append(False)
 
     # VLM Eagle3 models need stateful KV cache despite model_type being "llama"
     # (not in MULTI_MODAL_TEXT_GENERATION_MODELS) and task being "image-text-to-text".
