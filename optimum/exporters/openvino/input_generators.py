@@ -1243,6 +1243,7 @@ class DummyMiniCPMV4_7VisionInputGenerator(DummyVisionInputGenerator):
     """
     Dummy inputs for the per-crop MiniCPM-V 4.7 vision graph: the NaViT-packed patches of one crop plus the host-side
     index tensors (position embedding ids, 2x2 window order for the ViT merger and 2x2 order for the final merger).
+    Without the ViT merger ("4x" downsample mode) there is no window order and the final merger regroups the full grid.
     """
 
     SUPPORTED_INPUT_NAMES = ("pixel_values", "position_ids", "window_index", "merge_index")
@@ -1255,12 +1256,14 @@ class DummyMiniCPMV4_7VisionInputGenerator(DummyVisionInputGenerator):
         num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
         width: int = DEFAULT_DUMMY_SHAPES["width"],
         height: int = DEFAULT_DUMMY_SHAPES["height"],
+        use_vit_merger: bool = True,
         **kwargs,
     ):
         super().__init__(task, normalized_config, batch_size, num_channels, width, height)
         config = normalized_config.config
         self.patch_size = config.patch_size
         self.num_positions = (config.image_size // config.patch_size) ** 2
+        self.use_vit_merger = use_vit_merger
         # crop grid in patches, both sides divisible by 4 (2x2 window merge followed by 2x2 merge)
         self.grid_height = max(4, self.height // self.patch_size // 4 * 4)
         self.grid_width = max(4, self.width // self.patch_size // 4 * 4)
@@ -1285,6 +1288,8 @@ class DummyMiniCPMV4_7VisionInputGenerator(DummyVisionInputGenerator):
         if input_name == "window_index":
             return self._block_order(self.grid_height, self.grid_width)
         if input_name == "merge_index":
+            if not self.use_vit_merger:
+                return self._block_order(self.grid_height, self.grid_width)
             return self._block_order(self.grid_height // 2, self.grid_width // 2)
 
 

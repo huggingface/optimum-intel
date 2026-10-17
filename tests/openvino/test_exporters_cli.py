@@ -167,6 +167,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-to-image", "z-image"),
         ("image-text-to-text", "muse_glimmer"),
         ("image-text-to-text", "minicpmv4_7"),
+        ("image-text-to-text", "minicpm_ocr"),
     ]
     # filter architectures depending on min/max transformers supported versions
     SUPPORTED_ARCHITECTURES = [
@@ -237,6 +238,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "qwen3_vl_embedding": 2,
         "muse_glimmer": 2,
         "minicpmv4_7": 2,
+        "minicpm_ocr": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
@@ -891,6 +893,16 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "vision_embeddings_model": {"int8": 28},
             },
         ),
+        (
+            "image-text-to-text",
+            "minicpm_ocr",
+            "int4 --group-size 8 --ratio 0.8",
+            {
+                "lm_model": {"int8": 36, "int4": 34},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 22},
+            },
+        ),
     ]
 
     # Pre-quantized compressed-tensors (AWQ pack-quantized) model. It is already quantized, so
@@ -1003,6 +1015,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "qwen2_5_vl",
                 "qwen3_vl",
                 "minicpmv4_7",
+                "minicpm_ocr",
             )
             if not is_model_type_transformers_compatible(model_type)
         }

@@ -3686,15 +3686,25 @@ class MiniCPMV4_7OpenVINOConfig(BaseVLMOpenVINOConfig):
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
 
     @property
+    def use_vit_merger(self) -> bool:
+        # the "4x" downsample mode skips the ViT window merger, see MiniCPMV4_6Model.get_image_features
+        return self._orig_config.downsample_mode != "4x"
+
+    @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         if self._behavior == MiniCPMV4_7ConfigBehavior.VISION_EMBEDDINGS:
-            return {
+            inputs = {
                 "pixel_values": {3: "patches_width"},
                 "position_ids": {0: "num_patches"},
-                "window_index": {0: "num_patches"},
-                "merge_index": {0: "num_merged_patches"},
             }
+            if self.use_vit_merger:
+                inputs["window_index"] = {0: "num_patches"}
+            inputs["merge_index"] = {0: "num_merged_patches"}
+            return inputs
         return {}
+
+    def _create_dummy_input_generator_classes(self, **kwargs):
+        return super()._create_dummy_input_generator_classes(use_vit_merger=self.use_vit_merger, **kwargs)
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
@@ -3772,6 +3782,17 @@ class MiniCPMV4_7OpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior == MiniCPMV4_7ConfigBehavior.VISION_EMBEDDINGS:
             return MiniCPMV4_7VisionEmbeddingsPatcher(self, model, model_kwargs)
         return super().patch_model_for_export(model, model_kwargs)
+
+
+@register_in_tasks_manager("minicpm_ocr", *["image-text-to-text"], library_name="transformers")
+class MiniCPMOcrOpenVINOConfig(MiniCPMV4_7OpenVINOConfig):
+    """
+    MiniCPM-OCR keeps the MiniCPM-V 4.6 architecture: the vision tower, ViT window merger and MLP merger of MiniCPM-V
+    4.7 on top of a dense Qwen3.5 language model with plain 1D RoPE instead of canvas M-RoPE. The graphs are the
+    MiniCPM-V 4.7 ones; the checkpoints use the "4x" downsample mode, which leaves the ViT window merger out.
+    """
+
+    MIN_TRANSFORMERS_VERSION = "5.19.0.dev0"
 
 
 class Phi3VisionConfigBehavior(str, enum.Enum):

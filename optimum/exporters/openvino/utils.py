@@ -468,6 +468,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "maira2",
     "minicpmv",
     "minicpmv4_7",
+    "minicpm_ocr",
     "phi3_v",
     "qwen2_vl",
     "qwen2_5_vl",

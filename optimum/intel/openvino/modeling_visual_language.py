@@ -8047,6 +8047,10 @@ class _OVMiniCPMV4_7ForCausalLM(OVModelForVisualCausalLM):
     `get_rope_index` and extended with the cached `rope_deltas` while decoding.
     """
 
+    # visual tokens get canvas M-RoPE positions from `get_rope_index`, otherwise text positions
+    _canvas_rope = True
+    _supported_downsample_modes = ("16x",)
+
     def __init__(
         self,
         language_model: ov.Model,
@@ -8074,8 +8078,12 @@ class _OVMiniCPMV4_7ForCausalLM(OVModelForVisualCausalLM):
             quantization_config=quantization_config,
             **kwargs,
         )
-        if config.downsample_mode != "16x":
-            raise NotImplementedError(f"Only the 16x downsample mode is supported, got {config.downsample_mode}.")
+        if config.downsample_mode not in self._supported_downsample_modes:
+            raise NotImplementedError(
+                f"Supported downsample modes: {self._supported_downsample_modes}, got {config.downsample_mode}."
+            )
+        # the "4x" downsample mode skips the ViT window merger, see MiniCPMV4_6Model.get_image_features
+        self.use_vit_merger = config.downsample_mode != "4x"
         vision_config = config.vision_config
         self.patch_size = vision_config.patch_size
         self.num_patches_per_side = vision_config.image_size // vision_config.patch_size
@@ -8094,35 +8102,30 @@ class _OVMiniCPMV4_7ForCausalLM(OVModelForVisualCausalLM):
             start += num_patches
 
             crop_size = torch.tensor([[height, width]])
-            position_ids = get_vision_nearest_position_ids(crop_size, self.num_patches_per_side)
-            window_index, window_cu_seqlens = get_vision_window_index(
-                torch.nn.functional.pad(crop_size, (1, 0), value=1),
-                spatial_merge_size=1,
-                window_size=self.window_size,
-                patch_size=1,
-            )
-            if (window_cu_seqlens.diff() != self.window_size**2).any():
-                raise ValueError(f"Crop grid ({height}, {width}) must be divisible by the window size.")
-            # merge_index: token order for the final merger. The ViT window merger leaves a (height / window_h,
-            # width / window_w) grid; regroup it so that every merge_h x merge_w block is contiguous (MiniCPMV4_7Merger)
-            grid_h, grid_w = height // self.window_kernel_size[0], width // self.window_kernel_size[1]
+            index_inputs = {"position_ids": get_vision_nearest_position_ids(crop_size, self.num_patches_per_side)}
+            grid_h, grid_w = height, width
+            if self.use_vit_merger:
+                window_index, window_cu_seqlens = get_vision_window_index(
+                    torch.nn.functional.pad(crop_size, (1, 0), value=1),
+                    spatial_merge_size=1,
+                    window_size=self.window_size,
+                    patch_size=1,
+                )
+                if (window_cu_seqlens.diff() != self.window_size**2).any():
+                    raise ValueError(f"Crop grid ({height}, {width}) must be divisible by the window size.")
+                index_inputs["window_index"] = window_index
+                # the ViT window merger leaves a (height / window_h, width / window_w) grid
+                grid_h, grid_w = height // self.window_kernel_size[0], width // self.window_kernel_size[1]
+            # merge_index: token order for the final merger, the grid regrouped so that every merge_h x merge_w block
+            # is contiguous (MiniCPMV4_7Merger)
             merge_h, merge_w = self.merge_kernel_size
-            merge_index = (
+            index_inputs["merge_index"] = (
                 torch.arange(grid_h * grid_w)
                 .view(grid_h // merge_h, merge_h, grid_w // merge_w, merge_w)
                 .permute(0, 2, 1, 3)
                 .reshape(-1)
             )
-            features.append(
-                torch.from_numpy(
-                    self.vision_embeddings(
-                        crop,
-                        position_ids=position_ids,
-                        window_index=window_index,
-                        merge_index=merge_index,
-                    )[0]
-                )
-            )
+            features.append(torch.from_numpy(self.vision_embeddings(crop, **index_inputs)[0]))
         return torch.cat(features, dim=0)
 
     def get_image_features(self, pixel_values, target_sizes):
@@ -8194,7 +8197,7 @@ class _OVMiniCPMV4_7ForCausalLM(OVModelForVisualCausalLM):
 
         batch_size, seq_len = input_ids.shape
         has_multimodal = target_sizes is not None or target_sizes_videos is not None
-        if is_prefill and has_multimodal and mm_token_type_ids is not None:
+        if is_prefill and has_multimodal and mm_token_type_ids is not None and self._canvas_rope:
             position_ids, self.rope_deltas = self.get_rope_index(
                 input_ids,
                 mm_token_type_ids=mm_token_type_ids,
@@ -8313,6 +8316,19 @@ if is_transformers_version(">=", "5.18.0"):
     _OVMiniCPMV4_7ForCausalLM._frame_end_idx = staticmethod(MiniCPMV4_7Model._frame_end_idx)
 
 
+class _OVMiniCPMOcrForCausalLM(_OVMiniCPMV4_7ForCausalLM):
+    """
+    OpenVINO runtime for MiniCPM-OCR (MiniCPM-V 4.6 architecture, native transformers implementation).
+
+    Runs the MiniCPM-V 4.7 graphs, but the visual tokens take plain text positions (the same on the three M-RoPE
+    axes), as the language model has no canvas M-RoPE. The checkpoints use the "4x" downsample mode, which skips the
+    ViT window merger.
+    """
+
+    _canvas_rope = False
+    _supported_downsample_modes = ("4x", "16x")
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "muse_glimmer": _OVMuseGlimmerForCausalLM,
     "llava": _OVLlavaForCausalLM,
@@ -8321,6 +8337,7 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "mistral3": _OVMistral3ForCausalLM,
     "minicpmv": _OVMiniCPMVForCausalLM,
     "minicpmv4_7": _OVMiniCPMV4_7ForCausalLM,
+    "minicpm_ocr": _OVMiniCPMOcrForCausalLM,
     "llava-qwen2": _OVNanoLlavaForCausalLM,
     "maira2": _OVMaira2ForCausalLM,
     "phi3_v": _OVPhi3VisionForCausalLM,
