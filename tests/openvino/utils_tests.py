@@ -489,6 +489,8 @@ EAGLE3_MODELS = {"qwen3_eagle3": ("qwen3_eagle3", "qwen3_eagle3_target")}
 DFLASH_MODELS = {
     "qwen3_dflash": ("qwen3_dflash", "qwen3"),
     "qwen3_deepspec_dflash": ("qwen3_deepspec_dflash", "qwen3"),
+    # GenAI without DSpark support runs this draft as a plain DFlash draft and ignores the Markov head.
+    "qwen3_dspark": ("qwen3_dspark", "qwen3"),
 }
 
 DFLASH_VLM_MODELS = {
@@ -865,6 +867,7 @@ REMOTE_CODE_MODELS = (
     "deepseek",
     "qwen3_dflash",
     "qwen3_deepspec_dflash",
+    "qwen3_dspark",
     "qwen3_5_dflash",
     "qwen3_5_moe_dflash",
     "gemma4_dflash",
@@ -1210,6 +1213,7 @@ TEST_NAME_TO_MODEL_TYPE = {
     "qwen3_5_moe_mtp_legacy_weights": "qwen3_5_moe",
     "qwen3_dflash": "qwen3",
     "qwen3_deepspec_dflash": "qwen3",
+    "qwen3_dspark": "qwen3",
     "qwen3_eagle3": "llama",
     "qwen3_eagle3_target": "qwen3",
     "qwen3_vl_eagle3": "llama",
