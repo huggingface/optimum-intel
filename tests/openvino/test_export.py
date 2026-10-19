@@ -125,6 +125,7 @@ class ExportModelTest(unittest.TestCase):
         "exaone4": OVModelForCausalLM,
         "ouro": OVModelForCausalLM,
         "lfm2": OVModelForCausalLM,
+        "lfm2_vl": OVModelForVisualCausalLM,
         "afmoe": OVModelForCausalLM,
         "qwen3_next": OVModelForCausalLM,
         "videochat_flash_qwen": OVModelForVisualCausalLM,
