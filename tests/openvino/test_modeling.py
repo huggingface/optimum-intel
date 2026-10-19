@@ -1402,6 +1402,20 @@ class OVModelForCTCIntegrationTest(unittest.TestCase):
 
         self.assertIn("only supports the tasks", str(context.exception))
 
+    def test_compile_before_inference(self):
+        model_id = MODEL_NAMES["wav2vec2-hf"]
+        ov_model = OVModelForCTC.from_pretrained(model_id, export=True, compile=False, device=OPENVINO_DEVICE)
+        self.assertIsNone(ov_model.request)
+
+        processor = AutoFeatureExtractor.from_pretrained(model_id)
+        input_values = processor(self._generate_random_audio_data(), return_tensors="np")
+        ov_outputs = ov_model(**input_values)
+        self.assertIsNotNone(ov_model.request)
+        self.assertIn("logits", ov_outputs)
+
+        del ov_model
+        gc.collect()
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
@@ -1453,6 +1467,20 @@ class OVModelForAudioXVectorIntegrationTest(unittest.TestCase):
             _ = OVModelForAudioXVector.from_pretrained(MODEL_NAMES["t5"], export=True, device=OPENVINO_DEVICE)
 
         self.assertIn("only supports the tasks", str(context.exception))
+
+    def test_compile_before_inference(self):
+        model_id = MODEL_NAMES["wav2vec2-hf"]
+        ov_model = OVModelForAudioXVector.from_pretrained(model_id, export=True, compile=False, device=OPENVINO_DEVICE)
+        self.assertIsNone(ov_model.request)
+
+        processor = AutoFeatureExtractor.from_pretrained(model_id)
+        input_values = processor(self._generate_random_audio_data(), return_tensors="np")
+        ov_outputs = ov_model(**input_values)
+        self.assertIsNotNone(ov_model.request)
+        self.assertIn("logits", ov_outputs)
+
+        del ov_model
+        gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -1512,6 +1540,20 @@ class OVModelForAudioFrameClassificationIntegrationTest(unittest.TestCase):
 
         self.assertIn("only supports the tasks", str(context.exception))
 
+    def test_compile_before_inference(self):
+        model_id = MODEL_NAMES["wav2vec2-hf"]
+        ov_model = OVModelForAudioFrameClassification.from_pretrained(model_id, export=True, compile=False, device=OPENVINO_DEVICE)
+        self.assertIsNone(ov_model.request)
+
+        processor = AutoFeatureExtractor.from_pretrained(model_id)
+        input_values = processor(self._generate_random_audio_data(), return_tensors="np")
+        ov_outputs = ov_model(**input_values)
+        self.assertIsNotNone(ov_model.request)
+        self.assertIn("logits", ov_outputs)
+
+        del ov_model
+        gc.collect()
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
@@ -1551,6 +1593,24 @@ class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
         url = TEST_IMAGE_URL
         image = Image.open(requests.get(url, stream=True).raw)
         return image
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_ATTENTION)
+    def test_compile_before_inference(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        ov_model = OVModelForCustomTasks.from_pretrained(model_id, compile=False, device=OPENVINO_DEVICE)
+        self.assertIsNone(ov_model.request)
+
+        pixel_values = np.random.rand(1, 3, 224, 224).astype(np.float32)
+        ov_outputs = ov_model(pixel_values=pixel_values)
+        self.assertIsNotNone(ov_model.request)
+        self.assertIn("logits", ov_outputs)
+
+        ov_model.reshape(1, 3, 224, 224)
+        ov_outputs = ov_model(pixel_values=pixel_values)
+        self.assertIn("logits", ov_outputs)
+
+        del ov_model
+        gc.collect()
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES_WITH_ATTENTION)
     def test_compare_output_attentions(self, model_arch):
