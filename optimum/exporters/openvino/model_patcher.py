@@ -88,6 +88,7 @@ else:
 
 if is_transformers_version(">=", "4.57"):
     from transformers.models.qwen3.modeling_qwen3 import (
+        ALL_ATTENTION_FUNCTIONS,
         Qwen3Attention,
         Qwen3Config,
         Qwen3MLP,
@@ -95,6 +96,8 @@ if is_transformers_version(">=", "4.57"):
         Qwen3RMSNorm,
         Qwen3RotaryEmbedding,
     )
+    from transformers.models.qwen3.modeling_qwen3 import eager_attention_forward as qwen3_eager_attention_forward
+    from transformers.models.qwen3.modeling_qwen3 import rotate_half as qwen3_rotate_half
 else:
     Qwen3Config = PretrainedConfig
     Qwen3PreTrainedModel = PreTrainedModel
@@ -9008,22 +9011,75 @@ def _dflash_attention_masks(
 
 # adopted from https://github.com/z-lab/dflash/blob/main/dflash/model.py#L185
 class Qwen3DFlashAttention(Qwen3Attention):
-    """Qwen3 attention over the new rows [context; block] with the stock KV-cache update.
+    """Qwen3 attention in which only the block rows get a query.
 
-    The stock forward already fits DFlash: the decoder layer selects the per-row input (target features for
-    context rows, the normalized state for block rows), every row gets a query, key and value, RoPE comes in
-    as position_embeddings, the cache update is a plain concat, and the mask carries the causal-with-
-    bidirectional-block pattern. SDPAToPagedAttention therefore converts it like any decoder attention.
-    is_causal is False because DFlash attention is not purely causal; with the explicit mask it has no
-    effect, but it keeps a missing mask from silently falling back to causal attention.
+        rows     [ ctx ctx ctx | blk blk blk ]
+        K, V     [ k   k   k   | k   k   k   ]   every row, cached with the stock concat
+        Q        [ 0   0   0   | q   q   q   ]   projected for block rows only
+        output                 [ o   o   o   ]   block rows only
 
-    The cache keeps the block rows too: the caller rolls them back by starting the next step at the
-    committed length (past_lens in PagedAttention, position_ids on NPUW).
+    PagedAttention needs one query per key row, hence the zero queries. The mask carries the causal pattern
+    with a bidirectional block; is_causal is False so a missing mask never falls back to causal attention.
+    The cache keeps the block rows: the next step starts at the committed length and overwrites them.
     """
 
     def __init__(self, config: "Qwen3Config", layer_idx: int):
         super().__init__(config, layer_idx)
         self.is_causal = False
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        block_states: torch.Tensor,
+        block_rows: torch.Tensor,
+        position_embeddings: Tuple[torch.Tensor, torch.Tensor],
+        attention_mask: Optional[torch.Tensor],
+        past_key_values: Optional[Cache] = None,
+        **kwargs: Unpack[TransformersKwargs],
+    ) -> torch.Tensor:
+        """hidden_states: [batch, seq, hidden], every row. block_states: [N, hidden], the block rows at the
+        flattened indices block_rows. Returns [N, hidden]."""
+        batch_size, seq_len = hidden_states.shape[:2]
+        # literal head counts keep the head dimensions static for the GPU SDPA and RoPE fusions
+        num_heads, num_kv_heads = self.config.num_attention_heads, self.config.num_key_value_heads
+
+        # keys and values for every row
+        kv_shape = (batch_size, seq_len, num_kv_heads, self.head_dim)
+        key_states = self.k_norm(self.k_proj(hidden_states).view(kv_shape)).transpose(1, 2)
+        value_states = self.v_proj(hidden_states).view(kv_shape).transpose(1, 2)
+        cos, sin = position_embeddings
+        key_states = key_states * cos.unsqueeze(1) + qwen3_rotate_half(key_states) * sin.unsqueeze(1)
+
+        # queries for the block rows only, with RoPE at their positions
+        query_shape = (1, block_states.shape[0], num_heads, self.head_dim)
+        query_states = self.q_norm(self.q_proj(block_states).view(query_shape)).transpose(1, 2)
+        block_cos, block_sin = (t.flatten(0, 1).index_select(0, block_rows)[None] for t in (cos, sin))
+        query_states = query_states * block_cos.unsqueeze(1) + qwen3_rotate_half(query_states) * block_sin.unsqueeze(1)
+        # zero queries for the context rows: attention needs one query per key row
+        all_queries = query_states.new_zeros(batch_size * seq_len, num_heads, self.head_dim)
+        all_queries[block_rows] = query_states.transpose(1, 2)[0]
+        query_states = all_queries.view(batch_size, seq_len, num_heads, self.head_dim).transpose(1, 2)
+
+        if past_key_values is not None:
+            cache_kwargs = {"sin": sin, "cos": cos}
+            key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx, cache_kwargs)
+        attention_interface = qwen3_eager_attention_forward
+        if self.config._attn_implementation != "eager":
+            attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+        attn_output, _ = attention_interface(
+            self,
+            query_states,
+            key_states,
+            value_states,
+            attention_mask,
+            dropout=0.0 if not self.training else self.attention_dropout,
+            scaling=self.scaling,
+            sliding_window=self.sliding_window,
+            **kwargs,
+        )
+        # keep the block rows; o_proj runs on them only
+        attn_output = attn_output.reshape(batch_size * seq_len, num_heads * self.head_dim)
+        return self.o_proj(attn_output.index_select(0, block_rows))
 
 
 # adopted from https://github.com/z-lab/dflash/blob/main/dflash/model.py#L258
@@ -9040,24 +9096,28 @@ class Qwen3DFlashDecoderLayer(nn.Module):
         self,
         target_hidden: torch.Tensor,
         hidden_states: torch.Tensor,
-        is_block: torch.Tensor,
+        block_rows: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
         past_key_values: Optional[Cache] = None,
         position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         **kwargs: Unpack[TransformersKwargs],
     ) -> torch.FloatTensor:
-        # Context rows attend with the projected target features and block rows with their own normalized
-        # state. The choice is per row, so it holds whether rows lie along the sequence axis (stateful SDPA)
-        # or along the batch axis (after SDPAToPagedAttention).
+        # hidden_states holds only the block rows [N, hidden]: the norms, o_proj and MLP run on them alone.
+        # Context rows enter as target_hidden, which feeds only their keys and values.
         residual = hidden_states
-        attention_input = torch.where(is_block, self.input_layernorm(hidden_states), target_hidden)
+        block_states = self.input_layernorm(hidden_states)
+        # attention input of every row: target features, with the normalized block rows written in
+        attention_input = target_hidden.flatten(0, 1).clone()
+        attention_input[block_rows] = block_states
         hidden_states = self.self_attn(
-            hidden_states=attention_input,
+            hidden_states=attention_input.view_as(target_hidden),
+            block_states=block_states,
+            block_rows=block_rows,
             position_embeddings=position_embeddings,
             attention_mask=attention_mask,
             past_key_values=past_key_values,
             **kwargs,
-        )[0]
+        )
         hidden_states = residual + hidden_states
 
         residual = hidden_states
@@ -9102,9 +9162,13 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
     ) -> BaseModelOutputWithPast:
         """Runs the draft over the new rows [context; block] of each sequence.
 
-        With token_type_ids (0 for context rows, 1 for block rows), noise_embedding and hidden_states cover all
-        rows, and each row reads only the input of its type. Without token_type_ids, hidden_states holds the
-        context rows and noise_embedding the block rows. Returns the normalized hidden states of all rows.
+            context rows:  hidden_states   -> fc + norm -> K, V of every layer     (no query, no MLP)
+            block rows:    noise_embedding -> full layers -> norm -> last_hidden_state
+
+        token_type_ids marks context rows (0) and block rows (1); hidden_states and noise_embedding then cover
+        all rows and each row reads the input of its type. Without token_type_ids, hidden_states holds only the
+        context rows and noise_embedding only the block rows. last_hidden_state covers all rows, zero in the
+        context rows.
         """
         if token_type_ids is None:
             batch_size, ctx_len = hidden_states.shape[:2]
@@ -9124,8 +9188,11 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
                 [hidden_states, hidden_states.new_zeros(batch_size, block_len, hidden_states.shape[-1])], dim=1
             )
         noise_states = noise_embedding
+        # target features of every row; the layers use them only for the context rows' keys and values
         target_hidden = self.hidden_norm(self.fc(hidden_states.to(noise_states.dtype)))
-        is_block = (token_type_ids == 1)[..., None]
+        # indices of the block rows in flattened [batch * seq] order, which fits both [1, seq] (stateful SDPA)
+        # and [tokens, 1] (PagedAttention); empty for a context-only prompt chunk
+        block_rows = torch.nonzero(token_type_ids.flatten() == 1).squeeze(-1)
         use_cache = use_cache if use_cache is not None else self.config.use_cache
         if use_cache:
             if past_key_values is None:
@@ -9149,19 +9216,25 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
             self.config.sliding_window if has_sliding_layers else None,
             noise_states.dtype,
         )
+        # cos/sin of every row: keys use all of them, queries pick the block rows
         position_embeddings = self.rotary_emb(noise_states, position_ids)
+        # from here on the residual stream holds only the block rows
+        noise_states = noise_states.flatten(0, 1).index_select(0, block_rows)
         for layer in self.layers:
             noise_states = layer(
                 target_hidden=target_hidden,
                 hidden_states=noise_states,
-                is_block=is_block,
+                block_rows=block_rows,
                 attention_mask=full_mask if layer.self_attn.sliding_window is None else sliding_mask,
                 past_key_values=past_key_values,
                 position_embeddings=position_embeddings,
                 **kwargs,
             )
+        # write the block rows back into all rows; the caller ignores the context rows, which stay zero
+        last_hidden_state = target_hidden.new_zeros(target_hidden.shape).flatten(0, 1)
+        last_hidden_state[block_rows] = self.norm(noise_states)
         return BaseModelOutputWithPast(
-            last_hidden_state=self.norm(noise_states),
+            last_hidden_state=last_hidden_state.view_as(target_hidden),
             past_key_values=past_key_values if use_cache else None,
         )
 
@@ -9171,7 +9244,8 @@ class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
     """DFlash draft head exported as embeddings-in / hidden-states-out.
 
     The token embedding and lm_head are intentionally absent: the draft consumes ``inputs_embeds``
-    (produced from the target embedding) and emits the post-norm ``last_hidden_state`` of every row.
+    (produced from the target embedding) and emits the post-norm ``last_hidden_state`` of every row (zero in
+    the context rows).
     OpenVINO GenAI selects each sequence's candidate rows (``dflash/candidate_position_offset`` rows
     into the block) and grafts the target lm_head onto them at load time.
     """
