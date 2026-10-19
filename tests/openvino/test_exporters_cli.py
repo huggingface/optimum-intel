@@ -108,6 +108,11 @@ def _task_and_model_type_name(testcase_func, param_num, params):
     return f"{testcase_func.__name__}_{param_num}_{safe_name(task)}_{safe_name(model_type)}"
 
 
+def _model_name_or_path(model_type: str) -> str:
+    # The tiny DSpark draft has no Hub checkpoint; it is created locally.
+    return get_dspark_model_path() if model_type == "qwen3_dspark" else MODEL_NAMES[model_type]
+
+
 class OVCLIExportTestCase(unittest.TestCase):
     """
     Integration tests ensuring supported models are correctly exported.
@@ -153,6 +158,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "qwen3_eagle3"),
         ("text-generation-with-past", "qwen3_dflash"),
         ("text-generation-with-past", "qwen3_deepspec_dflash"),
+        ("text-generation-with-past", "qwen3_dspark"),
         ("text-generation-with-past", "zamba2"),
         ("text-generation-with-past", "exaone4"),
         ("text-generation-with-past", "ouro"),
@@ -1036,7 +1042,9 @@ class OVCLIExportTestCase(unittest.TestCase):
         if model_type in REMOTE_CODE_MODELS:
             loading_kwargs["trust_remote_code"] = True
 
-        self._openvino_export(MODEL_NAMES[model_type], task, model_kwargs=model_kwargs, loading_kwargs=loading_kwargs)
+        self._openvino_export(
+            _model_name_or_path(model_type), task, model_kwargs=model_kwargs, loading_kwargs=loading_kwargs
+        )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES, name_func=_task_and_model_type_name)
     def test_exporters_cli(self, task: str, model_type: str):
@@ -1049,7 +1057,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 add_ops = "--trust-remote-code"
 
             subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {add_ops} {tmpdir}",
+                f"optimum-cli export openvino --model {_model_name_or_path(model_type)} --task {task} {add_ops} {tmpdir}",
                 shell=True,
                 check=True,
             )
@@ -1256,7 +1264,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 add_ops = "--trust-remote-code"
 
             subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {add_ops} --weight-format fp16 {tmpdir}",
+                f"optimum-cli export openvino --model {_model_name_or_path(model_type)} --task {task} {add_ops} --weight-format fp16 {tmpdir}",
                 shell=True,
                 check=True,
             )
@@ -1277,7 +1285,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 add_ops = "--trust-remote-code"
 
             subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {add_ops} --weight-format int8 {tmpdir}",
+                f"optimum-cli export openvino --model {_model_name_or_path(model_type)} --task {task} {add_ops} --weight-format int8 {tmpdir}",
                 shell=True,
                 check=True,
             )

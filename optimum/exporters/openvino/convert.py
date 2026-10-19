@@ -30,7 +30,11 @@ from transformers.utils import is_torch_available
 from openvino import Model, save_model
 from openvino.exceptions import OVTypeError
 from openvino.tools.ovc import convert_model
-from optimum.exporters.openvino.dflash_utils import DSPARK_ARCHITECTURES, parse_and_validate_dspark_config
+from optimum.exporters.openvino.dflash_utils import (
+    DSPARK_ARCHITECTURES,
+    MARKOV_HEAD_INTERFACE,
+    parse_and_validate_dspark_config,
+)
 from optimum.exporters.openvino.utils import (
     MULTI_MODAL_TEXT_GENERATION_MODELS,
     ONNX_SUPPORTED_ARCHITECTURES,
@@ -116,7 +120,8 @@ def _set_runtime_options(
         _, sub_export_config = models_and_export_configs[model_name]
         if not hasattr(sub_export_config, "runtime_options"):
             sub_export_config.runtime_options = {}
-        if getattr(sub_export_config, "dflash_interface", None) is not None:
+        # The DSpark Markov head is not a decoder; the plugins apply these options when they compile a model.
+        if getattr(sub_export_config, "markov_head_top_k", None) is not None:
             continue
         if (
             "text-generation" in task
@@ -164,25 +169,18 @@ def _save_model(
             model,
             config._config,
             candidate_position_offset=getattr(config, "candidate_position_offset", 1),
+            markov_head_top_k=getattr(config, "markov_head_top_k", None),
         )
-    dflash_interface = getattr(config, "dflash_interface", None)
-    if dflash_interface is not None:
-        model = _add_dflash_interface_to_rt_info(model, config)
-    if (
-        source_model is not None
-        and dflash_interface is None
-        and getattr(getattr(source_model, "config", None), "model_type", None)
-        in {
-            "qwen3",
-            "qwen3_moe",
-            "qwen3_5",
-            "qwen3_5_moe",
-            "qwen3_5_text",
-            "qwen3_5_moe_text",
-            "gemma4",
-            "minicpmv4_7",
-        }
-    ):
+    if source_model is not None and getattr(getattr(source_model, "config", None), "model_type", None) in {
+        "qwen3",
+        "qwen3_moe",
+        "qwen3_5",
+        "qwen3_5_moe",
+        "qwen3_5_text",
+        "qwen3_5_moe_text",
+        "gemma4",
+        "minicpmv4_7",
+    }:
         add_hidden_states_rt_info(source_model, model, config)
 
     save_model(model, path, compress_to_fp16)
@@ -1064,13 +1062,33 @@ def _add_eagle3_mode_to_rt_info(model: Model):
     return model
 
 
-def _add_dflash_mode_to_rt_info(model: Model, hf_config: "PretrainedConfig", candidate_position_offset: int) -> Model:
+def _add_dflash_mode_to_rt_info(
+    model: Model,
+    hf_config: "PretrainedConfig",
+    candidate_position_offset: int,
+    markov_head_top_k: Optional[int] = None,
+) -> Model:
     """
     Add DFlash metadata to DFlash draft model.
 
     Marks model as DFlash draft model and adds DFlash configuration to the model including
-    mask token id, target layer ids, and candidate position offset.
+    mask token id, target layer ids, and candidate position offset. A DSpark draft with a Markov head also
+    gets markov_rank and markov_head_type, which tell runtimes to load its Markov head model.
+
+    With `markov_head_top_k`, the model is the Markov head model of a DSpark draft instead. It is not marked
+    as a draft (dflash_mode marks the draft backbone): dflash/interface names its input/output contract,
+    dflash/top_k is the K of its TopK. It repeats markov_rank and markov_head_type so that runtimes can check
+    that it belongs to the draft backbone next to it.
     """
+    if markov_head_top_k is not None:
+        dspark_config = parse_and_validate_dspark_config(hf_config)
+        model.set_rt_info(MARKOV_HEAD_INTERFACE, ["dflash", "interface"])
+        model.set_rt_info(str(markov_head_top_k), ["dflash", "top_k"])
+        model.set_rt_info(str(dspark_config.markov_rank), ["dflash", "markov_rank"])
+        model.set_rt_info(dspark_config.markov_head_type, ["dflash", "markov_head_type"])
+        model.set_rt_info(str(hf_config.vocab_size), ["dflash", "vocab_size"])
+        return model
+
     try:
         model.set_rt_info("True", ["dflash_mode"])
         dflash_config = getattr(hf_config, "dflash_config", None) or hf_config.to_dict()
@@ -1091,23 +1109,6 @@ def _add_dflash_mode_to_rt_info(model: Model, hf_config: "PretrainedConfig", can
             model.set_rt_info(str(dspark_config.markov_rank), ["dflash", "markov_rank"])
             model.set_rt_info(dspark_config.markov_head_type, ["dflash", "markov_head_type"])
 
-    return model
-
-
-def _add_dflash_interface_to_rt_info(model: Model, config: "OpenVINOConfig") -> Model:
-    """
-    Add the DFlash metadata of the DSpark Markov-head model.
-
-    The model does not set dflash_mode, which marks the draft backbone; dflash/interface names its contract
-    and dflash/top_k is the K of the exported TopK.
-    """
-    hf_config = config._config
-    dspark_config = parse_and_validate_dspark_config(hf_config)
-    model.set_rt_info(config.dflash_interface, ["dflash", "interface"])
-    model.set_rt_info(str(config.markov_head_top_k), ["dflash", "top_k"])
-    model.set_rt_info(str(dspark_config.markov_rank), ["dflash", "markov_rank"])
-    model.set_rt_info(dspark_config.markov_head_type, ["dflash", "markov_head_type"])
-    model.set_rt_info(str(hf_config.vocab_size), ["dflash", "vocab_size"])
     return model
 
 
@@ -1253,22 +1254,11 @@ def _get_submodels_and_export_configs(
     )
     stateful_per_model = [stateful] * len(models_for_export)
 
-    architectures = getattr(getattr(model, "config", None), "architectures", None)
-    architecture = architectures[0] if isinstance(architectures, list) and architectures else None
-    if architecture in DSPARK_ARCHITECTURES and getattr(model, "markov_head", None) is not None:
-        from optimum.exporters.openvino.model_configs import DSparkMarkovHeadOpenVINOConfig
-        from optimum.exporters.openvino.model_patcher import DSparkVanillaMarkovHeadForExport
-
-        markov_head_config = DSparkMarkovHeadOpenVINOConfig(
-            model.config,
-            task="feature-extraction",
-            int_dtype=int_dtype,
-            float_dtype=float_dtype,
-            preprocessors=preprocessors,
-        )
-        models_for_export["markov_head_model"] = (
-            DSparkVanillaMarkovHeadForExport(model.markov_head, model.config, markov_head_config.markov_head_top_k),
-            markov_head_config,
+    # Models exported next to the main one, such as the Markov head of a DSpark draft.
+    for behavior in getattr(export_config, "SUPPORTED_BEHAVIORS", []):
+        models_for_export[f"{behavior}_model"] = (
+            export_config.get_model_for_behavior(model, behavior),
+            export_config.with_behavior(behavior),
         )
         stateful_per_model.append(False)
 

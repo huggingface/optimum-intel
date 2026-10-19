@@ -40,7 +40,6 @@ from optimum.exporters.openvino.config import (
 )
 from optimum.exporters.openvino.dflash_utils import (
     DSPARK_ARCHITECTURES,
-    MARKOV_HEAD_INTERFACE,
     markov_head_default_top_k,
     parse_and_validate_dspark_config,
 )
@@ -48,7 +47,6 @@ from optimum.exporters.openvino.input_generators import (
     AquilaDummyPastKeyValuesGenerator,
     ChatGLM2DummyPastKeyValuesGenerator,
     DeciDummyPastKeyValuesGenerator,
-    DSparkMarkovDummyGenerator,
     DummyAudioPhi4MMInputGenerator,
     DummyDeepseekOCR2VisionInputGenerator,
     DummyDeepseekOCR2VisionTilesInputGenerator,
@@ -141,6 +139,7 @@ from optimum.exporters.openvino.model_patcher import (
     DeepseekOCR2LMPatcher,
     DeepseekOCR2VisionEmbeddingsPatcher,
     DeepseekPatcher,
+    DSparkVanillaMarkovHeadForExport,
     FalconModelPatcher,
     FluxTransformerModelPatcher,
     FunASRModelPatcher,
@@ -508,7 +507,11 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
                 self.candidate_position_offset = 1
             elif archs[0] in DSPARK_ARCHITECTURES:
                 self.dflash = True
-                self.candidate_position_offset = parse_and_validate_dspark_config(config).candidate_position_offset
+                dspark_config = parse_and_validate_dspark_config(config)
+                self.candidate_position_offset = dspark_config.candidate_position_offset
+                if dspark_config.markov_rank > 0:
+                    # The Markov head is exported as a separate model next to the draft backbone.
+                    self.SUPPORTED_BEHAVIORS = ["markov_head"]
         if self.dflash:
             model_type = getattr(config, "model_type", "")
             if model_type != "qwen3":
@@ -592,6 +595,24 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
                     if name == "past_sequence_length + sequence_length":
                         axes[axis] = "past_sequence_length + context_length"
 
+    def with_behavior(self, behavior: str):
+        if behavior == "markov_head":
+            return DSparkMarkovHeadOpenVINOConfig(
+                self._config,
+                task="feature-extraction",
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                preprocessors=self._preprocessors,
+            )
+        raise ValueError(f"Unsupported behavior {behavior} for {type(self).__name__}.")
+
+    def get_model_for_behavior(self, model, behavior: str):
+        if behavior == "markov_head":
+            return DSparkVanillaMarkovHeadForExport(
+                model.markov_head, model.config, markov_head_default_top_k(model.config)
+            )
+        raise ValueError(f"Unsupported behavior {behavior} for {type(self).__name__}.")
+
 
 class DSparkMarkovHeadOpenVINOConfig(OpenVINOConfig):
     """The DSpark Markov-head model, exported next to the draft backbone.
@@ -602,10 +623,10 @@ class DSparkMarkovHeadOpenVINOConfig(OpenVINOConfig):
     add it again.
     """
 
-    DUMMY_INPUT_GENERATOR_CLASSES = (DSparkMarkovDummyGenerator,)
+    DUMMY_INPUT_GENERATOR_CLASSES = (Eagle3DummyGenerator,)
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-    # Written to dflash/interface; names the input/output contract the runtime expects.
-    dflash_interface = MARKOV_HEAD_INTERFACE
+    # Tells `convert.py` to stamp the DFlash RT-info block onto the exported graph.
+    dflash = True
 
     def __init__(
         self,

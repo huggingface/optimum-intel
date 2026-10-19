@@ -111,10 +111,10 @@ jobs:
           uv pip install "transformers>=5.18"
           pytest tests/openvino/test_quantization.py tests/openvino/test_cb_compatible.py tests/openvino/test_dflash.py -k "minicpmv4_7" --durations=0
 
-      # The DSpark tests use a tiny Qwen3 DSpark draft. test_genai runs it with continuous batching against the
-      # nightly GenAI installed above, which only uses the Markov head once it supports DSpark.
-      - name: DSpark Export and Continuous Batching Validation
+      # The DSpark tests use a tiny Qwen3 DSpark draft. test_genai runs single-request speculative decoding with it
+      # against the nightly GenAI installed above, which runs it as a plain DFlash draft until it supports DSpark.
+      - name: DSpark Export and GenAI Speculative Decoding Validation
         if: ${{ matrix.test-pattern == '*export*' }}
         run: |
           uv pip install "transformers>=5.18"
-          pytest tests/openvino/test_dflash.py tests/openvino/test_genai.py -k dspark --durations=0
+          pytest tests/openvino/test_exporters_cli.py tests/openvino/test_dflash.py tests/openvino/test_genai.py -k dspark --durations=0
