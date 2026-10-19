@@ -12854,6 +12854,9 @@ class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
     Exports the Qwen3.5 / Qwen3.5-MoE (hybrid Gated DeltaNet + full attention) language model of MiniCPM-V 4.7.
     """
 
+    # the head applied to the last hidden states to produce the `logits` output
+    _output_head_name = "lm_head"
+
     def __init__(
         self,
         config: "OpenVINOConfig",
@@ -12896,7 +12899,7 @@ class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
                 past_key_values=cache,
                 use_cache=True,
             )
-            logits = self._model.lm_head(outputs.last_hidden_state)
+            logits = getattr(self._model, self._output_head_name)(outputs.last_hidden_state)
 
             linear_attn_outputs, full_attn_outputs = [], []
             for layer in outputs.past_key_values.layers:
@@ -12957,6 +12960,16 @@ class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
             if experts is not None:
                 experts.forward = experts._orig_forward
                 restore_minicpmv4_7_moe_weights(experts)
+
+
+class Qwen3_5ForSequenceClassificationLanguageModelPatcher(MiniCPMV4_7LanguageModelPatcher):
+    """
+    Exports the language model of Qwen3_5ForSequenceClassification: the same hybrid Gated DeltaNet + full attention
+    decoder as MiniCPM-V 4.7 (transformers `DynamicCache`), ending in the `score` classification head instead of
+    `lm_head`. The `logits` output holds the class logits of every token; the runtime picks the last non-pad token.
+    """
+
+    _output_head_name = "score"
 
 
 # Patches MiniCPMV4_7VisionAttention.forward:

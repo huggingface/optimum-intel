@@ -32,12 +32,13 @@ from transformers import (
     AutoImageProcessor,
     AutoModel,
     AutoModelForImageTextToText,
+    AutoModelForSequenceClassification,
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
     PreTrainedTokenizer,
 )
-from transformers.modeling_outputs import BaseModelOutputWithPooling
+from transformers.modeling_outputs import BaseModelOutputWithPooling, SequenceClassifierOutput
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLModel
 from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLModel
 from transformers.utils import ModelOutput
@@ -83,11 +84,7 @@ else:
 
 
 if is_transformers_version(">=", "5.2"):
-    from transformers.models.qwen3_5.modeling_qwen3_5 import (
-        Qwen3_5Model,
-        Qwen3_5VisionModel,
-        Qwen3_5VisionRotaryEmbedding,
-    )
+    from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5Model
 
 if is_transformers_version(">=", "5.18"):
     from transformers.models.minicpmv4_7.modeling_minicpmv4_7 import MiniCPMV4_7Model
@@ -894,7 +891,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         self._supports_cache_class = False
         self.main_input_name = "input_ids"
         self._compile_only = kwargs.get("compile_only", False)
-        self.export_feature = kwargs.get("export_feature", "image-text-to-text")
+        self.export_feature = kwargs.get("export_feature", type(self).export_feature)
 
         for part in self.additional_parts:
             setattr(self, f"{part}_model", kwargs.get(part))
@@ -951,6 +948,10 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         save_config(self.config, save_directory)
 
     @classmethod
+    def _get_model_class(cls, config: PretrainedConfig):
+        return MODEL_TYPE_TO_CLS_MAPPING[config.model_type]
+
+    @classmethod
     def _from_pretrained(
         cls,
         model_id: Union[str, Path],
@@ -999,7 +1000,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             trust_remote_code (`bool`, *optional*, defaults to `False`):
                 Whether to trust remote code when loading model tokenizer/processor during quantization.
         """
-        model_cls = MODEL_TYPE_TO_CLS_MAPPING[config.model_type]
+        model_cls = cls._get_model_class(config)
         model_file_names = model_cls._all_ov_model_paths.copy()
         for k in tuple(model_file_names):
             model_file_names[f"{k}_bin"] = model_file_names[k].replace(".xml", ".bin")
@@ -7583,10 +7584,41 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM):
         self.num_grid_per_side = int(config.vision_config.num_position_embeddings**0.5)
         self.spatial_merge_size = config.vision_config.spatial_merge_size
         head_dim = config.vision_config.hidden_size // config.vision_config.num_heads
-        self.rotary_pos_emb = Qwen3_5VisionRotaryEmbedding(head_dim // 2)
+        # axial vision RoPE over head_dim // 2 (theta 10000), computed here: the transformers rotary module and
+        # `rot_pos_emb` changed interface in later versions
+        rotary_dim = head_dim // 2
+        self.vision_rope_inv_freq = 1.0 / (10000.0 ** (torch.arange(0, rotary_dim, 2, dtype=torch.float) / rotary_dim))
 
     def __setattr__(self, name, value):
         OVModelForVisualCausalLM.__setattr__(self, name, value)
+
+    # Adapted from Qwen3_5VisionModel.rot_pos_emb (transformers 5.2)
+    def rot_pos_emb(self, grid_thw):
+        merge_size = self.spatial_merge_size
+        grid_thw_list = grid_thw.tolist()
+
+        max_hw = max(max(h, w) for _, h, w in grid_thw_list)
+        freq_table = torch.outer(
+            torch.arange(max_hw, dtype=torch.float), self.vision_rope_inv_freq
+        )  # (max_hw, dim // 2)
+
+        pos_ids = []
+        for num_frames, height, width in grid_thw_list:
+            merged_h, merged_w = height // merge_size, width // merge_size
+            # full-resolution (row, col) of every patch, ordered merge_size x merge_size block by block
+            row_idx = (
+                torch.arange(merged_h)[:, None, None, None] * merge_size
+                + torch.arange(merge_size)[None, None, :, None]
+            )
+            col_idx = (
+                torch.arange(merged_w)[None, :, None, None] * merge_size
+                + torch.arange(merge_size)[None, None, None, :]
+            )
+            row_idx = row_idx.expand(merged_h, merged_w, merge_size, merge_size).reshape(-1)
+            col_idx = col_idx.expand(merged_h, merged_w, merge_size, merge_size).reshape(-1)
+            pos_ids.append(torch.stack((row_idx, col_idx), dim=-1).repeat(num_frames, 1))
+
+        return freq_table[torch.cat(pos_ids)].flatten(1)
 
     def prepare_inputs_for_generation(
         self,
@@ -7793,11 +7825,21 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM):
         if position_ids is None and input_ids is not None and (attention_mask is None or attention_mask.ndim == 2):
             # calculate RoPE index once per generation in the pre-fill stage only
             if (cache_position is not None and cache_position[0] == 0) or self.rope_deltas is None:
+                rope_kwargs = {}
+                if is_transformers_version(">=", "5.3.0"):
+                    # since transformers v5.3, get_rope_index requires mm_token_type_ids
+                    mm_token_type_ids = kwargs.get("mm_token_type_ids")
+                    if mm_token_type_ids is None:
+                        mm_token_type_ids = torch.zeros_like(input_ids, dtype=torch.int32)
+                        mm_token_type_ids[input_ids == self.config.image_token_id] = 1
+                        mm_token_type_ids[input_ids == self.config.video_token_id] = 2
+                    rope_kwargs["mm_token_type_ids"] = mm_token_type_ids
                 vision_positions, rope_deltas = self.get_rope_index(
                     input_ids,
                     image_grid_thw=image_grid_thw,
                     video_grid_thw=video_grid_thw,
                     attention_mask=attention_mask,
+                    **rope_kwargs,
                 )
                 self.rope_deltas = rope_deltas
                 # Compute text positions (simple cumsum) and concatenate as dim 0
@@ -7935,7 +7977,76 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM):
 if is_transformers_version(">=", "5.2"):
     _OVQwen3_5ForCausalLM.get_placeholder_mask = Qwen3_5Model.get_placeholder_mask
     _OVQwen3_5ForCausalLM.get_rope_index = Qwen3_5Model.get_rope_index
-    _OVQwen3_5ForCausalLM.rot_pos_emb = getattr(Qwen3_5VisionModel, "rot_pos_emb", None)
+    if hasattr(Qwen3_5Model, "get_vision_position_ids"):
+        # used by get_rope_index since transformers 5.10
+        _OVQwen3_5ForCausalLM.get_vision_position_ids = Qwen3_5Model.get_vision_position_ids
+
+
+class OVModelForVisualSequenceClassification(OVModelForVisualCausalLM):
+    """
+    OpenVINO runtime for vision-language models with a sequence classification head (`AutoModelForSequenceClassification`
+    of a VLM, e.g. reward models). The model parts are the ones of `OVModelForVisualCausalLM`, but the language model ends
+    in the classification head: one forward pass gives the class logits of every token, and the logits of the last non-pad
+    token are the result, as in transformers' `GenericForSequenceClassification`. Nothing is generated.
+    """
+
+    export_feature = "text-classification"
+    auto_model_class = AutoModelForSequenceClassification
+
+    @classmethod
+    def _get_model_class(cls, config: PretrainedConfig):
+        if config.model_type not in SEQUENCE_CLASSIFICATION_MODEL_TYPE_TO_CLS_MAPPING:
+            raise ValueError(
+                f"{config.model_type} is not supported by {cls.__name__}, supported model types: "
+                f"{list(SEQUENCE_CLASSIFICATION_MODEL_TYPE_TO_CLS_MAPPING)}"
+            )
+        return SEQUENCE_CLASSIFICATION_MODEL_TYPE_TO_CLS_MAPPING[config.model_type]
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor,
+        attention_mask: Optional[torch.LongTensor] = None,
+        pixel_values: Optional[torch.FloatTensor] = None,
+        **kwargs,
+    ) -> SequenceClassifierOutput:
+        inputs_embeds, attention_mask, position_ids, *_ = self.get_multimodal_embeddings(
+            input_ids, pixel_values, attention_mask=attention_mask, **kwargs
+        )
+        # without past_key_values the language model starts from a fresh state
+        logits = self.language_model(
+            None, inputs_embeds=inputs_embeds, attention_mask=attention_mask, position_ids=position_ids
+        ).logits
+
+        # the rightmost non-pad token, padding on either side; the last token without a pad token id
+        pad_token_id = self.config.get_text_config().pad_token_id
+        if pad_token_id is None:
+            if input_ids.shape[0] != 1:
+                raise ValueError("Cannot handle batch sizes > 1 if no padding token is defined.")
+            last_token = torch.full((input_ids.shape[0],), -1)
+        else:
+            is_token = (input_ids != pad_token_id).int()
+            last_token = (torch.arange(input_ids.shape[-1]) * is_token).argmax(-1)
+        return SequenceClassifierOutput(logits=logits[torch.arange(input_ids.shape[0]), last_token])
+
+    def generate(self, *args, **kwargs):
+        raise NotImplementedError(f"{self.__class__.__name__} classifies, it does not generate.")
+
+
+class _OVQwen3_5ForSequenceClassification(OVModelForVisualSequenceClassification, _OVQwen3_5ForCausalLM):
+    """
+    Qwen3_5ForSequenceClassification: the Qwen3.5 vision and text embeddings and M-RoPE positions of
+    `_OVQwen3_5ForCausalLM`, classified by `OVModelForVisualSequenceClassification.forward`.
+    """
+
+    def __init__(self, *args, **kwargs):
+        if is_transformers_version("<", "5.14.0"):
+            raise ImportError("Qwen3_5ForSequenceClassification requires transformers >= 5.14.0.")
+        super().__init__(*args, **kwargs)
+
+    def forward(self, *args, **kwargs) -> SequenceClassifierOutput:
+        # every call is a new prompt: compute its M-RoPE positions instead of reusing the cached rope deltas
+        self.rope_deltas = None
+        return super().forward(*args, **kwargs)
 
 
 class _OVMuseGlimmerForCausalLM(OVModelForVisualCausalLM):
@@ -8365,4 +8476,8 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "minicpmo": _OVMiniCPMOForCausalLM,
     "videochat_flash_qwen": _OVVideoChatFlashQwenForCausalLM,
     "deepseek_ocr2": _OVDeepseekOCR2ForCausalLM,
+}
+
+SEQUENCE_CLASSIFICATION_MODEL_TYPE_TO_CLS_MAPPING = {
+    "qwen3_5": _OVQwen3_5ForSequenceClassification,
 }

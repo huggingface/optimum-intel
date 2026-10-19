@@ -63,6 +63,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyQwen2VLLMInputGenerator,
     DummyQwen2VLVisionEmbedInputGenerator,
     DummyQwen3_5LMInputGenerator,
+    DummyQwen3_5SequenceClassificationLMInputGenerator,
     DummyQwen3OmniMoeAudioInputGenerator,
     DummyQwen3OmniMoeCode2WavInputGenerator,
     DummyQwen3OmniMoeLMInputGenerator,
@@ -200,6 +201,7 @@ from optimum.exporters.openvino.model_patcher import (
     Qwen2MoEPatcher,
     Qwen2VLLanguageModelPatcher,
     Qwen2VLVisionEmbMergerPatcher,
+    Qwen3_5ForSequenceClassificationLanguageModelPatcher,
     Qwen3_5ModelPatcher,
     Qwen3_5MoeModelPatcher,
     Qwen3_5MoeMTPModelPatcher,
@@ -7904,6 +7906,57 @@ class Qwen3_5OpenVINOConfig(Qwen3VLOpenVINOConfig):
                 "qwen3_5_text", self._orig_config.text_config, self.int_dtype, self.float_dtype
             ).outputs
         raise Exception("Unknown Qwen3.5 behavior type.")
+
+
+@register_in_tasks_manager("qwen3_5", *["text-classification"], library_name="transformers")
+class Qwen3_5ForSequenceClassificationOpenVINOConfig(Qwen3_5OpenVINOConfig):
+    """
+    Qwen3_5ForSequenceClassification (e.g. reward models on the Qwen3.5 VLM): the Qwen3.5 vision and text embeddings
+    graphs, and a language model graph that ends in the `score` head instead of `lm_head`, giving the class logits of
+    every token (see `Qwen3_5ForSequenceClassificationLanguageModelPatcher`). The runtime reads them at the last non-pad
+    token, see `OVModelForVisualSequenceClassification`.
+    """
+
+    # the language model is exported with the transformers `DynamicCache`, whose linear attention layers keep their
+    # states by index since 5.14 (the layout `qwen3_5_gated_delta_net_forward` reads)
+    MIN_TRANSFORMERS_VERSION = "5.14.0"
+    MAX_TRANSFORMERS_VERSION = None
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # the MTP head drafts tokens for generation, a classifier has no use for it
+        self.SUPPORTED_BEHAVIORS = [
+            behavior for behavior in self.SUPPORTED_BEHAVIORS if behavior != QwenVLConfigBehavior.MTP.value
+        ]
+
+    def with_behavior(self, behavior: Union[str, QwenVLConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, QwenVLConfigBehavior):
+            behavior = QwenVLConfigBehavior(behavior)
+
+        if behavior == QwenVLConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config(
+                "qwen3_5_text",
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
+                max_transformers_version=self.MAX_TRANSFORMERS_VERSION,
+            )
+
+        if behavior == QwenVLConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                "qwen3_5_text",
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=Qwen3_5ForSequenceClassificationLanguageModelPatcher,
+                dummy_input_generator=DummyQwen3_5SequenceClassificationLMInputGenerator,
+                inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
+                max_transformers_version=self.MAX_TRANSFORMERS_VERSION,
+            )
+
+        return super().with_behavior(behavior)
 
 
 class Qwen3_5MTPOpenVINOConfig(OpenVINOConfigWithPast):

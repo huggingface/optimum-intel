@@ -1528,6 +1528,25 @@ class DummyQwen3_5LMInputGenerator(DummyTextInputGenerator):
         return generated_input
 
 
+class DummyQwen3_5SequenceClassificationLMInputGenerator(DummyQwen3_5LMInputGenerator):
+    """
+    (4, batch, seq) `position_ids` ([text, T, H, W]) and an `attention_mask` that covers the past and the current tokens,
+    the past length being the dummy cache length (`sequence_length`): the transformers `DynamicCache` used for the export
+    checks the mask against the cache length.
+    """
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "attention_mask":
+            return self.random_int_tensor(
+                shape=[self.batch_size, 2 * self.sequence_length],
+                min_value=1,
+                max_value=2,
+                framework=framework,
+                dtype=int_dtype,
+            )
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
 class DummyQwen2VLVisionEmbedInputGenerator(DummyVisionInputGenerator):
     SUPPORTED_INPUT_NAMES = (
         "hidden_states",

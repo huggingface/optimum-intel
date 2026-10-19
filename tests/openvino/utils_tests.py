@@ -317,6 +317,7 @@ HUB_MODEL_NAMES = {
     "qwen3_5": "optimum-intel-internal-testing/tiny-random-qwen3.5",
     "qwen3_5_compressed_tensors": "optimum-intel-internal-testing/tiny-random-qwen3.5-compressed-tensors",
     "qwen3_5_mtp": "optimum-intel-internal-testing/tiny-random-qwen3.5-mtp",
+    "qwen3_5_seq_cls": "optimum-intel-internal-testing/tiny-random-qwen3.5-seq-cls",
     "qwen3_5_dflash": "optimum-intel-internal-testing/tiny-random-qwen3.5-dflash",
     "qwen3_5_moe": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe",
     "qwen3_5_moe_mtp": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe-mtp",
@@ -1129,6 +1130,7 @@ TEST_NAME_TO_MODEL_TYPE = {
     "qwen3_5_moe_dflash": "qwen3",
     "qwen3_5_compressed_tensors": "qwen3_5",
     "qwen3_5_mtp": "qwen3_5",
+    "qwen3_5_seq_cls": "qwen3_5",
     "qwen3_5_moe_mtp": "qwen3_5_moe",
     "qwen3_dflash": "qwen3",
     "qwen3_deepspec_dflash": "qwen3",
@@ -1151,16 +1153,17 @@ TEST_NAME_TO_MODEL_TYPE = {
 }
 
 
-def get_transformers_versions(model_type, library_name="transformers"):
-    supported_model_type = TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES[library_name]
-    export_config = next(iter(supported_model_type[model_type]["openvino"].values()))
+def get_transformers_versions(model_type, library_name="transformers", task=None):
+    # the export config of `task`, or of the first registered task: tasks of one model type can support different versions
+    export_configs = TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES[library_name][model_type]["openvino"]
+    export_config = export_configs[task] if task is not None else next(iter(export_configs.values()))
     min_transformers = getattr(export_config.func, "MIN_TRANSFORMERS_VERSION", None) or "0"
     max_transformers = getattr(export_config.func, "MAX_TRANSFORMERS_VERSION", None) or "999"
     return str(min_transformers), str(max_transformers)
 
 
-def is_model_type_transformers_compatible(model_type, library_name="transformers"):
-    min_transformers, max_transformers = get_transformers_versions(model_type, library_name)
+def is_model_type_transformers_compatible(model_type, library_name="transformers", task=None):
+    min_transformers, max_transformers = get_transformers_versions(model_type, library_name, task)
     return is_transformers_version(">=", min_transformers) and is_transformers_version("<=", max_transformers)
 
 
