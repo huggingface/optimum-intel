@@ -778,40 +778,40 @@ class DFlash2ExportTest(unittest.TestCase):
         with torch.no_grad():
             convolution.base_kernel.copy_(torch.randn_like(convolution.base_kernel))
         context_length = 3
-        block = slice(context_length, None)
         for block_length in (2, 4, 7):
             with self.subTest(block_length=block_length):
-                # two sequences of rows [context ; block], flattened into one token axis by the convolution
-                num_rows = context_length + block_length
+                # two sequences of rows [context ; block]; the convolution sees only their block rows, packed back
+                # to back, so a tap must not reach from the second block into the first
                 token_type_ids = torch.tensor([[0] * context_length + [1] * block_length] * 2)
-                block_tap_masks = _dflash_block_tap_masks(token_type_ids, convolution.kernel_size)
-                hidden_states = torch.randn(2, num_rows, config.hidden_size)
+                block_rows = torch.nonzero(token_type_ids.flatten() == 1).squeeze(-1)
+                block_tap_masks = _dflash_block_tap_masks(token_type_ids, block_rows, convolution.kernel_size)
+                hidden_states = torch.randn(2, block_length, config.hidden_size)
                 projected = convolution.kernel_projection(hidden_states).reshape(
                     2,
-                    num_rows,
+                    block_length,
                     2,
                     convolution.kernel_size,
                     convolution.num_groups,
                 )
-                prepared, output_kernel = convolution.prepare(hidden_states, block_tap_masks)
+                prepared, output_kernel = convolution.prepare(hidden_states.flatten(0, 1), block_tap_masks)
                 reference_prepared = self._reference_convolution(
-                    hidden_states[:, block],
-                    projected[:, block, 0],
+                    hidden_states,
+                    projected[:, :, 0],
                     convolution.base_kernel[0],
                     convolution.group_size,
                 )
-                torch.testing.assert_close(prepared[:, block], reference_prepared)
+                torch.testing.assert_close(prepared.view_as(hidden_states), reference_prepared)
                 torch.testing.assert_close(output_kernel, projected[:, :, 1].reshape_as(output_kernel))
 
                 branch_output = torch.randn_like(hidden_states)
-                finished = convolution.finish(branch_output, output_kernel, block_tap_masks)
+                finished = convolution.finish(branch_output.flatten(0, 1), output_kernel, block_tap_masks)
                 reference_finished = self._reference_convolution(
-                    branch_output[:, block],
-                    projected[:, block, 1],
+                    branch_output,
+                    projected[:, :, 1],
                     convolution.base_kernel[1],
                     convolution.group_size,
                 )
-                torch.testing.assert_close(finished[:, block], reference_finished)
+                torch.testing.assert_close(finished.view_as(hidden_states), reference_finished)
 
     def test_selector_lattice_and_path_reference_parity(self):
         config = self._config()
