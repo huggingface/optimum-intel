@@ -19,7 +19,9 @@ import json
 import logging
 import math
 import os
+import re
 import types
+from collections import defaultdict
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -10798,6 +10800,26 @@ def _set_nested_attr(module, name, tensor):
         setattr(module, param_name, nn.Parameter(tensor))
 
 
+def _set_stacked_moe_experts(module, prefix, per_expert):
+    """Stack per-expert MoE weights into the 3D parameters expected by ``Qwen3_5MoeExperts``.
+
+    Some checkpoints (e.g. Qwen3.5-35B-A3B) store the MTP MoE experts in the legacy per-expert
+    layout (``experts.{i}.gate_proj.weight`` / ``up_proj.weight`` / ``down_proj.weight``), while the
+    runtime module keeps them as stacked 3D tensors ``experts.gate_up_proj`` of shape
+    ``(num_experts, 2 * intermediate, hidden)`` and ``experts.down_proj`` of shape
+    ``(num_experts, hidden, intermediate)``. This mirrors the conversion transformers performs for
+    the main model's experts, which ``_load_mtp_weights`` bypasses by reading raw checkpoint keys.
+    """
+    expert_indices = sorted(per_expert)
+    gate_up = torch.stack(
+        [torch.cat([per_expert[i]["gate_proj"], per_expert[i]["up_proj"]], dim=0) for i in expert_indices],
+        dim=0,
+    )
+    down = torch.stack([per_expert[i]["down_proj"] for i in expert_indices], dim=0)
+    _set_nested_attr(module, f"{prefix}.gate_up_proj", gate_up)
+    _set_nested_attr(module, f"{prefix}.down_proj", down)
+
+
 def _load_mtp_weights(mtp_module, model):
     """Populate an MTP head module with the ``mtp.*`` weights from the checkpoint.
 
@@ -10832,15 +10854,31 @@ def _load_mtp_weights(mtp_module, model):
         shard_files = ["model.safetensors"]
 
     loaded = 0
+    # Per-expert MoE weights stored as `...experts.{i}.{gate,up,down}_proj.weight`. The MoE MTP head
+    # (`Qwen3_5MoeExperts`) instead holds stacked 3D parameters (`experts.gate_up_proj` / `experts.down_proj`),
+    # so these are collected here and stacked after all shards are read (see `_set_stacked_moe_experts`).
+    expert_weights = defaultdict(dict)
+    expert_re = re.compile(r"^(.*\.experts)\.(\d+)\.(gate_proj|up_proj|down_proj)\.weight$")
+
     for shard in shard_files:
         shard_path = _resolve(shard)
         if shard_path is None:
             continue
         with safe_open(shard_path, framework="pt") as f:
             for key in f.keys():
-                if key.startswith("mtp."):
-                    _set_nested_attr(mtp_module, key[4:], f.get_tensor(key))
-                    loaded += 1
+                if not key.startswith("mtp."):
+                    continue
+                name = key[4:]
+                expert_match = expert_re.match(name)
+                if expert_match is not None:
+                    prefix, expert_idx, proj = expert_match.groups()
+                    expert_weights[prefix].setdefault(int(expert_idx), {})[proj] = f.get_tensor(key)
+                else:
+                    _set_nested_attr(mtp_module, name, f.get_tensor(key))
+                loaded += 1
+
+    for prefix, per_expert in expert_weights.items():
+        _set_stacked_moe_experts(mtp_module, prefix, per_expert)
 
     if loaded == 0:
         raise RuntimeError(
