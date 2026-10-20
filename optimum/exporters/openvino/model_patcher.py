@@ -9156,7 +9156,9 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
         use_cache = use_cache if use_cache is not None else self.config.use_cache
         if use_cache:
             if past_key_values is None:
-                past_key_values = DynamicCache(config=self.config)
+                # Without the config every layer keeps its whole past: sliding layers apply the window through
+                # the mask, and a sliding cache layer would drop keys that the mask still indexes.
+                past_key_values = DynamicCache()
             elif not isinstance(past_key_values, Cache):
                 if is_transformers_version("<", "5"):
                     past_key_values = DynamicCache.from_legacy_cache(past_key_values)
