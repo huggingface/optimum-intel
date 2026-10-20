@@ -39,9 +39,10 @@ from optimum.exporters.openvino.config import (
     VisionOpenVINOConfig,
 )
 from optimum.exporters.openvino.dflash_utils import (
-    DSPARK_ARCHITECTURES,
-    markov_head_default_top_k,
-    parse_and_validate_dspark_config,
+    DFLASH_ARCHITECTURES,
+    dflash_candidate_position_offset,
+    markov_head_spec,
+    parse_and_validate_dflash_config,
 )
 from optimum.exporters.openvino.input_generators import (
     AquilaDummyPastKeyValuesGenerator,
@@ -142,7 +143,6 @@ from optimum.exporters.openvino.model_patcher import (
     DeepseekOCR2LMPatcher,
     DeepseekOCR2VisionEmbeddingsPatcher,
     DeepseekPatcher,
-    DSparkVanillaMarkovHeadForExport,
     FalconModelPatcher,
     FluxTransformerModelPatcher,
     FunASRModelPatcher,
@@ -509,25 +509,15 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
             preprocessors=preprocessors,
         )
         archs = getattr(config, "architectures", None)
-        self.dflash = False
-        if isinstance(archs, list) and len(archs) > 0:
-            if "dflash" in archs[0].lower():
-                self.dflash = True
-                self.candidate_position_offset = 1
-            elif archs[0] in DSPARK_ARCHITECTURES:
-                self.dflash = True
-                dspark_config = parse_and_validate_dspark_config(config)
-                self.candidate_position_offset = dspark_config.candidate_position_offset
-                if dspark_config.markov_rank > 0:
-                    # The Markov head is exported as a separate model next to the draft backbone.
-                    self.SUPPORTED_BEHAVIORS = ["markov_head"]
+        architecture = archs[0] if isinstance(archs, list) and archs else None
+        self.dflash = architecture in DFLASH_ARCHITECTURES
+        self.dflash2 = False
         if self.dflash:
-            model_type = getattr(config, "model_type", "")
-            if model_type != "qwen3":
-                raise ValueError(f"DFlash export supports only Qwen3-based draft models, got model_type={model_type}.")
-            dflash_config = getattr(config, "dflash_config", None) or config.to_dict()
-            if not dflash_config.get("target_layer_ids", []):
-                raise ValueError("DFlash export requires non-empty target_layer_ids in dflash_config or config.")
+            self.dflash2 = parse_and_validate_dflash_config(config).version == 2
+            self.candidate_position_offset = dflash_candidate_position_offset(config)
+            if markov_head_spec(config) is not None:
+                # The Markov head is exported as a separate model next to the draft backbone.
+                self.SUPPORTED_BEHAVIORS = ["markov_head"]
             # DFlash draft checkpoints still advertise model_type="qwen3"; the
             # architecture and dflash_config fields identify the draft variant.
             self.DUMMY_INPUT_GENERATOR_CLASSES = (
@@ -574,7 +564,7 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
 
     def with_behavior(self, behavior: str):
         if behavior == "markov_head":
-            return DSparkMarkovHeadOpenVINOConfig(
+            return MarkovHeadOpenVINOConfig(
                 self._config,
                 task="feature-extraction",
                 int_dtype=self.int_dtype,
@@ -585,19 +575,17 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
 
     def get_model_for_behavior(self, model, behavior: str):
         if behavior == "markov_head":
-            return DSparkVanillaMarkovHeadForExport(
-                model.markov_head, model.config, markov_head_default_top_k(model.config)
-            )
+            return model.markov_head_for_export(markov_head_spec(model.config).top_k)
         raise ValueError(f"Unsupported behavior {behavior} for {type(self).__name__}.")
 
 
-class DSparkMarkovHeadOpenVINOConfig(OpenVINOConfig):
-    """The DSpark Markov-head model, exported next to the draft backbone.
+class MarkovHeadOpenVINOConfig(OpenVINOConfig):
+    """The Markov-head model of a DFlash draft (a DSpark draft or a DFlash-2 draft), exported next to its backbone.
 
-    It holds the dense Markov step and the Top-K lattice as two independent computations over the
-    same weights (see `MarkovHeadForExport`). The lattice takes the draft rows of several blocks packed
-    back to back. edge_scores already include each candidate's draft logit, so the runtime must not
-    add it again.
+    The Top-K candidate scorer takes the draft rows of several blocks packed back to back (see
+    `MarkovHeadForExport`). edge_scores already include each candidate's unary score, so the runtime must not add
+    the draft logit again. A DSpark head also holds the dense Markov step over the same weights; the DFlash-2 head has no dense
+    step and gates its transitions by the draft hidden states of the scored rows.
     """
 
     DUMMY_INPUT_GENERATOR_CLASSES = (Eagle3DummyGenerator,)
@@ -620,12 +608,21 @@ class DSparkMarkovHeadOpenVINOConfig(OpenVINOConfig):
             float_dtype=float_dtype,
             preprocessors=preprocessors,
         )
-        if parse_and_validate_dspark_config(config).markov_rank == 0:
-            raise ValueError("The DSpark Markov head model requires a draft with a Markov head (markov_rank > 0).")
-        self.markov_head_top_k = markov_head_default_top_k(config)
+        markov_head = markov_head_spec(config)
+        if markov_head is None:
+            raise ValueError("The Markov head model requires a DFlash-2 draft or a DSpark draft with markov_rank > 0.")
+        self.markov_head_top_k = markov_head.top_k
+        self.gated = parse_and_validate_dflash_config(config).version == 2
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self.gated:
+            return {
+                "draft_logits": {0: "num_draft_rows"},
+                "draft_hidden_states": {0: "num_draft_rows"},
+                "anchor_token_ids": {0: "num_draft_blocks"},
+                "subsequence_begins": {0: "num_draft_blocks + 1"},
+            }
         return {
             "prev_token_ids": {0: "num_prev_tokens"},
             "draft_logits": {0: "num_draft_rows"},
@@ -635,11 +632,13 @@ class DSparkMarkovHeadOpenVINOConfig(OpenVINOConfig):
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
-        return {
-            "markov_bias": {0: "num_prev_tokens"},
+        outputs = {
             "edge_scores": {0: "num_draft_rows"},
             "candidate_ids": {0: "num_draft_rows"},
         }
+        if not self.gated:
+            outputs = {"markov_bias": {0: "num_prev_tokens"}, **outputs}
+        return outputs
 
 
 @register_in_tasks_manager(

@@ -36,6 +36,7 @@ from utils_tests import (
     REMOTE_CODE_MODELS,
     TEST_NAME_TO_MODEL_TYPE,
     check_compression_state_per_model,
+    get_dflash2_model_path,
     get_dspark_model_path,
     get_num_quantized_nodes,
     get_supported_model_for_library,
@@ -1092,6 +1093,127 @@ class OVCLIExportTestCase(unittest.TestCase):
                 model_kwargs["trust_remote_code"] = True
 
             self._load_exported_ov_model(model_type, task, tmpdir, model_kwargs)
+
+    @unittest.skipUnless(is_transformers_version(">=", "4.57"), "DFlash-2 requires Transformers 4.57 or newer")
+    def test_exporters_cli_dflash2_two_ir_package(self):
+        model_path = get_dflash2_model_path()
+        with TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                [
+                    "optimum-cli",
+                    "export",
+                    "openvino",
+                    "--model",
+                    model_path,
+                    "--task",
+                    "text-generation-with-past",
+                    "--trust-remote-code",
+                    tmpdir,
+                ],
+                check=True,
+            )
+            self.assertEqual(
+                sorted(path.name for path in Path(tmpdir).glob("openvino_*model.xml")),
+                ["openvino_markov_head_model.xml", "openvino_model.xml"],
+            )
+
+            import openvino as ov
+            from transformers import AutoConfig
+
+            dflash_config = AutoConfig.from_pretrained(model_path).dflash_config
+            core = ov.Core()
+            draft_model = core.read_model(Path(tmpdir) / "openvino_model.xml")
+            draft_rt_info = draft_model.get_rt_info()["dflash"]
+            self.assertEqual(draft_rt_info["version"].value, "2")
+            self.assertEqual(draft_rt_info["gpu_min_activations_scale_factor"].value, "32.0")
+            self.assertEqual(draft_rt_info["markov_head_type"].value, "dflash2")
+            self.assertEqual(draft_rt_info["markov_rank"].value, str(dflash_config["selector_rank"]))
+            self.assertFalse(draft_model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"]))
+
+            markov_model = core.read_model(Path(tmpdir) / "openvino_markov_head_model.xml")
+            markov_rt_info = markov_model.get_rt_info()["dflash"]
+            self.assertEqual(markov_rt_info["interface"].value, "markov_head_v1")
+            self.assertEqual(markov_rt_info["markov_head_type"].value, "dflash2")
+            self.assertEqual(markov_rt_info["top_k"].value, str(dflash_config["selector_top_k"]))
+            self.assertFalse(markov_model.has_rt_info(["runtime_options"]))
+            self.assertFalse(markov_model.has_rt_info(["dflash_mode"]))
+            self.assertEqual(
+                [port.get_any_name() for port in markov_model.inputs],
+                ["draft_logits", "draft_hidden_states", "anchor_token_ids", "subsequence_begins"],
+            )
+            self.assertEqual(
+                sorted(port.get_any_name() for port in markov_model.outputs), ["candidate_ids", "edge_scores"]
+            )
+
+    @unittest.skipUnless(is_transformers_version(">=", "4.57"), "DFlash-2 requires Transformers 4.57 or newer")
+    def test_exporters_cli_dflash2_markov_head_preserves_checkpoint_precision(self):
+        model_path = get_dflash2_model_path()
+        for weight_format in ("int8", "int4"):
+            with self.subTest(weight_format=weight_format), TemporaryDirectory() as tmpdir:
+                command = [
+                    "optimum-cli",
+                    "export",
+                    "openvino",
+                    "--model",
+                    model_path,
+                    "--task",
+                    "text-generation-with-past",
+                    "--weight-format",
+                    weight_format,
+                    "--trust-remote-code",
+                ]
+                if weight_format == "int4":
+                    command.extend(["--group-size", "-1"])
+                subprocess.run([*command, tmpdir], check=True)
+                import openvino as ov
+
+                core = ov.Core()
+                draft_model = core.read_model(Path(tmpdir) / "openvino_model.xml")
+                markov_model = core.read_model(Path(tmpdir) / "openvino_markov_head_model.xml")
+                self.assertTrue(draft_model.has_rt_info(["nncf"]))
+                self.assertFalse(markov_model.has_rt_info(["nncf"]))
+
+    @unittest.skipUnless(is_transformers_version(">=", "4.57"), "DFlash-2 requires Transformers 4.57 or newer")
+    def test_exporters_cli_dflash2_fp16_applies_to_markov_head(self):
+        model_path = get_dflash2_model_path()
+        with TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                [
+                    "optimum-cli",
+                    "export",
+                    "openvino",
+                    "--model",
+                    model_path,
+                    "--task",
+                    "text-generation-with-past",
+                    "--weight-format",
+                    "fp16",
+                    "--trust-remote-code",
+                    tmpdir,
+                ],
+                check=True,
+            )
+            import openvino as ov
+            from transformers import AutoConfig
+
+            config = AutoConfig.from_pretrained(model_path)
+            core = ov.Core()
+            draft_model = core.read_model(Path(tmpdir) / "openvino_model.xml")
+            markov_model = core.read_model(Path(tmpdir) / "openvino_markov_head_model.xml")
+
+            draft_constant_types = {
+                op.get_element_type() for op in draft_model.get_ops() if op.get_type_name() == "Constant"
+            }
+            self.assertIn(ov.Type.f16, draft_constant_types)
+
+            codebook_shape = [config.vocab_size, config.dflash_config["selector_rank"]]
+            codebooks = [
+                op
+                for op in markov_model.get_ops()
+                if op.get_type_name() == "Constant" and list(op.get_output_shape(0)) == codebook_shape
+            ]
+            self.assertGreaterEqual(len(codebooks), 2)
+            self.assertTrue(all(op.get_element_type() == ov.Type.f16 for op in codebooks))
 
     @parameterized.expand(
         [

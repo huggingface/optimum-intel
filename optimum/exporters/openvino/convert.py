@@ -30,9 +30,10 @@ from openvino import Model, save_model
 from openvino.exceptions import OVTypeError
 from openvino.tools.ovc import convert_model
 from optimum.exporters.openvino.dflash_utils import (
-    DSPARK_ARCHITECTURES,
+    DFLASH2_GPU_MIN_ACTIVATIONS_SCALE_FACTOR,
     MARKOV_HEAD_INTERFACE,
-    parse_and_validate_dspark_config,
+    markov_head_spec,
+    parse_and_validate_dflash_config,
 )
 from optimum.exporters.openvino.utils import (
     MULTI_MODAL_TEXT_GENERATION_MODELS,
@@ -120,21 +121,18 @@ def _set_runtime_options(
         _, sub_export_config = models_and_export_configs[model_name]
         if not hasattr(sub_export_config, "runtime_options"):
             sub_export_config.runtime_options = {}
-        # The DSpark Markov head is not a decoder; the plugins apply these options when they compile a model.
+        # A Markov head is not a decoder; the plugins apply these options when they compile a model.
         if getattr(sub_export_config, "markov_head_top_k", None) is not None:
             continue
-        if (
+        uses_decoder_runtime_options = (
             "text-generation" in task
             or ("image-text-to-text" in task and model_name == "language_model")
             or getattr(sub_export_config, "stateful", False)
-        ):
-            sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "8.0"
-        if not quantized_model and (
-            "text-generation" in task
-            or ("image-text-to-text" in task and model_name == "language_model")
-            or getattr(sub_export_config, "stateful", False)
-        ):
-            sub_export_config.runtime_options["KV_CACHE_PRECISION"] = "f16"
+        )
+        if uses_decoder_runtime_options and not getattr(sub_export_config, "dflash2", False):
+            sub_export_config.runtime_options.setdefault("ACTIVATIONS_SCALE_FACTOR", "8.0")
+        if not quantized_model and uses_decoder_runtime_options:
+            sub_export_config.runtime_options.setdefault("KV_CACHE_PRECISION", "f16")
         # Gemma vision embedders produce activations large enough to overflow in
         # fp16, so scale them down at runtime the same way the language model does.
         if model_name == "vision_embeddings_model" and getattr(
@@ -173,23 +171,29 @@ def _save_model(
 
     if getattr(config, "eagle3", False):
         model = _add_eagle3_mode_to_rt_info(model)
-    if getattr(config, "dflash", False):
+    is_dflash = getattr(config, "dflash", False)
+    if is_dflash:
         model = _add_dflash_mode_to_rt_info(
             model,
             config._config,
             candidate_position_offset=getattr(config, "candidate_position_offset", 1),
             markov_head_top_k=getattr(config, "markov_head_top_k", None),
         )
-    if source_model is not None and getattr(getattr(source_model, "config", None), "model_type", None) in {
-        "qwen3",
-        "qwen3_moe",
-        "qwen3_5",
-        "qwen3_5_moe",
-        "qwen3_5_text",
-        "qwen3_5_moe_text",
-        "gemma4",
-        "minicpmv4_7",
-    }:
+    if (
+        source_model is not None
+        and not is_dflash
+        and getattr(getattr(source_model, "config", None), "model_type", None)
+        in {
+            "qwen3",
+            "qwen3_moe",
+            "qwen3_5",
+            "qwen3_5_moe",
+            "qwen3_5_text",
+            "qwen3_5_moe_text",
+            "gemma4",
+            "minicpmv4_7",
+        }
+    ):
         add_hidden_states_rt_info(source_model, model, config)
 
     save_model(model, path, compress_to_fp16)
@@ -1062,43 +1066,44 @@ def _add_dflash_mode_to_rt_info(
     Add DFlash metadata to DFlash draft model.
 
     Marks model as DFlash draft model and adds DFlash configuration to the model including
-    mask token id, target layer ids, and candidate position offset. A DSpark draft with a Markov head also
-    gets markov_rank and markov_head_type, which tell runtimes to load its Markov head model.
+    mask token id, target layer ids, and candidate position offset. A draft with a Markov head (a DSpark draft
+    with markov_rank > 0, or a DFlash-2 draft, whose candidate selector is a gated Markov head) also gets
+    markov_rank and markov_head_type, which tell runtimes to load its Markov head model.
 
-    With `markov_head_top_k`, the model is the Markov head model of a DSpark draft instead. It is not marked
+    With `markov_head_top_k`, the model is the Markov head model of the draft instead. It is not marked
     as a draft (dflash_mode marks the draft backbone): dflash/interface names its input/output contract,
     dflash/top_k is the K of its TopK. It repeats markov_rank and markov_head_type so that runtimes can check
     that it belongs to the draft backbone next to it.
     """
+    markov_head = markov_head_spec(hf_config)
     if markov_head_top_k is not None:
-        dspark_config = parse_and_validate_dspark_config(hf_config)
         model.set_rt_info(MARKOV_HEAD_INTERFACE, ["dflash", "interface"])
         model.set_rt_info(str(markov_head_top_k), ["dflash", "top_k"])
-        model.set_rt_info(str(dspark_config.markov_rank), ["dflash", "markov_rank"])
-        model.set_rt_info(dspark_config.markov_head_type, ["dflash", "markov_head_type"])
+        model.set_rt_info(str(markov_head.markov_rank), ["dflash", "markov_rank"])
+        model.set_rt_info(markov_head.markov_head_type, ["dflash", "markov_head_type"])
         model.set_rt_info(str(hf_config.vocab_size), ["dflash", "vocab_size"])
         return model
 
-    try:
-        model.set_rt_info("True", ["dflash_mode"])
-        dflash_config = getattr(hf_config, "dflash_config", None) or hf_config.to_dict()
-        if "mask_token_id" in dflash_config:
-            model.set_rt_info(str(dflash_config["mask_token_id"]), ["dflash", "mask_token_id"])
-        if "target_layer_ids" in dflash_config:
-            model.set_rt_info(",".join(map(str, dflash_config["target_layer_ids"])), ["dflash", "target_layer_ids"])
-        model.set_rt_info(str(candidate_position_offset), ["dflash", "candidate_position_offset"])
-    except Exception:
-        pass
-
-    architectures = getattr(hf_config, "architectures", None)
-    if isinstance(architectures, list) and architectures and architectures[0] in DSPARK_ARCHITECTURES:
-        dspark_config = parse_and_validate_dspark_config(hf_config)
-        # The Markov keys let runtimes detect a DSpark draft that is loaded without its separately exported
-        # Markov head model. A draft with markov_rank == 0 is a plain DFlash draft and gets none.
-        if dspark_config.markov_rank > 0:
-            model.set_rt_info(str(dspark_config.markov_rank), ["dflash", "markov_rank"])
-            model.set_rt_info(dspark_config.markov_head_type, ["dflash", "markov_head_type"])
-
+    dflash = parse_and_validate_dflash_config(hf_config)
+    dflash_config = dflash.values
+    model.set_rt_info("True", ["dflash_mode"])
+    model.set_rt_info(str(dflash_config["mask_token_id"]), ["dflash", "mask_token_id"])
+    model.set_rt_info(",".join(map(str, dflash_config["target_layer_ids"])), ["dflash", "target_layer_ids"])
+    model.set_rt_info(str(candidate_position_offset), ["dflash", "candidate_position_offset"])
+    if dflash.version == 2:
+        model.set_rt_info("2", ["dflash", "version"])
+        model.set_rt_info(
+            str(DFLASH2_GPU_MIN_ACTIVATIONS_SCALE_FACTOR),
+            ["dflash", "gpu_min_activations_scale_factor"],
+        )
+        for name in ("input_embedding_scale", "output_multiplier", "final_logit_softcapping"):
+            value = dflash_config.get(name)
+            if value is not None:
+                model.set_rt_info(str(value), ["dflash", name])
+    # The Markov keys also let runtimes detect a draft that is loaded without its Markov head model.
+    if markov_head is not None:
+        model.set_rt_info(str(markov_head.markov_rank), ["dflash", "markov_rank"])
+        model.set_rt_info(markov_head.markov_head_type, ["dflash", "markov_head_type"])
     return model
 
 
@@ -1249,7 +1254,7 @@ def _get_submodels_and_export_configs(
     )
     stateful_per_model = [stateful] * len(models_for_export)
 
-    # Models exported next to the main one, such as the Markov head of a DSpark draft.
+    # Models exported next to the main one, such as the Markov head of a DFlash-2 or DSpark draft.
     for behavior in getattr(export_config, "SUPPORTED_BEHAVIORS", []):
         models_for_export[f"{behavior}_model"] = (
             export_config.get_model_for_behavior(model, behavior),
