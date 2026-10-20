@@ -241,7 +241,7 @@ from optimum.exporters.openvino.model_patcher import (
     ZImageTransformerModelPatcher,
     _get_model_attribute,
 )
-from optimum.exporters.openvino.utils import is_ltx2_3_transformer_config
+from optimum.exporters.openvino.utils import LTX2_ROPE_INPUTS, is_ltx2_3_transformer_config
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
     is_diffusers_available,
@@ -3421,12 +3421,20 @@ class LTX2VideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
             "audio_num_frames": {},
             "timestep": {0: "batch_size", 1: "video_sequence_length"},
             "audio_timestep": {0: "batch_size"},
-            "video_coords": {0: "batch_size", 2: "video_sequence_length"},
-            "audio_coords": {0: "batch_size", 2: "audio_sequence_length"},
         }
-        if is_ltx2_3_transformer_config(self._normalized_config.config):
+        # RoPE enters as precomputed cos/sin rather than coordinates; see `LTX2_ROPE_INPUTS`. The
+        # "split" layout is (batch, heads, tokens, dim), the "interleaved" one (batch, tokens, dim).
+        config = self._normalized_config.config
+        seq_axis = 2 if getattr(config, "rope_type", "interleaved") == "split" else 1
+        for module_name, names in LTX2_ROPE_INPUTS.items():
+            seq_name = (
+                "video_sequence_length" if module_name in ("rope", "cross_attn_rope") else "audio_sequence_length"
+            )
+            for name in names:
+                inputs[name] = {0: "batch_size", seq_axis: seq_name}
+        if is_ltx2_3_transformer_config(config):
             inputs["cross_modality_gate"] = {}
-        if getattr(self._normalized_config.config, "perturbed_attn", False):
+        if getattr(config, "perturbed_attn", False):
             inputs["stg_perturbation_mask"] = {}
         return inputs
 

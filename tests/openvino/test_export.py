@@ -37,6 +37,7 @@ from optimum.exporters.openvino.model_configs import (
     Qwen3OmniMoeConfigBehavior,
 )
 from optimum.exporters.openvino.model_patcher import LTX2TextEncoderPatcher
+from optimum.exporters.openvino.utils import LTX2_ROPE_INPUTS
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import (
     OVFlux2KleinPipeline,
@@ -503,6 +504,25 @@ class LTX2ExportContractTest(unittest.TestCase):
             transformer_inputs["encoder_attention_mask"].get_element_type(),
             ov.Type.f32 if is_ltx2_3 else ov.Type.i64,
         )
+
+        # Both versions take RoPE as host-computed (cos, sin) rather than coordinates: fp16 cannot
+        # resolve the rotary angles, so no Sin/Cos may be left on the RoPE path in the graph.
+        rope_inputs = {name for names in LTX2_ROPE_INPUTS.values() for name in names}
+        self.assertTrue(rope_inputs.issubset(transformer_inputs))
+        self.assertFalse({"video_coords", "audio_coords"} & set(transformer_inputs))
+        for op in transformer.get_ops():
+            if op.get_type_name() not in ("Sin", "Cos"):
+                continue
+            sources, stack, seen = set(), [op], set()
+            while stack:
+                node = stack.pop()
+                if node.get_friendly_name() in seen:
+                    continue
+                seen.add(node.get_friendly_name())
+                if node.get_type_name() == "Parameter":
+                    sources.add(node.get_friendly_name())
+                stack.extend(inp.get_source_output().get_node() for inp in node.inputs())
+            self.assertTrue(sources.issubset({"timestep", "audio_timestep"}), f"{op.get_friendly_name()}: {sources}")
 
     def test_text_encoder_packs_hidden_states(self):
         # One contract for both LTX-2 versions: nothing in the text encoder config tells them apart,

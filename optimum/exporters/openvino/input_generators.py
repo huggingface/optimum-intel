@@ -17,7 +17,12 @@ from typing import Optional, Tuple
 
 import torch
 
-from optimum.exporters.openvino.utils import is_ltx2_3_transformer_config
+from optimum.exporters.openvino.utils import (
+    LTX2_ROPE_INPUTS,
+    build_ltx2_rope_modules,
+    compute_ltx2_rope_inputs,
+    is_ltx2_3_transformer_config,
+)
 from optimum.intel.utils.import_utils import is_diffusers_version
 from optimum.utils import (
     DEFAULT_DUMMY_SHAPES,
@@ -1001,6 +1006,7 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
         "audio_timestep",
         "cross_modality_gate",
         "stg_perturbation_mask",
+        *(name for names in LTX2_ROPE_INPUTS.values() for name in names),
     )
 
     def __init__(
@@ -1045,6 +1051,8 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
             )
 
         self.is_ltx2_3 = is_ltx2_3_transformer_config(normalized_config.config)
+        self.rope_modules = build_ltx2_rope_modules(normalized_config.config)
+        self._rope_inputs = None
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         import torch
@@ -1075,6 +1083,16 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
             audio_num_frames = max(1, self.num_frames)
             audio_mel_bins = 64 // self.audio_scale_factor
             return self.random_float_tensor([self.batch_size, 1, audio_num_frames * audio_mel_bins, 2])
+        if any(input_name in names for names in LTX2_ROPE_INPUTS.values()):
+            # Real cos/sin of the dummy coordinates, so their shapes follow the rotary layout
+            # (`rope_type`) and head split of the checkpoint, exactly as the runtime computes them.
+            if self._rope_inputs is None:
+                self._rope_inputs = compute_ltx2_rope_inputs(
+                    self.rope_modules,
+                    self.generate("video_coords", framework, int_dtype, float_dtype),
+                    self.generate("audio_coords", framework, int_dtype, float_dtype),
+                )
+            return self._rope_inputs[input_name]
         if input_name == "encoder_hidden_states":
             return self.random_float_tensor([self.batch_size, self.encoder_seq_length, self.text_embed_dim])
         if input_name == "encoder_attention_mask":
