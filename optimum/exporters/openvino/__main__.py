@@ -29,7 +29,7 @@ from transformers.utils import is_torch_available
 
 from openvino import Core, Model, Type, save_model
 from optimum.exporters.openvino.base import OpenVINOConfig
-from optimum.exporters.openvino.dflash_utils import DFLASH_ARCHITECTURES, DSPARK_ARCHITECTURES
+from optimum.exporters.openvino.dflash_utils import DFLASH_ARCHITECTURES, parse_and_validate_dflash_config
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
     DIFFUSERS_IMPORT_ERROR,
@@ -244,6 +244,7 @@ _NATIVE_DRAFT_MODEL_CLASSES = {
     "DFlashDraftModel": "Qwen3DFlashForCausalLM",
     "Qwen3DSparkModel": "Qwen3DSparkForCausalLM",
     "MuseGlimmerAssistantModel": "get_muse_glimmer_assistant_draft_model_class",
+    "DFlash2DraftModel": "Qwen3DFlash2ForCausalLM",
 }
 
 
@@ -436,6 +437,8 @@ def main_export(
 
         # update config to load custom draft models (eagle3 text-only/VLM variants, dflash)
         archs = getattr(config, "architectures", None)
+        if isinstance(archs, list) and archs and archs[0] in DFLASH_ARCHITECTURES:
+            parse_and_validate_dflash_config(config)
         if isinstance(archs, list) and archs:
             draft_classes = _CUSTOM_DRAFT_MODEL_MAP.get(archs[0])
             if draft_classes is not None:
@@ -780,7 +783,7 @@ def main_export(
             model_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code, model_type=model_type
         )
         architectures = getattr(model.config, "architectures", None) or []
-        if architectures and architectures[0] in DFLASH_ARCHITECTURES | DSPARK_ARCHITECTURES:
+        if architectures and architectures[0] in DFLASH_ARCHITECTURES:
             # These drafts always run with the target model's tokenizer. Most are published without one, and
             # transformers 5 then builds a placeholder tokenizer from the config.
             preprocessors = [p for p in preprocessors if not isinstance(p, PreTrainedTokenizerBase)]
