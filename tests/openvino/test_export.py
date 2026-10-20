@@ -519,7 +519,10 @@ class LTX2ExportContractTest(unittest.TestCase):
         # resolve the rotary angles, so no Sin/Cos may be left on the RoPE path in the graph.
         rope_inputs = {name for names in LTX2_ROPE_INPUTS.values() for name in names}
         self.assertTrue(rope_inputs.issubset(transformer_inputs))
-        self.assertFalse({"video_coords", "audio_coords"} & set(transformer_inputs))
+        # The positions enter only through cos/sin, so neither the coordinates nor the frame/size
+        # arguments they are built from are graph inputs.
+        unused_inputs = {"video_coords", "audio_coords", "num_frames", "height", "width", "fps", "audio_num_frames"}
+        self.assertFalse(unused_inputs & set(transformer_inputs))
         for op in transformer.get_ops():
             if op.get_type_name() not in ("Sin", "Cos"):
                 continue

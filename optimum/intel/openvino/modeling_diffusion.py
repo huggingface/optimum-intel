@@ -1888,8 +1888,8 @@ class OVModelTransformerLTX2(OVPipelinePart):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Weight-free rotary modules of the reference transformer. The pipeline uses `rope` and
-        # `audio_rope` to prepare the coordinates, and exports that take RoPE as precomputed
-        # (cos, sin) inputs get them from all four here, on the host, in fp32/fp64.
+        # `audio_rope` to prepare the coordinates, and the (cos, sin) transformer inputs are computed
+        # from all four here, on the host, in fp32/fp64.
         self._rope_modules = build_ltx2_rope_modules(self.config)
         self.rope = self._rope_modules["rope"]
         self.audio_rope = self._rope_modules["audio_rope"]
@@ -1966,38 +1966,18 @@ class OVModelTransformerLTX2(OVPipelinePart):
             model_inputs["encoder_attention_mask"] = encoder_attention_mask
         if audio_encoder_attention_mask is not None:
             model_inputs["audio_encoder_attention_mask"] = audio_encoder_attention_mask
-        if fps is not None and not isinstance(fps, torch.Tensor):
-            fps = torch.tensor(float(fps))
-        # Exports that take RoPE as (cos, sin) inputs do not use the frame/size inputs the coordinates
-        # are otherwise derived from, so only pass the ones the IR declares.
-        for name, value in (
-            ("num_frames", num_frames),
-            ("height", height),
-            ("width", width),
-            ("fps", fps),
-            ("audio_num_frames", audio_num_frames),
-        ):
-            if value is not None and name in self._ov_input_names:
-                model_inputs[name] = value
 
-        if LTX2_ROPE_INPUTS["rope"][0] in self._ov_input_names:
-            # Mirror the reference transformer, which builds the coordinates when they are not given.
-            batch_size = hidden_states.shape[0]
-            if video_coords is None:
-                video_coords = self.rope.prepare_video_coords(
-                    batch_size, num_frames, height, width, hidden_states.device, fps=24.0 if fps is None else fps
-                )
-            if audio_coords is None:
-                audio_coords = self.audio_rope.prepare_audio_coords(
-                    batch_size, audio_num_frames, audio_hidden_states.device
-                )
-            model_inputs.update(compute_ltx2_rope_inputs(self._rope_modules, video_coords, audio_coords))
-        else:
-            # Older exports compute RoPE in the graph from the coordinates.
-            if video_coords is not None:
-                model_inputs["video_coords"] = video_coords
-            if audio_coords is not None:
-                model_inputs["audio_coords"] = audio_coords
+        # Mirror the reference transformer, which builds the coordinates when they are not given.
+        batch_size = hidden_states.shape[0]
+        if video_coords is None:
+            video_coords = self.rope.prepare_video_coords(
+                batch_size, num_frames, height, width, hidden_states.device, fps=24.0 if fps is None else fps
+            )
+        if audio_coords is None:
+            audio_coords = self.audio_rope.prepare_audio_coords(
+                batch_size, audio_num_frames, audio_hidden_states.device
+            )
+        model_inputs.update(compute_ltx2_rope_inputs(self._rope_modules, video_coords, audio_coords))
 
         # Modality isolation guidance and spatio-temporal guidance are extra transformer passes the
         # pipeline runs alongside the CFG one, selected with Python flags. The export turns them into

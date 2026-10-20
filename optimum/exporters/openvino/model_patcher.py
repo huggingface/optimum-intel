@@ -11886,11 +11886,6 @@ class LTX2TransformerPatcher(ModelPatcher):
             audio_sigma=None,
             encoder_attention_mask=None,
             audio_encoder_attention_mask=None,
-            num_frames=None,
-            height=None,
-            width=None,
-            fps=24.0,
-            audio_num_frames=None,
             video_coords=None,
             audio_coords=None,
             cross_modality_gate=None,
@@ -11917,7 +11912,7 @@ class LTX2TransformerPatcher(ModelPatcher):
             for module_name, freqs in rope_inputs.items():
                 self._rope_state[module_name] = freqs if freqs[0] is not None else None
             # The rotary modules ignore the coordinates once given their (cos, sin), but the model
-            # still slices them and would otherwise build them from the frame/size inputs.
+            # still slices them and would otherwise try to build them from frame/size arguments.
             if video_coords is None and video_rotary_cos is not None:
                 video_coords = hidden_states.new_zeros((1, 3, 1, 2))
             if audio_coords is None and audio_rotary_cos is not None:
@@ -11953,11 +11948,6 @@ class LTX2TransformerPatcher(ModelPatcher):
                 timestep=timestep,
                 encoder_attention_mask=encoder_attention_mask,
                 audio_encoder_attention_mask=audio_encoder_attention_mask,
-                num_frames=num_frames,
-                height=height,
-                width=width,
-                fps=fps,
-                audio_num_frames=audio_num_frames,
                 video_coords=video_coords,
                 audio_coords=audio_coords,
                 return_dict=False,

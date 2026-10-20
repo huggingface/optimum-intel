@@ -1002,11 +1002,6 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
         "audio_hidden_states",
         "encoder_hidden_states",
         "encoder_attention_mask",
-        "num_frames",
-        "height",
-        "width",
-        "fps",
-        "audio_num_frames",
         "video_coords",
         "audio_coords",
         "audio_encoder_hidden_states",
@@ -1028,12 +1023,10 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
         width: int = 16,
         height: int = 8,
         num_frames: int = 2,
-        frame_rate: int = 24,
         **kwargs,
     ):
         super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
         self.num_frames = num_frames
-        self.frame_rate = frame_rate
         self.vae_scale_factors = normalized_config.config.vae_scale_factors
         self.audio_in_channels = normalized_config.config.audio_in_channels
         self.audio_scale_factor = normalized_config.config.audio_scale_factor
@@ -1076,16 +1069,6 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
             return self.random_float_tensor(
                 [self.batch_size, audio_num_frames * audio_mel_bins, self.audio_in_channels]
             )
-        if input_name == "width":
-            return torch.tensor(self.width)
-        if input_name == "height":
-            return torch.tensor(self.height)
-        if input_name == "num_frames":
-            return torch.tensor(self.num_frames)
-        if input_name == "fps":
-            return torch.tensor(float(self.frame_rate))
-        if input_name == "audio_num_frames":
-            return torch.tensor(max(1, self.num_frames))
         if input_name == "video_coords":
             return self.random_float_tensor([self.batch_size, 3, self.num_frames * self.height * self.width, 2])
         if input_name == "audio_coords":
