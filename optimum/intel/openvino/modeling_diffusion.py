@@ -2307,6 +2307,10 @@ class OVModelVae(OVModelHostMixin):
     def device(self):
         return self.decoder.device
 
+    # diffusers (>=0.41) calls `module.modules()`
+    def modules(self):
+        return []
+
     def decode(self, *args, **kwargs):
         return self.decoder(*args, **kwargs)
 

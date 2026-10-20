@@ -967,6 +967,29 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         del ov_model
         gc.collect()
 
+    @parameterized.expand(["minicpmv", "minicpm_v4_5"])
+    def test_minicpmv_resampler_padding_mask(self, model_arch):
+        # image slices of different sizes are padded to the longest one before the resampler;
+        # the padded positions must be ignored by the attention, as in the reference model
+        if "minicpmv" not in self.SUPPORTED_ARCHITECTURES:
+            self.skipTest("minicpmv is not supported by the installed transformers version")
+        model_id = MODEL_NAMES[model_arch]
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=True).eval()
+        ov_model = self.OVMODEL_CLASS.from_pretrained(
+            model_id, export=True, trust_remote_code=True, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
+        )
+        tgt_sizes = torch.tensor([[8, 8], [6, 5], [4, 4]], dtype=torch.int32)
+        set_seed(SEED)
+        image_features = torch.randn(3, 64, transformers_model.config.vision_config.hidden_size)
+        with torch.no_grad():
+            transformers_outputs = transformers_model.resampler(image_features, tgt_sizes)
+        ov_outputs = ov_model.resampling(image_features, tgt_sizes)
+        max_diff = torch.abs(ov_outputs - transformers_outputs).max()
+        self.assertLess(max_diff, 1e-4, f"Max abs diff {max_diff}")
+
+        del transformers_model, ov_model
+        gc.collect()
+
     @parameterized.expand(
         ["llava", "llava_next", "llava_next_video", "llava_next_mistral"]
         if is_transformers_version("<", "5")
@@ -1487,6 +1510,10 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
             self.assertIsInstance(ov_model, _OVModelForQwen3TTS)
             self.assertEqual(getattr(ov_model.config, "model_type", None), "qwen3_tts")
             self.assertEqual(sum(p.numel() for p in ov_model.model.parameters()), 0)
+            # The stateful decoder stacks overflow f16 on GPU without the activations scale.
+            for name, component in ov_model.components.items():
+                has_scale = component.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
+                self.assertEqual(has_scale, name in ("talker_model", "code_predictor_model"), name)
 
             inputs = ov_model.preprocess_input(
                 text=text, language="English", ref_audio=(ref_audio, sampling_rate), ref_text=ref_text

@@ -496,6 +496,44 @@ if is_diffusers_version(">=", "0.38.0"):
     }
 
 
+if is_diffusers_version(">=", "0.33.0"):
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["ltx-video-0.9.5"] = {
+        "model_class": "OVLTXPipeline",
+        "convert": [
+            "CommonFusions",
+            "ConstantFolding",
+            "MOC",
+            "ReshapeOptimizations",
+            "SDPAFusion",
+            "ShapeOfConstFolding",
+            "SharedOpOptimization",
+            "SmartReshape",
+        ],
+        "compile": [
+            "CausalMaskPreprocessFusion",
+            "CommonDecompositions",
+            "CommonOptimizations",
+            "ConvertBroadcast3",
+            "ConvertMatMulToFC",
+            "ConvertSoftMax8ToSoftMax1",
+            "ConvertToCPUSpecificOpset",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+            "DecompressionHandling",
+            "FullyConnectedBiasFusion",
+            "FuseTransposeBrgemm",
+            "LinOpSequenceFusion",
+            "MultiplyFusions",
+            "RMSFusion",
+            "RoPEFusion",
+            "RoPEFusionLtxVideo",
+            "SDPASubgraphFusion",
+            "Snippets",
+            "Tokenization",
+        ],
+    }
+
+
 if is_diffusers_version(">=", "0.37.0"):
     ARCH_TO_EXPECTED_TRANSFORMATIONS["z-image"] = {
         "model_class": "OVZImagePipeline",

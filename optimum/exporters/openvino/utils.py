@@ -603,6 +603,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "videochat_flash_qwen",
     "deepseek_ocr2",
     "qwen3_omni_moe",
+    "qwen3_asr",
     "muse_glimmer",
 ]
 
