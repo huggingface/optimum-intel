@@ -10024,7 +10024,7 @@ class Qwen3DFlashAttention(Qwen3Attention):
         query_states = query_states * block_cos.unsqueeze(1) + qwen3_rotate_half(query_states) * block_sin.unsqueeze(1)
         # zero queries for the context rows: attention needs one query per key row
         all_queries = query_states.new_zeros(batch_size * seq_len, num_heads, self.head_dim)
-        all_queries[block_rows] = query_states.transpose(1, 2)[0]
+        all_queries.index_put_((block_rows,), query_states.transpose(1, 2)[0])
         query_states = all_queries.view(batch_size, seq_len, num_heads, self.head_dim).transpose(1, 2)
 
         if past_key_values is not None:
@@ -10080,8 +10080,7 @@ class Qwen3DFlashDecoderLayer(nn.Module):
         if self.attention_conv is not None:
             block_states, attention_kernel = self.attention_conv.prepare(block_states, block_tap_masks)
         # attention input of every row: target features, with the normalized block rows written in
-        attention_input = target_hidden.flatten(0, 1).clone()
-        attention_input[block_rows] = block_states
+        attention_input = target_hidden.flatten(0, 1).clone().index_put_((block_rows,), block_states)
         hidden_states = self.self_attn(
             hidden_states=attention_input.view_as(target_hidden),
             block_states=block_states,
@@ -10184,7 +10183,8 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
         # target features of every row; the layers use them only for the context rows' keys and values
         target_hidden = self.hidden_norm(self.fc(hidden_states.to(noise_states.dtype)))
         # indices of the block rows in flattened [batch * seq] order, which fits both [1, seq] (stateful SDPA)
-        # and [tokens, 1] (PagedAttention); empty for a context-only prompt chunk
+        # and [tokens, 1] (PagedAttention); empty for a context-only prompt chunk. Rows are written with index_put_:
+        # item assignment views a one-row value without its leading dimension, which the trace freezes as a shape.
         block_rows = torch.nonzero(token_type_ids.flatten() == 1).squeeze(-1)
         use_cache = use_cache if use_cache is not None else self.config.use_cache
         if use_cache:
@@ -10229,7 +10229,7 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
             )
         # write the block rows back into all rows; the caller ignores the context rows, which stay zero
         last_hidden_state = target_hidden.new_zeros(target_hidden.shape).flatten(0, 1)
-        last_hidden_state[block_rows] = self.norm(noise_states)
+        last_hidden_state.index_put_((block_rows,), self.norm(noise_states))
         return BaseModelOutputWithPast(
             last_hidden_state=last_hidden_state.view_as(target_hidden),
             past_key_values=past_key_values if use_cache else None,
@@ -10313,7 +10313,7 @@ def _muse_glimmer_assistant_attention_forward(
     query_states = query_states * block_cos.unsqueeze(1) + rotate_half(query_states) * block_sin.unsqueeze(1)
     # zero queries for the context rows: attention needs one query per key row
     all_queries = query_states.new_zeros(batch_size * seq_len, num_heads, head_dim)
-    all_queries[block_rows] = query_states.transpose(1, 2)[0]
+    all_queries.index_put_((block_rows,), query_states.transpose(1, 2)[0])
     query_states = all_queries.view(batch_size, seq_len, num_heads, head_dim).transpose(1, 2)
 
     if past_key_values is not None:
@@ -10351,8 +10351,7 @@ def _muse_glimmer_assistant_decoder_layer_forward(
     residual = hidden_states
     block_states = layer.input_layernorm(hidden_states)
     # attention input of every row: target features, with the normalized block rows written in
-    attention_input = target_hidden.flatten(0, 1).clone()
-    attention_input[block_rows] = block_states
+    attention_input = target_hidden.flatten(0, 1).clone().index_put_((block_rows,), block_states)
     hidden_states = _muse_glimmer_assistant_attention_forward(
         layer.self_attn,
         attention_input.view_as(target_hidden),
@@ -10399,7 +10398,9 @@ def get_muse_glimmer_assistant_draft_model_class():
             # target features of every row; the layers use them only for the context rows' keys and values
             target_hidden = self.encoder(hidden_states.to(inputs_embeds.dtype))
             # indices of the block rows in flattened [batch * seq] order, which fits both [1, seq] (stateful SDPA)
-            # and [tokens, 1] (PagedAttention); empty for a context-only prompt chunk
+            # and [tokens, 1] (PagedAttention); empty for a context-only prompt chunk. Rows are written with
+            # index_put_: item assignment views a one-row value without its leading dimension, which the trace
+            # freezes as a shape.
             block_rows = torch.nonzero(token_type_ids.flatten() == 1).squeeze(-1)
             if use_cache and not isinstance(past_key_values, Cache):
                 # no config: the sliding layers keep every row, and the caller rolls the block rows back
@@ -10430,7 +10431,7 @@ def get_muse_glimmer_assistant_draft_model_class():
                 )
             # write the block rows back into all rows; the caller ignores the context rows, which stay zero
             last_hidden_state = target_hidden.new_zeros(target_hidden.shape).flatten(0, 1)
-            last_hidden_state[block_rows] = self.norm(noise_states)
+            last_hidden_state.index_put_((block_rows,), self.norm(noise_states))
             return BaseModelOutputWithPast(
                 last_hidden_state=last_hidden_state.view_as(target_hidden),
                 past_key_values=past_key_values if use_cache else None,
