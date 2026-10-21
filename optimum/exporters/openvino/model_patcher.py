@@ -19,6 +19,7 @@ import json
 import logging
 import math
 import os
+import sys
 import types
 from dataclasses import dataclass
 from types import SimpleNamespace
@@ -13095,6 +13096,9 @@ class MiniCPMV4_7VisionEmbeddingsPatcher(ModelPatcher):
 #   * an explicit additive attention mask built from the 2D mask, instead of
 #     `create_causal_mask` + `F.scaled_dot_product_attention`.
 # The architecture has no positional encoding, so `position_ids` is not an input.
+#
+# Reference implementation (remote code in the checkpoint, pinned to the released revision):
+# https://huggingface.co/KRAFTON/Raon-1-mini-preview/blob/8d2ced8f09f4ef1733a18b553ad580c3bbfb33b4/modeling_raon1_mini.py
 
 
 def _raon1_mini_attention_bias(attention_mask: torch.Tensor, sequence_length: int, dtype: torch.dtype):
@@ -13429,8 +13433,6 @@ class Raon1MiniModelPatcher(OVDecoderModelPatcher):
         # The Raon_mHC chart constants are built on first use and memoised in a module level dict.
         # Fill the cache before tracing, otherwise the constants are built by traced in-place ops on
         # the first trace and returned directly on the trace check, which makes the two graphs differ.
-        import sys
-
         remote_module = sys.modules[type(self._model.model).__module__]
         num_streams = self.real_config._config.raon_mhc_streams
         for device in {parameter.device for parameter in self._model.parameters()}:
