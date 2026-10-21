@@ -11523,28 +11523,21 @@ def _ltx2_apply_split_rotary_emb(x, freqs):
     """
     cos, sin = freqs
     x_dtype = x.dtype
+    # Take the half head dim from cos, not from x: it stays static in the IR, which OpenVINO's RoPE fusion requires.
+    r = cos.shape[-1]
 
     if x.ndim == 3 and cos.ndim == 4:
         b, h, t, _ = cos.shape
-        x = x.reshape(b, t, h, -1).swapaxes(1, 2)
+        x = x.reshape(b, t, h, 2 * r).swapaxes(1, 2)
         needs_reshape = True
     else:
         needs_reshape = False
 
-    last = x.shape[-1]
-    r = last // 2
-
-    split_x = x.reshape(*x.shape[:-1], 2, r).float()
-    first_x = split_x[..., :1, :]
-    second_x = split_x[..., 1:, :]
-
-    cos_u = cos.unsqueeze(-2)
-    sin_u = sin.unsqueeze(-2)
-
-    first_out = first_x * cos_u - sin_u * second_x
-    second_out = second_x * cos_u + sin_u * first_x
-
-    out = torch.cat([first_out, second_out], dim=-2).reshape(*split_x.shape[:-2], last)
+    # Canonical rotate-half form (x * cos + rotate_half(x) * sin), which OpenVINO CPU fuses into a RoPE node.
+    x = x.float()
+    cos = torch.cat([cos, cos], dim=-1)
+    sin = torch.cat([sin, sin], dim=-1)
+    out = x * cos + torch.cat([-x[..., r:], x[..., :r]], dim=-1) * sin
 
     if needs_reshape:
         out = out.swapaxes(1, 2).reshape(b, t, -1)
