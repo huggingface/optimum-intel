@@ -594,8 +594,10 @@ class MarkovHeadOpenVINOConfig(OpenVINOConfig):
 
     DUMMY_INPUT_GENERATOR_CLASSES = (Eagle3DummyGenerator,)
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-    # Tells `convert.py` to stamp the DFlash RT-info block onto the exported graph.
+    # Tells `convert.py` to stamp the DFlash RT-info block onto the exported graph,
+    # the Markov head block rather than the draft one, and to skip the decoder runtime options.
     dflash = True
+    markov_head_model = True
 
     def __init__(
         self,
@@ -614,7 +616,6 @@ class MarkovHeadOpenVINOConfig(OpenVINOConfig):
             preprocessors=preprocessors,
         )
         self.markov_head = markov_head
-        self.markov_head_top_k = markov_head.top_k
         self.gated = markov_head.markov_head_type == DFLASH2_MARKOV_HEAD_TYPE
 
     @property

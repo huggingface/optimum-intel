@@ -122,7 +122,7 @@ def _set_runtime_options(
         if not hasattr(sub_export_config, "runtime_options"):
             sub_export_config.runtime_options = {}
         # A Markov head is not a decoder; the plugins apply these options when they compile a model.
-        if getattr(sub_export_config, "markov_head_top_k", None) is not None:
+        if getattr(sub_export_config, "markov_head_model", False):
             continue
         uses_decoder_runtime_options = (
             "text-generation" in task
@@ -178,7 +178,7 @@ def _save_model(
             config._config,
             candidate_position_offset=getattr(config, "candidate_position_offset", 1),
             markov_head=getattr(config, "markov_head", None),
-            markov_head_top_k=getattr(config, "markov_head_top_k", None),
+            markov_head_model=getattr(config, "markov_head_model", False),
         )
     if (
         source_model is not None
@@ -1062,7 +1062,7 @@ def _add_dflash_mode_to_rt_info(
     hf_config: "PretrainedConfig",
     candidate_position_offset: int,
     markov_head: Optional[MarkovHeadSpec] = None,
-    markov_head_top_k: Optional[int] = None,
+    markov_head_model: bool = False,
 ) -> Model:
     """
     Add DFlash metadata to DFlash draft model.
@@ -1072,14 +1072,14 @@ def _add_dflash_mode_to_rt_info(
     a DSpark draft with markov_rank > 0, or a DFlash-2 draft, whose candidate selector is a gated Markov head)
     also gets markov_rank and markov_head_type, which tell runtimes to load its Markov head model.
 
-    With `markov_head_top_k`, the model is the Markov head model of the draft instead. It is not marked
+    With `markov_head_model`, the model is the Markov head model of the draft instead. It is not marked
     as a draft (dflash_mode marks the draft backbone): dflash/interface names its input/output contract,
     dflash/top_k is the K of its TopK. It repeats markov_rank and markov_head_type so that runtimes can check
     that it belongs to the draft backbone next to it.
     """
-    if markov_head_top_k is not None:
+    if markov_head_model:
         model.set_rt_info(MARKOV_HEAD_INTERFACE, ["dflash", "interface"])
-        model.set_rt_info(str(markov_head_top_k), ["dflash", "top_k"])
+        model.set_rt_info(str(markov_head.top_k), ["dflash", "top_k"])
         model.set_rt_info(str(markov_head.markov_rank), ["dflash", "markov_rank"])
         model.set_rt_info(markov_head.markov_head_type, ["dflash", "markov_head_type"])
         model.set_rt_info(str(hf_config.vocab_size), ["dflash", "vocab_size"])
