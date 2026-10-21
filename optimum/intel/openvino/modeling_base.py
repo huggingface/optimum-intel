@@ -13,6 +13,7 @@
 #  limitations under the License.
 import logging
 import os
+import shutil
 from pathlib import Path
 from tempfile import gettempdir
 from typing import Dict, List, Optional, Union
@@ -403,11 +404,22 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
 
         if isinstance(file_name, str):
             file_name = Path(file_name)
-        model = (
-            core.read_model(file_name.resolve(), file_name.with_suffix(".bin").resolve())
-            if not file_name.suffix == ".onnx"
-            else convert_model(file_name)
-        )
+        if file_name.suffix == ".onnx":
+            model = convert_model(file_name)
+        else:
+            xml_path, bin_path = file_name.resolve(), file_name.with_suffix(".bin").resolve()
+            try:
+                model = core.read_model(xml_path, bin_path)
+            except RuntimeError as e:
+                sizes = ", ".join(
+                    f"{p.name} ({p.stat().st_size} bytes)" if p.exists() else f"{p.name} (missing)"
+                    for p in (xml_path, bin_path)
+                )
+                free = shutil.disk_usage(xml_path.parent).free
+                raise RuntimeError(
+                    f"Unable to read the OpenVINO model {xml_path}. The IR files may be truncated or corrupt, "
+                    f"for example if the export ran out of disk space: {sizes}, {free} bytes free on this disk."
+                ) from e
         if file_name.suffix == ".onnx":
             model = fix_op_names_duplicates(model)  # should be called during model conversion to IR
 
