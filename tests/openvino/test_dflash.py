@@ -56,6 +56,7 @@ from optimum.exporters.openvino.model_patcher import (
 )
 from optimum.intel.openvino.utils import TemporaryDirectory
 from optimum.intel.utils.import_utils import is_transformers_version
+from optimum.utils.input_generators import DummyTextInputGenerator
 
 
 def _per_row_inputs(config, context_length, block_length, committed_length):
@@ -1187,7 +1188,18 @@ class DFlashPagedAttentionTest(unittest.TestCase):
 
     @staticmethod
     def _export_draft(model, output_dir):
-        _export_draft(model, output_dir, task="text-generation-with-past", stateful=True)
+        """Export traced with a single block row, the trace in which a one-row value could fix a shape."""
+        generate = DummyTextInputGenerator.generate
+
+        def generate_one_block_row(generator, input_name, *args, **kwargs):
+            if input_name != "token_type_ids":
+                return generate(generator, input_name, *args, **kwargs)
+            token_type_ids = torch.zeros(generator.batch_size, generator.sequence_length, dtype=torch.int64)
+            token_type_ids[:, -1] = 1
+            return token_type_ids
+
+        with patch.object(DummyTextInputGenerator, "generate", generate_one_block_row):
+            _export_draft(model, output_dir, task="text-generation-with-past", stateful=True)
         return output_dir / "openvino_model.xml"
 
     @staticmethod
