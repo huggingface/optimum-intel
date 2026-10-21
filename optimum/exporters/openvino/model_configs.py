@@ -39,7 +39,9 @@ from optimum.exporters.openvino.config import (
     VisionOpenVINOConfig,
 )
 from optimum.exporters.openvino.dflash_utils import (
+    DFLASH2_MARKOV_HEAD_TYPE,
     DFLASH_ARCHITECTURES,
+    MarkovHeadSpec,
     config_architecture,
     dflash_candidate_position_offset,
     markov_head_spec,
@@ -511,10 +513,12 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
         )
         self.dflash = config_architecture(config) in DFLASH_ARCHITECTURES
         self.dflash2 = False
+        self.markov_head = None
         if self.dflash:
             self.dflash2 = parse_and_validate_dflash_config(config).version == 2
             self.candidate_position_offset = dflash_candidate_position_offset(config)
-            if markov_head_spec(config) is not None:
+            self.markov_head = markov_head_spec(config)
+            if self.markov_head is not None:
                 # The Markov head is exported as a separate model next to the draft backbone.
                 self.SUPPORTED_BEHAVIORS = ["markov_head"]
             # DFlash draft checkpoints still advertise model_type="qwen3"; the
@@ -562,9 +566,10 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
         return super().outputs
 
     def with_behavior(self, behavior: str):
-        if behavior == "markov_head":
+        if behavior == "markov_head" and self.markov_head is not None:
             return MarkovHeadOpenVINOConfig(
                 self._config,
+                self.markov_head,
                 task="feature-extraction",
                 int_dtype=self.int_dtype,
                 float_dtype=self.float_dtype,
@@ -573,8 +578,8 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
         raise ValueError(f"Unsupported behavior {behavior} for {type(self).__name__}.")
 
     def get_model_for_behavior(self, model, behavior: str):
-        if behavior == "markov_head":
-            return model.markov_head_for_export(markov_head_spec(model.config).top_k)
+        if behavior == "markov_head" and self.markov_head is not None:
+            return model.markov_head_for_export(self.markov_head.top_k)
         raise ValueError(f"Unsupported behavior {behavior} for {type(self).__name__}.")
 
 
@@ -595,6 +600,7 @@ class MarkovHeadOpenVINOConfig(OpenVINOConfig):
     def __init__(
         self,
         config: PretrainedConfig,
+        markov_head: MarkovHeadSpec,
         task: str = "feature-extraction",
         int_dtype: str = "int64",
         float_dtype: str = "fp32",
@@ -607,11 +613,9 @@ class MarkovHeadOpenVINOConfig(OpenVINOConfig):
             float_dtype=float_dtype,
             preprocessors=preprocessors,
         )
-        markov_head = markov_head_spec(config)
-        if markov_head is None:
-            raise ValueError("The Markov head model requires a DFlash-2 draft or a DSpark draft with markov_rank > 0.")
+        self.markov_head = markov_head
         self.markov_head_top_k = markov_head.top_k
-        self.gated = parse_and_validate_dflash_config(config).version == 2
+        self.gated = markov_head.markov_head_type == DFLASH2_MARKOV_HEAD_TYPE
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:

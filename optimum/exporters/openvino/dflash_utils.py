@@ -254,10 +254,6 @@ def parse_and_validate_dspark_config(config: PretrainedConfig) -> DSparkConfig:
     )
 
 
-def markov_head_default_top_k(config: PretrainedConfig) -> int:
-    return min(MARKOV_HEAD_DEFAULT_TOP_K, config.vocab_size)
-
-
 @dataclass(frozen=True)
 class MarkovHeadSpec:
     markov_rank: int
@@ -280,7 +276,9 @@ def markov_head_spec(config: PretrainedConfig) -> MarkovHeadSpec | None:
         if dspark_config.markov_rank == 0:
             return None
         return MarkovHeadSpec(
-            dspark_config.markov_rank, dspark_config.markov_head_type, markov_head_default_top_k(config)
+            dspark_config.markov_rank,
+            dspark_config.markov_head_type,
+            min(MARKOV_HEAD_DEFAULT_TOP_K, config.vocab_size),
         )
     if DFLASH_ARCHITECTURE_VERSIONS.get(architecture) == 2:
         dflash_config = parse_and_validate_dflash_config(config, expected_version=2).values

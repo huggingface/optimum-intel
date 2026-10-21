@@ -32,7 +32,7 @@ from openvino.tools.ovc import convert_model
 from optimum.exporters.openvino.dflash_utils import (
     DFLASH2_GPU_MIN_ACTIVATIONS_SCALE_FACTOR,
     MARKOV_HEAD_INTERFACE,
-    markov_head_spec,
+    MarkovHeadSpec,
     parse_and_validate_dflash_config,
 )
 from optimum.exporters.openvino.utils import (
@@ -177,6 +177,7 @@ def _save_model(
             model,
             config._config,
             candidate_position_offset=getattr(config, "candidate_position_offset", 1),
+            markov_head=getattr(config, "markov_head", None),
             markov_head_top_k=getattr(config, "markov_head_top_k", None),
         )
     if (
@@ -1060,22 +1061,22 @@ def _add_dflash_mode_to_rt_info(
     model: Model,
     hf_config: "PretrainedConfig",
     candidate_position_offset: int,
+    markov_head: Optional[MarkovHeadSpec] = None,
     markov_head_top_k: Optional[int] = None,
 ) -> Model:
     """
     Add DFlash metadata to DFlash draft model.
 
     Marks model as DFlash draft model and adds DFlash configuration to the model including
-    mask token id, target layer ids, and candidate position offset. A draft with a Markov head (a DSpark draft
-    with markov_rank > 0, or a DFlash-2 draft, whose candidate selector is a gated Markov head) also gets
-    markov_rank and markov_head_type, which tell runtimes to load its Markov head model.
+    mask token id, target layer ids, and candidate position offset. A draft with a Markov head (`markov_head`:
+    a DSpark draft with markov_rank > 0, or a DFlash-2 draft, whose candidate selector is a gated Markov head)
+    also gets markov_rank and markov_head_type, which tell runtimes to load its Markov head model.
 
     With `markov_head_top_k`, the model is the Markov head model of the draft instead. It is not marked
     as a draft (dflash_mode marks the draft backbone): dflash/interface names its input/output contract,
     dflash/top_k is the K of its TopK. It repeats markov_rank and markov_head_type so that runtimes can check
     that it belongs to the draft backbone next to it.
     """
-    markov_head = markov_head_spec(hf_config)
     if markov_head_top_k is not None:
         model.set_rt_info(MARKOV_HEAD_INTERFACE, ["dflash", "interface"])
         model.set_rt_info(str(markov_head_top_k), ["dflash", "top_k"])
