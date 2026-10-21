@@ -2245,6 +2245,8 @@ class OVQuantizationConfigTest(unittest.TestCase):
             ),
         ),
         (OVWeightQuantizationConfig(bits=4, dataset=["hello world", "i'm alive"]),),
+        (OVWeightQuantizationConfig(bits=2, sym=True, narrow_range=True),),
+        (OVWeightQuantizationConfig(dtype="int1", group_size=128),),
         (
             OVQuantizationConfig(
                 ignored_scope={"names": ["op_name"]},
@@ -2317,6 +2319,8 @@ class OVQuantizationConfigTest(unittest.TestCase):
             OVWeightQuantizationConfig,
             None,
         ),
+        (dict(bits=2, sym=True, narrow_range=True), OVWeightQuantizationConfig, None),
+        (dict(dtype="int1", group_size=128), OVWeightQuantizationConfig, None),
         (dict(), OVWeightQuantizationConfig, "Can't determine type of OV quantization config"),
         (
             dict(ignored_scope={"names": ["op_name"]}),
@@ -2507,6 +2511,34 @@ class OVQuantizationConfigTest(unittest.TestCase):
         custom_configuration = self.DEFAULT_CONFIGURATIONS[config_id]
         prepared_config = _quantization_config_from_dict(custom_configuration)
         self.compare_config_dict_to_config_object(custom_configuration, prepared_config)
+
+    def test_sign_weight_format(self):
+        config = OVWeightQuantizationConfig(dtype="int1", group_size=128, all_layers=True)
+        nncf_dict = config.to_nncf_dict()
+        self.assertEqual(config.bits, 1)
+        self.assertTrue(config.sym)
+        self.assertEqual(nncf_dict["mode"], nncf.CompressWeightsMode.INT1_SYM)
+        self.assertEqual(nncf_dict["group_size"], 128)
+        self.assertTrue(nncf_dict["all_layers"])
+        self.assertEqual(nncf_dict["ratio"], 1.0)
+
+        bits_only = OVWeightQuantizationConfig(bits=1)
+        self.assertEqual(bits_only.dtype, "int1")
+        self.assertTrue(bits_only.sym)
+        self.assertEqual(bits_only.to_nncf_dict()["mode"], nncf.CompressWeightsMode.INT1_SYM)
+
+    def test_sign_weight_format_rejections(self):
+        for kwargs, message in (
+            ({"quant_method": OVQuantizationMethod.AWQ}, "does not support awq"),
+            ({"scale_estimation": True}, "does not support scale_estimation"),
+            ({"gptq": True}, "does not support gptq"),
+            ({"lora_correction": True}, "does not support lora_correction"),
+            ({"dataset": "wikitext2"}, "does not support dataset"),
+            ({"narrow_range": True}, "`narrow_range` applies to the symmetric integer weight formats"),
+        ):
+            with pytest.raises(ValueError) as exc_info:
+                OVWeightQuantizationConfig(dtype="int1", **kwargs)
+            self.assertIn(message, str(exc_info.value))
 
     def test_narrow_range_reaches_nncf_advanced_parameters(self):
         narrow = OVWeightQuantizationConfig(
