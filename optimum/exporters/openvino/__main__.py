@@ -27,11 +27,12 @@ from requests.exceptions import ConnectionError as RequestsConnectionError
 from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
 from transformers.utils import is_torch_available
 
-from openvino import Core, Type, save_model
+from openvino import Core, Model, Type, save_model
 from optimum.exporters.openvino.base import OpenVINOConfig
 from optimum.exporters.openvino.dflash_utils import (
     DFLASH_ARCHITECTURES,
     config_architecture,
+    is_dflash_draft_model,
     parse_and_validate_dflash_config,
 )
 from optimum.exporters.tasks import TasksManager
@@ -123,7 +124,7 @@ def infer_task(
                     token=token,
                     library_name=library_name,
                 )
-            except KeyError as e:
+            except (KeyError, RuntimeError) as e:
                 try:
                     config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=trust_remote_code)
                     with_past_arch_list = [
@@ -131,6 +132,7 @@ def infer_task(
                         "Zamba2ForCausalLM",
                         "LlamaForCausalLMEagle3",
                         "Eagle3LlamaForCausalLM",
+                        *_NATIVE_DRAFT_MODEL_CLASSES,
                     ]
                     if any(arch in config.architectures for arch in with_past_arch_list):
                         # VLM Eagle3 models (targeting VLM architectures like Qwen3-VL)
@@ -142,6 +144,8 @@ def infer_task(
                             task = "image-text-to-text"
                         else:
                             task = "text-generation-with-past"
+                    else:
+                        raise e
                 except Exception:
                     raise KeyError(
                         f"The task could not be automatically inferred. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
@@ -181,6 +185,8 @@ def infer_task(
                     raise e
             else:
                 raise
+        if original_task == "auto" and config_architecture(config) in _NATIVE_DRAFT_MODEL_CLASSES:
+            task = "text-generation-with-past"
         if hasattr(config, "export_model_type"):
             model_type = config.export_model_type
         else:
@@ -863,6 +869,7 @@ def _main_quantize(
             `model_kwargs={"output_attentions": True}` is passed).
 
     """
+    from optimum.intel.openvino.configuration import OVWeightQuantizationConfig
     from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
 
     # Step 0. Infer task and library name if needed
@@ -950,6 +957,16 @@ def _main_quantize(
     )
 
     # Step 3. Apply quantization and save the quantized model
+    if (
+        isinstance(quantization_config, OVWeightQuantizationConfig)
+        and quantization_config.bits == 4
+        and quantization_config.all_layers is None
+        and isinstance(getattr(model, "model", None), Model)
+        and is_dflash_draft_model(model.model)
+    ):
+        # DFlash drafts have no embeddings or lm_head, so NNCF's "last MatMul stays int8" rule would hit a decoder layer.
+        quantization_config = quantization_config.clone()
+        quantization_config.all_layers = True
     model._apply_quantization(
         quantization_config,
         compile_only=False,

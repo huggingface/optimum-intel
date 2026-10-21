@@ -20,6 +20,7 @@ from typing import Any, Dict
 
 from transformers import PretrainedConfig
 
+from openvino import Model
 from optimum.intel.utils.import_utils import is_transformers_version
 
 
@@ -186,6 +187,11 @@ def _validate_dflash2_config(config: PretrainedConfig, dflash_config: Dict[str, 
 
 def _is_positive_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def is_dflash_draft_model(ov_model: Model) -> bool:
+    """Whether an IR was exported as a DFlash draft backbone (a Markov head model is not one)."""
+    return ov_model.has_rt_info(["dflash_mode"]) and ov_model.get_rt_info(["dflash_mode"]).value == "True"
 
 
 def parse_and_validate_dflash_config(config: PretrainedConfig, expected_version: int | None = None) -> DFlashConfig:

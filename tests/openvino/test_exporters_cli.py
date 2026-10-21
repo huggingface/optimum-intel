@@ -1098,20 +1098,8 @@ class OVCLIExportTestCase(unittest.TestCase):
     def test_exporters_cli_dflash2_two_ir_package(self):
         model_path = get_dflash2_model_path()
         with TemporaryDirectory() as tmpdir:
-            subprocess.run(
-                [
-                    "optimum-cli",
-                    "export",
-                    "openvino",
-                    "--model",
-                    model_path,
-                    "--task",
-                    "text-generation-with-past",
-                    "--trust-remote-code",
-                    tmpdir,
-                ],
-                check=True,
-            )
+            # neither --task nor --trust-remote-code: the task is inferred and the draft is loaded natively
+            subprocess.run(["optimum-cli", "export", "openvino", "--model", model_path, tmpdir], check=True)
             self.assertEqual(
                 sorted(path.name for path in Path(tmpdir).glob("openvino_*model.xml")),
                 ["openvino_markov_head_model.xml", "openvino_model.xml"],
@@ -1160,7 +1148,6 @@ class OVCLIExportTestCase(unittest.TestCase):
                     "text-generation-with-past",
                     "--weight-format",
                     weight_format,
-                    "--trust-remote-code",
                 ]
                 if weight_format == "int4":
                     command.extend(["--group-size", "-1"])
@@ -1172,6 +1159,11 @@ class OVCLIExportTestCase(unittest.TestCase):
                 markov_model = core.read_model(Path(tmpdir) / "openvino_markov_head_model.xml")
                 self.assertTrue(draft_model.has_rt_info(["nncf"]))
                 self.assertFalse(markov_model.has_rt_info(["nncf"]))
+                if weight_format == "int4":
+                    # without --all-layers too: the draft has no lm_head for NNCF to keep in int8
+                    _, num_weight_nodes = get_num_quantized_nodes(draft_model)
+                    self.assertGreater(num_weight_nodes["int4"], 0)
+                    self.assertEqual(num_weight_nodes["int8"], 0)
 
     @unittest.skipUnless(is_transformers_version(">=", "4.57"), "DFlash-2 requires Transformers 4.57 or newer")
     def test_exporters_cli_dflash2_fp16_applies_to_markov_head(self):
@@ -1188,7 +1180,6 @@ class OVCLIExportTestCase(unittest.TestCase):
                     "text-generation-with-past",
                     "--weight-format",
                     "fp16",
-                    "--trust-remote-code",
                     tmpdir,
                 ],
                 check=True,
@@ -1889,17 +1880,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         checkpoint_types = None
         for weight_args in cases:
             with self.subTest(weight_args=weight_args), TemporaryDirectory() as tmpdir:
-                command = [
-                    "optimum-cli",
-                    "export",
-                    "openvino",
-                    "--model",
-                    model_path,
-                    "--task",
-                    "text-generation-with-past",
-                    "--trust-remote-code",
-                    *weight_args,
-                ]
+                command = ["optimum-cli", "export", "openvino", "--model", model_path, *weight_args]
                 subprocess.run([*command, tmpdir], check=True)
 
                 core = ov.Core()
@@ -1940,7 +1921,6 @@ class OVCLIExportTestCase(unittest.TestCase):
                         model_path,
                         "--task",
                         "text-generation-with-past",
-                        "--trust-remote-code",
                         tmpdir,
                     ],
                     check=True,

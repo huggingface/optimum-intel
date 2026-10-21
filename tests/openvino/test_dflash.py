@@ -35,7 +35,7 @@ from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
 from utils_tests import MODEL_NAMES, get_dflash2_model_path, get_dspark_model_path
 
 from optimum.exporters.openvino import export_from_model
-from optimum.exporters.openvino.__main__ import main_export
+from optimum.exporters.openvino.__main__ import infer_task, main_export
 from optimum.exporters.openvino.convert import _get_submodels_and_export_configs, export_models
 from optimum.exporters.openvino.dflash_utils import (
     MARKOV_HEAD_DEFAULT_TOP_K,
@@ -351,7 +351,6 @@ class DSparkExportTest(unittest.TestCase):
                 MODEL_NAMES["qwen3_deepspec_dflash"],
                 output=output_dir,
                 task="text-generation",
-                trust_remote_code=True,
             )
             self.assertEqual([path.name for path in output_dir.glob("openvino_*model.xml")], ["openvino_model.xml"])
             draft_ir = ov.Core().read_model(output_dir / "openvino_model.xml")
@@ -666,6 +665,13 @@ class DFlash2ExportTest(unittest.TestCase):
                 }
             )
         self.assertTrue(expected_names.issubset(parameter_names))
+
+    def test_task_is_inferred_for_every_draft_architecture(self):
+        for model_path in (MODEL_NAMES["qwen3_dflash"], self._model_path(), get_dspark_model_path()):
+            with self.subTest(model_path=model_path):
+                self.assertEqual(
+                    infer_task("auto", model_path, library_name="transformers"), "text-generation-with-past"
+                )
 
     def test_config_normalization_and_validation(self):
         config = self._config()
