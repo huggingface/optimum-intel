@@ -40,6 +40,7 @@ from optimum.exporters.openvino.config import (
 )
 from optimum.exporters.openvino.dflash_utils import (
     DFLASH_ARCHITECTURES,
+    config_architecture,
     dflash_candidate_position_offset,
     markov_head_spec,
     parse_and_validate_dflash_config,
@@ -508,9 +509,7 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
             use_past_in_inputs=use_past_in_inputs,
             preprocessors=preprocessors,
         )
-        archs = getattr(config, "architectures", None)
-        architecture = archs[0] if isinstance(archs, list) and archs else None
-        self.dflash = architecture in DFLASH_ARCHITECTURES
+        self.dflash = config_architecture(config) in DFLASH_ARCHITECTURES
         self.dflash2 = False
         if self.dflash:
             self.dflash2 = parse_and_validate_dflash_config(config).version == 2

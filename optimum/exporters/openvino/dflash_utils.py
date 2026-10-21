@@ -70,9 +70,14 @@ class DFlashConfig:
     values: Dict[str, Any]
 
 
-def _detect_dflash_version(config: PretrainedConfig) -> int:
+def config_architecture(config: PretrainedConfig) -> str | None:
+    """architectures[0] of the config, or None when it names no architecture."""
     architectures = getattr(config, "architectures", None)
-    architecture = architectures[0] if isinstance(architectures, list) and architectures else None
+    return architectures[0] if isinstance(architectures, list) and architectures else None
+
+
+def _detect_dflash_version(config: PretrainedConfig) -> int:
+    architecture = config_architecture(config)
     if architecture not in DFLASH_ARCHITECTURE_VERSIONS:
         raise ValueError(
             "DFlash export requires architectures[0] to be "
@@ -254,21 +259,16 @@ class MarkovHeadSpec:
     top_k: int
 
 
-def _architecture(config: PretrainedConfig) -> str | None:
-    architectures = getattr(config, "architectures", None)
-    return architectures[0] if isinstance(architectures, list) and architectures else None
-
-
 def dflash_candidate_position_offset(config: PretrainedConfig) -> int:
     """The block row of the first drafted candidate: 1 after the anchor row, or 0 when the anchor row drafts it."""
-    if _architecture(config) in DSPARK_ARCHITECTURES:
+    if config_architecture(config) in DSPARK_ARCHITECTURES:
         return parse_and_validate_dspark_config(config).candidate_position_offset
     return 1
 
 
 def markov_head_spec(config: PretrainedConfig) -> MarkovHeadSpec | None:
     """The Markov head exported next to a DFlash draft backbone, or None for a draft without one."""
-    architecture = _architecture(config)
+    architecture = config_architecture(config)
     if architecture in DSPARK_ARCHITECTURES:
         dspark_config = parse_and_validate_dspark_config(config)
         if dspark_config.markov_rank == 0:

@@ -58,6 +58,7 @@ from optimum.exporters.openvino._ov_ops import convert_recurrent_attention_cell,
 from optimum.exporters.openvino.base import OpenVINOConfig
 from optimum.exporters.openvino.dflash_utils import (
     DFLASH_ARCHITECTURES,
+    config_architecture,
     parse_and_validate_dflash_config,
     parse_and_validate_dspark_config,
 )
@@ -9133,9 +9134,7 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
         if not hasattr(config, "_orig_attn_implementation"):
             config._orig_attn_implementation = config._attn_implementation
         config._attn_implementation = "sdpa"
-        architectures = getattr(config, "architectures", None)
-        architecture = architectures[0] if isinstance(architectures, list) and architectures else None
-        if architecture in DFLASH_ARCHITECTURES:
+        if config_architecture(config) in DFLASH_ARCHITECTURES:
             dflash_config = parse_and_validate_dflash_config(config, expected_version=self.dflash_version).values
         else:
             dflash_config = getattr(config, "dflash_config", None) or config.to_dict()
