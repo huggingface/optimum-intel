@@ -448,7 +448,8 @@ EAGLE3_VLM_MODELS = {
 # (openvino_mtp_model.xml), so the draft and target are the same model directory.
 MTP_VLM_MODELS = {
     "qwen3_5_mtp": ("qwen3_5_mtp", "qwen3_5_mtp"),
-    "qwen3_5_moe_mtp": ("qwen3_5_moe_mtp", "qwen3_5_moe_mtp", "qwen3_5_moe_mtp_legacy_weights"),
+    "qwen3_5_moe_mtp": ("qwen3_5_moe_mtp", "qwen3_5_moe_mtp"),
+    "qwen3_5_moe_mtp_legacy_weights": ("qwen3_5_moe_mtp_legacy_weights", "qwen3_5_moe_mtp_legacy_weights"),
 }
 
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
