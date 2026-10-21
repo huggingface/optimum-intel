@@ -234,8 +234,9 @@ class Eagle3DummyGenerator(DummyInputGenerator):
     intermediate hidden-state outputs of a *main (target) model*, which are
     required by the Eagle-3 draft model during speculative decoding.
 
-    It also produces the inputs of the Markov head model of a DFlash draft: the dense step and the Top-K
-    lattice over `batch_size` draft blocks of `sequence_length` rows each, packed back to back.
+    It also generates the inputs of the Markov head model exported next to a DFlash draft, for both its dense
+    step and its Top-K lattice. The lattice inputs cover `batch_size` draft blocks of `sequence_length` rows
+    each, packed back to back.
     """
 
     SUPPORTED_INPUT_NAMES = (
