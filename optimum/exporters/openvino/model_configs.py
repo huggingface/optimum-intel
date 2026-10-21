@@ -636,20 +636,17 @@ class MarkovHeadOpenVINOConfig(OpenVINOConfig):
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
-        if self.gated:
-            return {
-                "draft_logits": {0: "num_draft_rows"},  # draft logits of all blocks
-                "draft_hidden_states": {0: "num_draft_rows"},  # draft hidden states of all blocks
-                "anchor_token_ids": {0: "num_draft_blocks"},  # token before each block
-                "subsequence_begins": {0: "num_draft_blocks + 1"},  # start row of each block
-            }
-        return {
-            "prev_token_ids": {0: "num_prev_tokens"},  # previous tokens
+        inputs = {
             "draft_logits": {0: "num_draft_rows"},  # draft logits of all blocks
             "anchor_token_ids": {0: "num_draft_blocks"},  # token before each block
             # start row of each block, so that blocks of different lengths can be scored in one call
             "subsequence_begins": {0: "num_draft_blocks + 1"},
         }
+        if self.gated:
+            inputs["draft_hidden_states"] = {0: "num_draft_rows"}  # draft hidden states of all blocks
+        else:
+            inputs["prev_token_ids"] = {0: "num_prev_tokens"}  # previous tokens
+        return inputs
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
