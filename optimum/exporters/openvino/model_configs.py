@@ -115,6 +115,7 @@ from optimum.exporters.openvino.input_generators import (
     Qwen3ASRDummySeq2SeqPastKeyValuesGenerator,
     Qwen3NextDummyPastKeyValuesGenerator,
     QwenDummyPastKeyValuesGenerator,
+    Raon1MiniDummyPastKeyValuesGenerator,
     QwenImage21VaeDummyInputGenerator,
     SenseVoiceDummyInputGenerator,
     Zamba2DummyPastKeyValuesGenerator,
@@ -230,6 +231,7 @@ from optimum.exporters.openvino.model_patcher import (
     QwenImageTextEncoderModelPatcher,
     QwenImageTransformerModelPatcher,
     QwenImageVaeModelPatcher,
+    Raon1MiniModelPatcher,
     QwenModelPatcher,
     SAMModelPatcher,
     SanaTextEncoderModelPatcher,
@@ -8391,3 +8393,95 @@ class Qwen3TTSCodecDecoderOpenVINOConfig(Qwen3TTSComponentOpenVINOConfig):
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
         return {"waveform": {0: "batch_size", 2: "audio_length"}}
+
+
+@register_in_tasks_manager(
+    "raon1_mini",
+    *[
+        "text-generation",
+        "text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class Raon1MiniOpenVINOConfig(TextDecoderOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Raon1MiniDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = Raon1MiniDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    MIN_TRANSFORMERS_VERSION = "5.16"
+    _MODEL_PATCHER = Raon1MiniModelPatcher
+
+    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        if direction not in ["inputs", "outputs"]:
+            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+
+        if direction == "inputs":
+            decoder_sequence_name = "past_sequence_length"
+            cache_name_prefix = "cache_params.past"
+        else:
+            decoder_sequence_name = "past_sequence_length + sequence_length"
+            cache_name_prefix = "cache_params.present"
+
+        layer_types = self._normalized_config.config.layer_types
+        self.num_rda_layers = layer_types.count("linear_attention")
+        self.num_mla_layers = layer_types.count("full_attention")
+
+        for i in range(self.num_rda_layers):
+            inputs_or_outputs[f"{cache_name_prefix}.conv.{i}"] = {0: "batch_size"}
+            inputs_or_outputs[f"{cache_name_prefix}.ssm.{i}"] = {0: "batch_size"}
+
+        for i in range(self.num_mla_layers):
+            inputs_or_outputs[f"{cache_name_prefix}.key.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
+            inputs_or_outputs[f"{cache_name_prefix}.value.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            "attention_mask": {0: "batch_size", 1: "past_sequence_length + sequence_length"},
+        }
+        if self.use_past_in_inputs:
+            self.add_past_key_values(common_inputs, direction="inputs")
+        return common_inputs
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        common_outputs = OrderedDict({"logits": {0: "batch_size", 1: "sequence_length"}})
+        if self.use_past:
+            self.add_past_key_values(common_outputs, direction="outputs")
+        return common_outputs
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        dummy_inputs_generators = self._create_dummy_input_generator_classes(**kwargs)
+
+        dummy_inputs = {}
+        input_names = [key for key in self.inputs.keys() if not key.startswith("cache_params")]
+        if self.use_past_in_inputs:
+            input_names.extend(["cache_params"])
+
+        for input_name in input_names:
+            input_was_inserted = False
+            for dummy_input_gen in dummy_inputs_generators:
+                if dummy_input_gen.supports_input(input_name):
+                    dummy_inputs[input_name] = self.overwrite_shape_and_generate_input(
+                        dummy_input_gen,
+                        input_name,
+                        framework,
+                        input_shapes=kwargs,
+                    )
+                    input_was_inserted = True
+                    break
+            if not input_was_inserted:
+                raise RuntimeError(
+                    f'Could not generate dummy input for "{input_name}". Try adding a proper dummy input generator to the model OpenVINO config.'
+                )
+
+        # the attention mask spans the full context, past key cache plus the new tokens
+        cache_params = dummy_inputs.get("cache_params")
+        if cache_params:
+            past_length = cache_params[2 * self.num_rda_layers].shape[2]
+            input_ids = dummy_inputs["input_ids"]
+            dummy_inputs["attention_mask"] = torch.ones(
+                input_ids.shape[0], past_length + input_ids.shape[1], dtype=torch.int64
+            )
+
+        return dummy_inputs

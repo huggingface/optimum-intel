@@ -2985,3 +2985,66 @@ class DummyQwen3TTSComponentInputGenerator(DummyInputGenerator):
                 shape, max_value=self.config.codebook_size, framework=framework, dtype=int_dtype
             )
         raise ValueError(f"Unsupported input name {input_name} for {self.__class__.__name__}")
+
+
+class Raon1MiniDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
+    """
+    Generates dummy `cache_params` inputs for the raon1_mini hybrid RDA / MLA architecture.
+
+    The cache has one conv window (`[batch, 3 * rda_heads * rda_head_dim, conv_kernel - 1]`) and one
+    recurrent state (`[batch, rda_heads, rda_head_dim, rda_head_dim]`) per Raon Delta Attention
+    layer, and a key / value pair per NoPE gated MLA layer.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("cache_params",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            **kwargs,
+        )
+
+        config = normalized_config.config
+        rda_config = config.rda_config
+        layer_types = [
+            "linear_attention" if (index + 1) in rda_config["rda_layers"] else "full_attention"
+            for index in range(config.num_hidden_layers)
+        ]
+        self.num_rda_layers = layer_types.count("linear_attention")
+        self.num_mla_layers = layer_types.count("full_attention")
+        self.rda_heads = int(rda_config.get("num_heads", config.num_attention_heads))
+        self.rda_head_dim = int(rda_config.get("head_dim", config.hidden_size // config.num_attention_heads))
+        self.rda_conv_kernel = int(rda_config.get("conv_kernel_size", 4))
+        self.mla_heads = config.num_attention_heads
+        self.qk_head_dim = config.qk_nope_head_dim + config.qk_rope_head_dim
+        self.v_head_dim = config.v_head_dim
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        cache_params = []
+
+        rda_proj_size = self.rda_heads * self.rda_head_dim
+        conv_state_shape = (self.batch_size, 3 * rda_proj_size, self.rda_conv_kernel - 1)
+        recurrent_state_shape = (self.batch_size, self.rda_heads, self.rda_head_dim, self.rda_head_dim)
+        for _ in range(self.num_rda_layers):
+            cache_params.append(self.random_float_tensor(conv_state_shape, framework=framework, dtype=float_dtype))
+            cache_params.append(
+                self.random_float_tensor(recurrent_state_shape, framework=framework, dtype=float_dtype)
+            )
+
+        key_shape = (self.batch_size, self.mla_heads, self.sequence_length, self.qk_head_dim)
+        value_shape = (self.batch_size, self.mla_heads, self.sequence_length, self.v_head_dim)
+        for _ in range(self.num_mla_layers):
+            cache_params.append(self.random_float_tensor(key_shape, framework=framework, dtype=float_dtype))
+            cache_params.append(self.random_float_tensor(value_shape, framework=framework, dtype=float_dtype))
+
+        return cache_params

@@ -61,6 +61,9 @@ from .utils import (
 if is_transformers_version(">=", "4.55"):
     from transformers import Mxfp4Config
 
+if is_transformers_version(">=", "5.16"):
+    from transformers.utils.quantization_config import FineGrainedFP8Config
+
 FORCE_ATTN_MODEL_CLASSES = {"phi3_v": "eager", "gemma2": "sdpa", "llama4": "sdpa"}
 
 if TYPE_CHECKING:
@@ -424,6 +427,16 @@ def main_export(
         if quant_method == "mxfp4" and is_transformers_version(">=", "4.55"):
             dtype = torch.bfloat16
             loading_kwargs["quantization_config"] = Mxfp4Config(dequantize=True)
+
+        # a pre-quantized mxfp8 checkpoint (e.g. KRAFTON/Raon-1-mini-preview) is dequantized to bf16 too
+        if quant_method == "mxfp8":
+            if not is_transformers_version(">=", "5.16"):
+                raise RuntimeError(
+                    "Exporting an mxfp8 quantized model requires transformers 5.16 or newer to load and "
+                    "dequantize the checkpoint, please upgrade transformers, e.g. `pip install -U transformers`."
+                )
+            dtype = torch.bfloat16
+            loading_kwargs["quantization_config"] = FineGrainedFP8Config(dequantize=True)
 
         supported_quant_methods = ["gptq", "awq", "bitnet", "compressed-tensors"]
         do_quant_patching = quant_method in supported_quant_methods

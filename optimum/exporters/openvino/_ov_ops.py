@@ -266,3 +266,109 @@ def convert_recurrent_selective_ssm_cell(context):
     final_output = ops.concat([output_new, output_recurrent_state_new], 0)
 
     return [final_output.output(0)]
+
+
+# Conversion rule for the `RaonRDACellOp` operation in a Torch graph.
+#
+# Raon Delta Attention (RDA) is a value-first delta-rule linear attention: the recurrent
+# state is `[batch, heads, value_dim, key_dim]`, the decay is per key channel and the write
+# gate `beta` is a scalar per head:
+#       S_t = S_{t-1} * exp(log_alpha_t)                                  # [B, H, V, K]
+#       y_t = reduce_sum(S_t * k_t, axis=K)                               # [B, H, V]
+#       S_t = S_t + beta_t * (v_t - y_t) outer k_t                        # [B, H, V, K]
+#       o_t = reduce_sum(S_t * q_t, axis=K)                               # [B, H, V]
+# The token loop has no vectorized form that `torch.jit.trace` can represent, so it is
+# replaced with an `ov::Loop` here. The sliced `log_alpha` keeps the key-channel axis, which
+# is what makes the decay a per-channel scaling of the state.
+def convert_recurrent_rda_cell(context):
+    query = context.get_input(0)
+    key = context.get_input(1)
+    value = context.get_input(2)
+    log_alpha = context.get_input(3)
+    beta = context.get_input(4)
+    last_recurrent_state_old = context.get_input(5)
+
+    value_shape = ops.shape_of(value)
+    const_zero = ops.constant(0, dtype=np.float32)
+    core_attn_out = ops.broadcast(const_zero, value_shape)
+    const_two_out = ops.constant(2, dtype=np.int32)
+    const_zero_out = ops.constant(0, dtype=np.int32)
+    seq_len = ops.gather(value_shape, const_two_out, const_zero_out)
+
+    const_minus_one = ops.constant(-1, dtype=np.int32)
+    const_minus_two = ops.constant(-2, dtype=np.int32)
+    const_two = ops.constant(2, dtype=np.int32)
+
+    timestep_param = ops.parameter([], np.int32, "timestep")
+    q_t_param = ops.parameter([-1, -1, 1, -1], np.float32, "q_t")
+    k_t_param = ops.parameter([-1, -1, 1, -1], np.float32, "k_t")
+    v_t_param = ops.parameter([-1, -1, 1, -1], np.float32, "v_t")
+    log_alpha_t_param = ops.parameter([-1, -1, 1, -1], np.float32, "log_alpha_t")
+    beta_t_param = ops.parameter([-1, -1, 1], np.float32, "beta_t")
+    last_recurrent_state_t = ops.parameter([-1, -1, -1, -1], np.float32, "last_recurrent_state_t")
+    core_attn_out_t = ops.parameter([-1, -1, -1, -1], np.float32, "core_attn_out_t")
+
+    q_t = ops.squeeze(q_t_param, const_two)
+    k_t = ops.squeeze(k_t_param, const_two)
+    v_t = ops.squeeze(v_t_param, const_two)
+    log_alpha_t = ops.squeeze(log_alpha_t_param, const_two)
+    beta_t = beta_t_param
+
+    # per key-channel decay, broadcast over the value dimension of the state
+    decay_t = ops.unsqueeze(ops.exp(log_alpha_t), const_minus_two)
+    last_recurrent_state_in = ops.multiply(last_recurrent_state_t, decay_t)
+
+    key_row = ops.unsqueeze(k_t, const_minus_two)
+    kv_mem = ops.reduce_sum(ops.multiply(last_recurrent_state_in, key_row), const_minus_one, False)
+    delta = ops.multiply(ops.subtract(v_t, kv_mem), beta_t)
+    last_recurrent_state_delta = ops.multiply(ops.unsqueeze(delta, const_minus_one), key_row)
+    last_recurrent_state_in = ops.add(last_recurrent_state_in, last_recurrent_state_delta)
+
+    query_row = ops.unsqueeze(q_t, const_minus_two)
+    core_attn_update = ops.reduce_sum(ops.multiply(last_recurrent_state_in, query_row), const_minus_one, False)
+    core_attn_update = ops.unsqueeze(core_attn_update, const_minus_two)
+
+    timestep = ops.unsqueeze(timestep_param, const_zero_out)
+    core_attn_out_res = ops.scatter_update(core_attn_out_t, timestep, core_attn_update, const_two)
+    last_recurrent_state_res = last_recurrent_state_in
+
+    body_cond = ops.constant([True], dtype=bool)
+
+    body_model = ov.Model(
+        [body_cond, last_recurrent_state_res, core_attn_out_res],
+        [
+            timestep_param,
+            q_t_param,
+            k_t_param,
+            v_t_param,
+            log_alpha_t_param,
+            beta_t_param,
+            last_recurrent_state_t,
+            core_attn_out_t,
+        ],
+        "body_model",
+    )
+
+    seq_len = ops.convert(seq_len, "i32")
+    loop = ops.loop(seq_len, ops.constant(True, dtype="bool"))
+    loop.set_function(body_model)
+
+    loop.set_sliced_input(q_t_param, query, 0, 1, 1, -1, 2)
+    loop.set_sliced_input(k_t_param, key, 0, 1, 1, -1, 2)
+    loop.set_sliced_input(v_t_param, value, 0, 1, 1, -1, 2)
+    loop.set_sliced_input(log_alpha_t_param, log_alpha, 0, 1, 1, -1, 2)
+    loop.set_sliced_input(beta_t_param, beta, 0, 1, 1, -1, 2)
+    loop.set_merged_input(last_recurrent_state_t, last_recurrent_state_old, last_recurrent_state_res.output(0))
+    loop.set_merged_input(core_attn_out_t, core_attn_out.output(0), core_attn_out_res.output(0))
+    loop.set_special_body_ports([0, 0])
+
+    core_attn_out_new = loop.get_iter_value(core_attn_out_res.output(0), -1)
+    last_recurrent_state_new = loop.get_iter_value(last_recurrent_state_res.output(0), -1)
+
+    flatten_shape = ops.constant([-1], dtype=np.int32)
+    core_attn_out_new = ops.reshape(core_attn_out_new, flatten_shape, False)
+    last_recurrent_state_new = ops.reshape(last_recurrent_state_new, flatten_shape, False)
+
+    final_output = ops.concat([core_attn_out_new, last_recurrent_state_new], 0)
+
+    return [final_output.output(0)]

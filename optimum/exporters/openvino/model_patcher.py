@@ -53,7 +53,11 @@ from transformers.models.speecht5.modeling_speecht5 import SpeechT5EncoderWithSp
 from transformers.processing_utils import Unpack
 from transformers.utils import ModelOutput
 
-from optimum.exporters.openvino._ov_ops import convert_recurrent_attention_cell, convert_recurrent_selective_ssm_cell
+from optimum.exporters.openvino._ov_ops import (
+    convert_recurrent_attention_cell,
+    convert_recurrent_rda_cell,
+    convert_recurrent_selective_ssm_cell,
+)
 from optimum.exporters.openvino.base import OpenVINOConfig
 from optimum.exporters.openvino.patching_utils import (
     ModelPatcher,
@@ -13074,3 +13078,373 @@ class MiniCPMV4_7VisionEmbeddingsPatcher(ModelPatcher):
             layer.self_attn.forward = layer.self_attn._orig_forward
         vision_tower.vit_merger.self_attn.forward = vision_tower.vit_merger.self_attn._orig_forward
         vision_tower.vit_merger.forward = vision_tower.vit_merger._orig_forward
+
+
+# ---------------------------------------------------------------------------------------------
+# raon1_mini (KRAFTON/Raon-1-mini-preview)
+#
+# 25 decoder layers on a 4-stream Raon_mHC residual: 18 Raon Delta Attention (RDA) layers with a
+# fixed-size recurrent state and a depthwise short conv, and 7 NoPE gated MLA layers with a KV
+# cache. Layer 0 has a dense SiTU-GLU MLP, layers 1..24 have a top-6 sigmoid-routed MoE over 128
+# routed experts plus one shared expert. The checkpoint stores the routed experts as MXFP8.
+#
+# Export needs three things the eager reference cannot give `torch.jit.trace`:
+#   * the token loop of the RDA recurrence -> a `ModuleExtension` turned into an `ov::Loop`
+#     (`convert_recurrent_rda_cell`),
+#   * a dense form of the MoE expert gather -> a tiled `bmm` over stacked expert weights,
+#   * an explicit additive attention mask built from the 2D mask, instead of
+#     `create_causal_mask` + `F.scaled_dot_product_attention`.
+# The architecture has no positional encoding, so `position_ids` is not an input.
+
+
+def _raon1_mini_attention_bias(attention_mask: torch.Tensor, sequence_length: int, dtype: torch.dtype):
+    """[batch, kv] 0/1 mask -> [1, 1, query, kv] additive causal mask in the activation dtype."""
+    kv_length = attention_mask.shape[1]
+    device = attention_mask.device
+    past_length = kv_length - sequence_length
+    key_positions = torch.arange(kv_length, device=device)
+    query_positions = torch.arange(sequence_length, device=device) + past_length
+    causal = query_positions.unsqueeze(-1) >= key_positions.unsqueeze(0)
+    keep = causal.unsqueeze(0).unsqueeze(0) & (attention_mask > 0).unsqueeze(1).unsqueeze(2)
+    bias = torch.zeros(1, 1, sequence_length, kv_length, device=device, dtype=torch.float32)
+    bias = bias.masked_fill(~keep, torch.finfo(torch.float16).min)
+    return bias.to(dtype)
+
+
+class Raon1MiniCacheWrap:
+    """Hybrid cache with one slot per layer type: conv + recurrent state for RDA, K/V for MLA."""
+
+    def __init__(self, conv_states, recurrent_states, key_cache, value_cache):
+        self.conv_states = conv_states
+        self.recurrent_states = recurrent_states
+        self.key_cache = key_cache
+        self.value_cache = value_cache
+
+
+class RaonRDACell(torch.nn.Module):
+    """One Raon Delta Attention step per token, in the recurrent form lowered to an `ov::Loop`."""
+
+    def forward(
+        self,
+        query,  # (B, H, T, K)
+        key,  # (B, H, T, K)
+        value,  # (B, H, T, V)
+        log_alpha,  # (B, H, T, K) per key-channel log decay
+        beta,  # (B, H, T) write gate
+        last_recurrent_state,  # (B, H, V, K)
+    ):
+        _, _, sequence_length, _ = key.shape
+        core_attn_out = torch.zeros_like(value)
+
+        for i in range(sequence_length):
+            q_t = query[:, :, i]
+            k_t = key[:, :, i]
+            v_t = value[:, :, i]
+            decay_t = log_alpha[:, :, i].exp().unsqueeze(-2)
+            beta_t = beta[:, :, i].unsqueeze(-1)
+
+            last_recurrent_state = last_recurrent_state * decay_t
+            kv_mem = (last_recurrent_state * k_t.unsqueeze(-2)).sum(dim=-1)
+            delta = (v_t - kv_mem) * beta_t
+            last_recurrent_state = last_recurrent_state + delta.unsqueeze(-1) * k_t.unsqueeze(-2)
+            core_attn_out[:, :, i] = (last_recurrent_state * q_t.unsqueeze(-2)).sum(dim=-1)
+
+        # The OpenVINO `ModuleExtension` mechanism expects a single output.
+        return torch.cat([core_attn_out.flatten(), last_recurrent_state.flatten()], dim=0)
+
+
+def raon1_mini_rda_core(self, q, k, v, log_alpha, beta, state):
+    batch, seq, heads, key_dim = k.shape
+    value_dim = v.shape[-1]
+    if state is None:
+        state = torch.zeros(batch, heads, value_dim, key_dim, dtype=torch.float32, device=q.device)
+    packed = self.raon_rda_cell(
+        q.transpose(1, 2).float(),
+        k.transpose(1, 2).float(),
+        v.transpose(1, 2).float(),
+        log_alpha.transpose(1, 2).float(),
+        beta.transpose(1, 2).float(),
+        state.float(),
+    )
+    num_elems = v.numel()
+    out = packed[:num_elems].reshape(batch, heads, seq, value_dim).transpose(1, 2)
+    final_state = packed[num_elems:].reshape(state.shape)
+    return out.to(v.dtype), final_state
+
+
+def raon1_mini_rda_forward(self, hidden, cache=None, layer_idx=None, token_mask=None):
+    batch, seq, _ = hidden.shape
+    dtype = hidden.dtype
+
+    if token_mask is not None:
+        hidden = hidden * token_mask[..., None].to(dtype)
+
+    q = self.q_proj(hidden)
+    k = self.k_proj(hidden)
+    v = self.v_proj(hidden)
+    gate = self.g_proj(hidden)
+    beta_raw = self.b_proj(hidden)
+    rda_delta = self.rda_w_proj(hidden)
+    decay_raw = self.f_b_proj(self.f_a_proj(hidden))
+
+    conv_state = cache.conv_states[self.raon_cache_index] if cache is not None else None
+    q_hist = k_hist = v_hist = None
+    if conv_state is not None:
+        q_hist, k_hist, v_hist = conv_state.split(self.proj_size, dim=1)
+    q, q_hist = self.q_conv1d(q, q_hist)
+    k, k_hist = self.k_conv1d(k, k_hist)
+    v, v_hist = self.v_conv1d(v, v_hist)
+    if cache is not None:
+        cache.conv_states[self.raon_cache_index] = torch.cat([q_hist, k_hist, v_hist], dim=1)
+
+    q = q.reshape(batch, seq, self.num_heads, self.head_dim)
+    k = k.reshape(batch, seq, self.num_heads, self.head_dim)
+    v = v.reshape(batch, seq, self.num_heads, self.head_dim)
+    q = F.normalize(q.float(), dim=-1, eps=1e-6).to(dtype) * (self.head_dim**-0.5)
+    k = F.normalize(k.float(), dim=-1, eps=1e-6).to(dtype)
+
+    decay = decay_raw.float().reshape(batch, seq, self.num_heads, self.head_dim) + self.dt_bias.float().reshape(
+        self.num_heads, self.head_dim
+    )
+    scaled = torch.exp(self.A_log.float())[None, None, :, None] * decay
+    log_alpha = -F.softplus(scaled) if self.gate_lower_bound is None else self.gate_lower_bound * torch.sigmoid(scaled)
+    beta = torch.sigmoid(beta_raw.float()).to(dtype)
+    ratio = torch.exp(F.logsigmoid(beta_raw.float() + rda_delta.float()) - F.logsigmoid(beta_raw.float()))
+    v = (v.float() * ratio.unsqueeze(-1)).to(dtype)
+
+    recurrent_state = cache.recurrent_states[self.raon_cache_index] if cache is not None else None
+    out, final_state = self._core(q, k, v, log_alpha.contiguous(), beta, recurrent_state)
+    if cache is not None:
+        cache.recurrent_states[self.raon_cache_index] = final_state
+
+    normed = self.o_norm(out.reshape(-1, self.head_dim), keep_fp32=True)
+    gated = (normed * torch.sigmoid(gate.float().reshape(-1, self.head_dim))).to(dtype)
+    return self.o_proj(gated.reshape(batch, seq, self.proj_size))
+
+
+def raon1_mini_mla_forward(self, hidden, cache=None, layer_idx=None, attention_mask=None, token_mask=None):
+    batch, seq, _ = hidden.shape
+    dtype = hidden.dtype
+
+    q_lat = self.q_a_layernorm(self.q_a_proj(hidden))
+    q = self.q_b_proj(q_lat).reshape(batch, seq, self.num_heads, self.q_head_dim)
+    kv_full = self.kv_a_proj_with_mqa(hidden)
+    kv_lat, k_pe = torch.split(kv_full, [self.kv_lora_rank, self.qk_pe], dim=-1)
+    kv = self.kv_b_proj(self.kv_a_layernorm(kv_lat)).reshape(batch, seq, self.num_heads, self.qk_nope + self.v_dim)
+    k_nope, value = torch.split(kv, [self.qk_nope, self.v_dim], dim=-1)
+    key = torch.cat([k_nope, k_pe.unsqueeze(2).expand(batch, seq, self.num_heads, self.qk_pe)], dim=-1)
+
+    query = q.transpose(1, 2)
+    key = key.transpose(1, 2)
+    value = value.transpose(1, 2)
+
+    index = self.raon_cache_index
+    if cache is not None:
+        if cache.key_cache[index] is None:
+            cache.key_cache[index] = key
+            cache.value_cache[index] = value
+        else:
+            cache.key_cache[index] = torch.cat([cache.key_cache[index], key], dim=2)
+            cache.value_cache[index] = torch.cat([cache.value_cache[index], value], dim=2)
+        key = cache.key_cache[index]
+        value = cache.value_cache[index]
+
+    scores = torch.matmul(query, key.transpose(-1, -2)) * self.softmax_scale
+    if attention_mask is not None:
+        scores = scores + attention_mask
+    probs = torch.softmax(scores, dim=-1)
+    context = torch.matmul(probs, value)
+
+    context = context.transpose(1, 2).reshape(batch, seq, self.num_heads * self.v_dim)
+    if self.use_output_gate:
+        context = context * torch.sigmoid(self.g_proj(hidden))
+    return self.o_proj(context.to(dtype))
+
+
+def raon1_mini_situ_glu(gate, value, gate_beta, value_beta):
+    gate_f = gate.float()
+    value_f = value.float()
+    return (gate_beta * torch.tanh(gate_f / gate_beta) * torch.sigmoid(gate_f)) * (
+        value_beta * torch.tanh(value_f / value_beta)
+    )
+
+
+def raon1_mini_moe_forward(self, hidden):
+    batch, seq, dim = hidden.shape
+    flattened = hidden.reshape(-1, dim)
+    num_tokens = flattened.shape[0]
+    dtype = hidden.dtype
+
+    router = self.gate
+    scores = torch.sigmoid(F.linear(flattened.float(), router.weight.float()))
+    _, top = torch.topk(scores + router.e_score_correction_bias.float(), router.top_k, dim=-1, sorted=True)
+    chosen = torch.gather(scores, 1, top)
+    if router.renormalize:
+        chosen = chosen / (chosen.sum(-1, keepdim=True) + 1e-20)
+    probs = chosen * router.scaling
+
+    dense_weights = torch.zeros(num_tokens, self.num_experts, dtype=probs.dtype, device=flattened.device)
+    dense_weights.scatter_(1, top, probs)
+
+    expanded = flattened.repeat(self.num_experts, 1).view(self.num_experts, -1, dim)
+    gate_up = self.gate_up_proj.to(dtype)
+    gate = torch.bmm(expanded, gate_up[:, : self.intermediate_size].transpose(1, 2))
+    up = torch.bmm(expanded, gate_up[:, self.intermediate_size :].transpose(1, 2))
+    act = raon1_mini_situ_glu(gate, up, self.gate_beta, self.value_beta).to(dtype)
+    expert_out = torch.bmm(act, self.down_proj.to(dtype).transpose(1, 2))
+
+    expert_out = expert_out.view(self.num_experts, num_tokens, dim)
+    expert_out = expert_out * dense_weights.transpose(0, 1).view(self.num_experts, num_tokens)[..., None]
+    out = expert_out.sum(dim=0)
+
+    if self.shared_experts is not None:
+        out = out + self.shared_experts(flattened)
+    return out.reshape(batch, seq, dim)
+
+
+def prepare_raon1_mini_moe_weights(moe):
+    """Stack the per-expert projections so the routed experts become two tiled `bmm` operations."""
+    if getattr(moe, "gate_up_proj", None) is not None:
+        return
+    with torch.no_grad():
+        gate_up = torch.stack([torch.cat([expert.gate_proj.weight, expert.up_proj.weight]) for expert in moe.experts])
+        down = torch.stack([expert.down_proj.weight for expert in moe.experts])
+    moe.gate_up_proj = torch.nn.Parameter(gate_up, requires_grad=False)
+    moe.down_proj = torch.nn.Parameter(down, requires_grad=False)
+
+
+def raon1_mini_model_forward(
+    self,
+    input_ids=None,
+    attention_mask=None,
+    position_ids=None,
+    past_key_values=None,
+    inputs_embeds=None,
+    use_cache=None,
+    output_hidden_states=None,
+    return_dict=None,
+    **kwargs,
+):
+    if inputs_embeds is None:
+        inputs_embeds = self.embed_tokens(input_ids)
+    sequence_length = inputs_embeds.shape[1]
+    additive_mask = _raon1_mini_attention_bias(attention_mask, sequence_length, inputs_embeds.dtype)
+    token_mask = attention_mask[:, attention_mask.shape[1] - sequence_length :]
+
+    num_streams = self.config.raon_mhc_streams
+    stream = inputs_embeds.unsqueeze(2).expand(-1, -1, num_streams, -1).contiguous()
+    for layer in self.layers:
+        stream = layer(stream, attention_mask=additive_mask, token_mask=token_mask, cache=past_key_values)
+
+    hidden = self.norm(stream.float().mean(2).to(inputs_embeds.dtype))
+    return BaseModelOutputWithPast(last_hidden_state=hidden, past_key_values=past_key_values)
+
+
+class Raon1MiniModelPatcher(OVDecoderModelPatcher):
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        from openvino.frontend.pytorch import ConversionExtension, ModuleExtension
+
+        super().__init__(config, model, model_kwargs)
+
+        layer_types = self.real_config._config.layer_types
+        self.num_rda_layers = layer_types.count("linear_attention")
+        self.num_mla_layers = layer_types.count("full_attention")
+
+        def patched_forward(input_ids, attention_mask=None, cache_params=None):
+            use_cache = cache_params is not None
+            wrapped_cache = None
+            if use_cache:
+                conv_states = [cache_params[2 * idx] for idx in range(self.num_rda_layers)]
+                recurrent_states = [cache_params[2 * idx + 1] for idx in range(self.num_rda_layers)]
+                key_cache = [cache_params[2 * self.num_rda_layers + 2 * idx] for idx in range(self.num_mla_layers)]
+                value_cache = [
+                    cache_params[2 * self.num_rda_layers + 2 * idx + 1] for idx in range(self.num_mla_layers)
+                ]
+                wrapped_cache = Raon1MiniCacheWrap(conv_states, recurrent_states, key_cache, value_cache)
+
+            model_output = self.model_orig_forward(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                past_key_values=wrapped_cache,
+                use_cache=use_cache,
+            )
+            outputs = {"logits": model_output.logits}
+
+            if use_cache:
+                present = []
+                for idx in range(self.num_rda_layers):
+                    present.append(wrapped_cache.conv_states[idx])
+                    present.append(wrapped_cache.recurrent_states[idx])
+                for idx in range(self.num_mla_layers):
+                    present.append(wrapped_cache.key_cache[idx])
+                    present.append(wrapped_cache.value_cache[idx])
+                outputs["present_key_values"] = present
+
+            return outputs
+
+        self.patched_forward = patched_forward
+        self.model_orig_forward = self.orig_forward
+        self.orig_forward = patched_forward
+
+        self.module_extensions = {
+            RaonRDACell: ModuleExtension(RaonRDACell, "RaonRDACellOp"),
+        }
+        self.conversion_extensions = [
+            ConversionExtension("RaonRDACellOp", convert_recurrent_rda_cell),
+        ]
+
+    def __enter__(self):
+        super().__enter__()
+        setattr(self._model, self.orig_forward_name, self.patched_forward)
+
+        rda_index = mla_index = 0
+        for decoder_layer in self._model.model.layers:
+            attention = decoder_layer.self_attn
+            attention._raon_orig_forward = attention.forward
+            if decoder_layer.is_rda:
+                attention.raon_cache_index = rda_index
+                rda_index += 1
+                attention.raon_rda_cell = RaonRDACell()
+                attention._raon_orig_core = attention._core
+                attention._core = types.MethodType(raon1_mini_rda_core, attention)
+                attention.forward = types.MethodType(raon1_mini_rda_forward, attention)
+            else:
+                attention.raon_cache_index = mla_index
+                mla_index += 1
+                attention.forward = types.MethodType(raon1_mini_mla_forward, attention)
+            if decoder_layer.is_moe:
+                moe = decoder_layer.moe
+                moe._raon_orig_forward = moe.forward
+                moe.forward = types.MethodType(raon1_mini_moe_forward, moe)
+                prepare_raon1_mini_moe_weights(moe)
+
+        self._model.model._raon_orig_forward = self._model.model.forward
+        self._model.model.forward = types.MethodType(raon1_mini_model_forward, self._model.model)
+
+        # The Raon_mHC chart constants are built on first use and memoised in a module level dict.
+        # Fill the cache before tracing, otherwise the constants are built by traced in-place ops on
+        # the first trace and returned directly on the trace check, which makes the two graphs differ.
+        import sys
+
+        remote_module = sys.modules[type(self._model.model).__module__]
+        num_streams = self.real_config._config.raon_mhc_streams
+        for device in {parameter.device for parameter in self._model.parameters()}:
+            remote_module._raon_mhc_constants(num_streams, device)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        self._model.model.forward = self._model.model._raon_orig_forward
+        for decoder_layer in self._model.model.layers:
+            attention = decoder_layer.self_attn
+            attention.forward = attention._raon_orig_forward
+            if decoder_layer.is_rda:
+                attention._core = attention._raon_orig_core
+                del attention.raon_rda_cell
+            if decoder_layer.is_moe:
+                decoder_layer.moe.forward = decoder_layer.moe._raon_orig_forward
+        setattr(self._model, self.orig_forward_name, self.model_orig_forward)
+        super().__exit__(exc_type, exc_value, traceback)

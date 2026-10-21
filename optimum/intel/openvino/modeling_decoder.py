@@ -1543,6 +1543,7 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
                     "qwen3_next",
                     "qwen3_5_text",
                     "qwen3_5_moe_text",
+                    "raon1_mini",
                 ]:
                     # LFM2, GraniteMoeHybrid (Granite-4.0) and Qwen3-Next require the attention mask
                     # to be the length of the full context, so default mask from OVModelForCausalLM needs to be used.
