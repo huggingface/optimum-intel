@@ -1938,9 +1938,12 @@ class OVModelTransformerLTX2(OVPipelinePart):
                     "with `use_cross_timestep=True`, which the OpenVINO export does not support."
                 )
 
-        # T2V passes a scalar timestep [B]; the IR expects [B, S]. Broadcast to match.
+        # T2V passes a scalar timestep [B]. The IR takes a per-token [B, S] timestep, which I2V needs (its
+        # conditioning frames are already denoised), but a [B, 1] one broadcasts over the tokens. Feeding that
+        # computes the AdaLN modulation once per sample instead of for every token, which saves ~9 GiB of GPU
+        # memory for LTX-2.3 at 640x480x17.
         if timestep is not None and timestep.ndim == 1 and self._timestep_rank == 2:
-            timestep = timestep.unsqueeze(-1).expand(-1, hidden_states.shape[1]).contiguous()
+            timestep = timestep.unsqueeze(-1)
 
         # `share_inputs=True` reads raw buffers, so stride-0 views (e.g. `t.expand(batch)`) must be materialized.
         if timestep is not None:
@@ -2024,16 +2027,38 @@ class OVModelTransformerLTX2(OVPipelinePart):
                 "guidance, or pass `stg_scale=0.0` (and `audio_stg_scale=0.0`) to disable it."
             )
 
-        ov_outputs = self.request(model_inputs, share_inputs=True).to_dict()
-
-        model_outputs = {}
-        for key, value in ov_outputs.items():
-            model_outputs[next(iter(key.names))] = torch.from_numpy(value)
+        # Like OpenVINO GenAI, run the batch in passes of `_pass_batch_size` samples rather than at once:
+        # under classifier-free guidance the diffusers pipeline doubles the batch (negative + positive
+        # prompt), and running the two halves one after the other halves the transformer's activation
+        # memory, which is ~3 GiB per sample for LTX-2.3 at 640x480x17. The samples do not interact.
+        batch_size = hidden_states.shape[0]
+        pass_batch = self._pass_batch_size or 1
+        if batch_size % pass_batch != 0:
+            raise ValueError(
+                f"The LTX-2 transformer is reshaped to a static batch of {pass_batch}, which does not divide "
+                f"the batch of {batch_size} it was called with."
+            )
+        unbatched = {"cross_modality_gate", "stg_perturbation_mask"}
+        outputs = []
+        for start in range(0, batch_size, pass_batch):
+            pass_inputs = {
+                name: value if name in unbatched else value[start : start + pass_batch]
+                for name, value in model_inputs.items()
+            }
+            ov_outputs = self.request(pass_inputs, share_inputs=True).to_dict()
+            outputs.append({next(iter(key.names)): torch.from_numpy(value) for key, value in ov_outputs.items()})
+        model_outputs = {name: torch.cat([output[name] for output in outputs]) for name in outputs[0]}
 
         if return_dict:
             return model_outputs
 
         return (model_outputs.get("out_sample"), model_outputs.get("audio_out_sample"))
+
+    @property
+    def _pass_batch_size(self):
+        # Samples per transformer pass: the static batch `reshape` set, else one at a time (None).
+        dim = self.model.input("hidden_states").get_partial_shape()[0]
+        return dim.get_length() if dim.is_static else None
 
     @property
     def _ov_input_names(self):
@@ -2059,6 +2084,24 @@ class OVModelTransformerLTX2(OVPipelinePart):
 
 
 class OVModelConnectors(OVPipelinePart):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Weight-free RoPE modules of the two connectors, built from the exported config. Their (cos, sin)
+        # are graph inputs, computed here on the host since f16 cannot resolve the rotary angles.
+        from diffusers.pipelines.ltx2.connectors import LTX2RotaryPosEmbed1d
+
+        self._ropes = {}
+        for connector in ("video_connector", "audio_connector"):
+            heads = self.config.get(f"{connector}_num_attention_heads", 30)
+            self._ropes[connector] = LTX2RotaryPosEmbed1d(
+                heads * self.config.get(f"{connector}_attention_head_dim", 128),
+                base_seq_len=self.config.get("connector_rope_base_seq_len", 4096),
+                theta=self.config.get("rope_theta", 10000.0),
+                double_precision=self.config.get("rope_double_precision", True),
+                rope_type=self.config.get("rope_type", "interleaved"),
+                num_attention_heads=heads,
+            )
+
     def forward(
         self,
         text_encoder_hidden_states: torch.FloatTensor,
@@ -2081,6 +2124,11 @@ class OVModelConnectors(OVPipelinePart):
             "text_encoder_hidden_states": text_encoder_hidden_states,
             "attention_mask": attention_mask,
         }
+        batch_size, seq_len = text_encoder_hidden_states.shape[:2]
+        for connector, rope in self._ropes.items():
+            cos, sin = rope(batch_size, seq_len, device="cpu")
+            model_inputs[f"{connector}_rotary_cos"] = cos.float().contiguous()
+            model_inputs[f"{connector}_rotary_sin"] = sin.float().contiguous()
 
         ov_outputs = self.request(model_inputs, share_inputs=True).to_dict()
 
@@ -2770,15 +2818,18 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
         if batch_size == -1 or num_images_per_prompt == -1:
             batch_size = -1
         else:
-            batch_size *= num_images_per_prompt * 2
+            # Classifier-free guidance doubles the batch, but the transformer runs the two halves in
+            # separate passes (see `OVModelTransformerLTX2.forward`), so it is sized for one half.
+            batch_size *= num_images_per_prompt
 
         shapes = {}
-        scalar_inputs = {"height", "width", "num_frames", "fps", "audio_num_frames", "rope_interpolation_scale"}
+        # `stg_perturbation_mask` holds one weight per block, not per sample, so it keeps its length.
+        fixed_shape_inputs = {"rope_interpolation_scale", "stg_perturbation_mask"}
         rope_inputs = {name for names in LTX2_ROPE_INPUTS.values() for name in names}
         for inputs in model.inputs:
             shapes[inputs] = inputs.get_partial_shape()
             name = inputs.get_any_name()
-            if name in scalar_inputs:
+            if name in fixed_shape_inputs:
                 shapes[inputs] = inputs.get_partial_shape()
             elif name in rope_inputs:
                 # Keep the exported head split and rotary width static; only the batch is re-set
@@ -2831,6 +2882,9 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
                     rank = inputs.get_partial_shape().rank.get_length()
                     if rank >= 1:
                         shapes[inputs][0] = effective_batch
+                    # Keep the exported head split and rotary width of the connectors' RoPE inputs.
+                    if "_rotary_" in inputs.get_any_name():
+                        continue
                     for i in range(1, rank):
                         shapes[inputs][i] = -1
                 ov_model_attr.model.reshape(shapes)

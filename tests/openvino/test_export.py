@@ -537,6 +537,18 @@ class LTX2ExportContractTest(unittest.TestCase):
                 stack.extend(inp.get_source_output().get_node() for inp in node.inputs())
             self.assertTrue(sources.issubset({"timestep", "audio_timestep"}), f"{op.get_friendly_name()}: {sources}")
 
+        # The connectors take their RoPE the same way, one (cos, sin) pair per connector, so their
+        # graph has no Sin/Cos at all.
+        connectors = ov.Core().read_model(pipeline.connectors.model_save_dir / "openvino_model.xml")
+        connectors_inputs = {name for inp in connectors.inputs for name in inp.names}
+        connectors_rope_inputs = {
+            f"{connector}_rotary_{part}"
+            for connector in ("video_connector", "audio_connector")
+            for part in ("cos", "sin")
+        }
+        self.assertTrue(connectors_rope_inputs.issubset(connectors_inputs))
+        self.assertFalse(any(op.get_type_name() in ("Sin", "Cos") for op in connectors.get_ops()))
+
     def test_text_encoder_packs_hidden_states(self):
         # One contract for both LTX-2 versions: nothing in the text encoder config tells them apart,
         # and the per-layer layout the config used to offer loses the text tower's final norm on

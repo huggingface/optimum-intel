@@ -3382,10 +3382,18 @@ class LTX2ConnectorsOpenVINOConfig(VaeEncoderOpenVINOConfig):
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
-        return {
+        inputs = {
             "text_encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
             "attention_mask": {0: "batch_size", 1: "sequence_length"},
         }
+        # As in the transformer, RoPE enters as precomputed (cos, sin), one pair per connector: the angles
+        # reach ~1.6e4 rad, which an f16 inference precision cannot resolve in the graph. The "split" layout
+        # is (batch, heads, tokens, dim), the "interleaved" one (batch, tokens, dim).
+        seq_axis = 2 if getattr(self._normalized_config.config, "rope_type", "interleaved") == "split" else 1
+        for connector in ("video_connector", "audio_connector"):
+            for name in (f"{connector}_rotary_cos", f"{connector}_rotary_sin"):
+                inputs[name] = {0: "batch_size", seq_axis: "sequence_length"}
+        return inputs
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
