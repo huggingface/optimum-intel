@@ -2508,6 +2508,23 @@ class OVQuantizationConfigTest(unittest.TestCase):
         prepared_config = _quantization_config_from_dict(custom_configuration)
         self.compare_config_dict_to_config_object(custom_configuration, prepared_config)
 
+    def test_narrow_range_reaches_nncf_advanced_parameters(self):
+        narrow = OVWeightQuantizationConfig(
+            bits=2, sym=True, group_size=128, ratio=1.0, narrow_range=True
+        ).to_nncf_dict()
+        self.assertEqual(narrow["mode"], nncf.CompressWeightsMode.INT2_SYM)
+        self.assertTrue(narrow["advanced_parameters"].narrow_range)
+
+        default = OVWeightQuantizationConfig(bits=2, sym=True, group_size=128, ratio=1.0).to_nncf_dict()
+        self.assertNotIn("advanced_parameters", default)
+
+        for kwargs in ({"sym": False}, {"dtype": "nf4", "bits": 4}):
+            base = {"bits": 2, "sym": True}
+            base.update(kwargs)
+            with pytest.raises(ValueError) as exc_info:
+                OVWeightQuantizationConfig(narrow_range=True, **base)
+            self.assertIn("`narrow_range` applies to the symmetric integer weight formats", str(exc_info.value))
+
     def test_for_no_short_id_duplicates(self):
         short_ids = set()
         for model_id in _DEFAULT_4BIT_WQ_CONFIGS.keys():

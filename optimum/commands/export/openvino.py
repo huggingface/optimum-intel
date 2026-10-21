@@ -156,6 +156,16 @@ def parse_args_openvino(parser: "ArgumentParser"):
         ),
     )
     optional_group.add_argument(
+        "--narrow-range",
+        action="store_true",
+        default=None,
+        help=(
+            "Use the narrow symmetric range for the integer weight formats: codes +-(2^(b-1)-1) and scale "
+            "max|w|/(2^(b-1)-1), so a group whose weights are {+-s} or {-s, 0, +s} is represented exactly. "
+            "Applicable to int2/int3/int4/int8 with --sym only; the default full range clips +s."
+        ),
+    )
+    optional_group.add_argument(
         "--backup-precision",
         type=str,
         choices=["none", "int8_sym", "int8_asym"],
@@ -420,6 +430,8 @@ class OVExportCommand(BaseOptimumCLICommand):
                         logger.info(f"Applying a default quantization config: {quantization_config}.")
                     if self.args.quantization_statistics_path is not None:
                         quantization_config["statistics_path"] = self.args.quantization_statistics_path
+                if self.args.narrow_range:
+                    quantization_config["narrow_range"] = self.args.narrow_range
             else:
                 if no_quantization_parameter_provided(self.args) and default_quantization_config is not None:
                     quantization_config = default_quantization_config
@@ -545,6 +557,7 @@ def prepare_wc_config(args, default_configs):
         "group_size_fallback": args.group_size_fallback
         if args.group_size_fallback
         else default_configs["group_size_fallback"],
+        "narrow_range": args.narrow_range,
     }
 
 

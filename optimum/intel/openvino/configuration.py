@@ -1084,6 +1084,11 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         dtype (`str`, *optional*):
             Data type weights are compressed to. Possible values: ['int2', 'int3', 'int4', 'int8', 'mxfp4', 'nf4', 'cb4'].
             Option 'cb4' represents a codebook with 16 fixed fp8 values in E4M3 format.
+        narrow_range (`bool`, *optional*):
+            Use the narrow symmetric range for the integer weight formats: the codes are `+-(2^(b-1)-1)` and the
+            scale is `max|w|/(2^(b-1)-1)`, so a group whose weights are `{+/-s}` or `{-s, 0, +s}` is represented
+            exactly. The default full range is `[-2^(b-1), 2^(b-1)-1]` with the scale `max|w|/2^(b-1)`.
+            Applicable to int2/int3/int4/int8 with `sym=True` only.
         qptq (`bool`, *optional*):
             Whether to apply GPTQ algorithm. GPTQ optimizes compressed weights in a layer-wise fashion to minimize the
             difference between activations of a compressed and original layer. Dataset is required to run GPTQ.
@@ -1145,6 +1150,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         backup_precision: Optional[str] = None,
         statistics_path: Optional[str] = None,
         group_size_fallback: Optional[str] = None,
+        narrow_range: Optional[bool] = None,
         dq_group_size: Optional[int] = None,
         **kwargs,
     ):
@@ -1177,6 +1183,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.dtype = dtype
         self.statistics_path = statistics_path
         self.group_size_fallback = group_size_fallback
+        self.narrow_range = narrow_range
         self.dq_group_size = dq_group_size
         self.post_init()
 
@@ -1309,6 +1316,14 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                     raise ValueError("The GPTQ algorithm is not supported for 'mxfp4' data type")
                 if self.lora_correction:
                     raise ValueError("The LoRA Correction algorithm is not supported for 'mxfp4' data type")
+        if self.narrow_range and (
+            self.bits not in [2, 3, 4, 8] or not self.sym or self.dtype in ["mxfp4", "nf4", "cb4"]
+        ):
+            raise ValueError(
+                "`narrow_range` applies to the symmetric integer weight formats (int2/int3/int4/int8 with "
+                "`sym=True`) only."
+            )
+
         if self.gptq and self.lora_correction:
             raise ValueError("The GPTQ and LoRA Correction algorithms can't be applied simultaneously")
 
@@ -1337,7 +1352,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         sensitivity_metric = nncf.SensitivityMetric(self.sensitivity_metric) if self.sensitivity_metric else None
         backup_mode = nncf.BackupMode(self.backup_precision) if self.backup_precision else None
         kwargs = self.kwargs.copy()
-        if self.statistics_path or self.group_size_fallback:
+        if self.statistics_path or self.group_size_fallback or self.narrow_range:
             advanced_parameters = kwargs.get("advanced_parameters", nncf.AdvancedCompressionParameters())
             if self.statistics_path:
                 advanced_parameters = dataclasses.replace(advanced_parameters, statistics_path=self.statistics_path)
@@ -1345,6 +1360,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 advanced_parameters = dataclasses.replace(
                     advanced_parameters, group_size_fallback_mode=nncf.GroupSizeFallbackMode(self.group_size_fallback)
                 )
+            if self.narrow_range:
+                advanced_parameters = dataclasses.replace(advanced_parameters, narrow_range=True)
             kwargs["advanced_parameters"] = advanced_parameters
         result = {
             "mode": mode,
