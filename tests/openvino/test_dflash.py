@@ -416,13 +416,13 @@ class DSparkExportTest(unittest.TestCase):
             self.assertFalse(markov_head_ir.has_rt_info(["dflash_mode"]))
             self.assertFalse(markov_head_ir.has_rt_info(["hidden_states_decoder_layers"]))
             self.assertEqual(
-                {item.any_name: item.element_type for item in markov_head_ir.inputs},
-                {
-                    "prev_token_ids": ov.Type.i64,
-                    "draft_logits": ov.Type.f32,
-                    "anchor_token_ids": ov.Type.i64,
-                    "subsequence_begins": ov.Type.i64,
-                },
+                [(item.any_name, item.element_type) for item in markov_head_ir.inputs],
+                [
+                    ("prev_token_ids", ov.Type.i64),
+                    ("draft_logits", ov.Type.f32),
+                    ("anchor_token_ids", ov.Type.i64),
+                    ("subsequence_begins", ov.Type.i64),
+                ],
             )
             self.assertEqual(
                 {item.any_name: item.element_type for item in markov_head_ir.outputs},
