@@ -29,7 +29,6 @@ import torch
 from openvino._offline_transformations import paged_attention_transformation
 from parameterized import parameterized
 from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText
-from transformers.cache_utils import DynamicCache
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
 from utils_tests import MODEL_NAMES, get_dflash2_model_path, get_dspark_model_path
@@ -1183,12 +1182,16 @@ class DFlashPagedAttentionTest(unittest.TestCase):
 
     @staticmethod
     def _reference_outputs(model, steps):
-        """Outputs of consecutive draft steps, dropping each block from the cache afterwards as past_lens does."""
-        cache = DynamicCache()
-        outputs = []
+        """Outputs of consecutive draft steps, dropping each block from the cache afterwards as past_lens does.
+
+        The draft builds the cache itself, and its sliding layers must keep the whole past: the mask applies the window.
+        """
+        cache, outputs = None, []
         with torch.no_grad():
             for inputs in steps:
-                outputs.append(model(**inputs, past_key_values=cache, use_cache=True).last_hidden_state)
+                output = model(**inputs, past_key_values=cache, use_cache=True)
+                outputs.append(output.last_hidden_state)
+                cache = output.past_key_values
                 cache.crop(cache.get_seq_length() - int(inputs["token_type_ids"].sum()))
         return outputs
 
