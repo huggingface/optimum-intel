@@ -1779,17 +1779,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         checkpoint_types = None
         for weight_args in cases:
             with self.subTest(weight_args=weight_args), TemporaryDirectory() as tmpdir:
-                command = [
-                    "optimum-cli",
-                    "export",
-                    "openvino",
-                    "--model",
-                    model_path,
-                    "--task",
-                    "text-generation-with-past",
-                    "--trust-remote-code",
-                    *weight_args,
-                ]
+                command = ["optimum-cli", "export", "openvino", "--model", model_path, *weight_args]
                 subprocess.run([*command, tmpdir], check=True)
 
                 core = ov.Core()
@@ -1803,6 +1793,11 @@ class OVCLIExportTestCase(unittest.TestCase):
                     self.assertFalse(draft_model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"]))
                 weight_format = weight_args[1] if weight_args else None
                 self.assertEqual(draft_model.has_rt_info(["nncf"]), weight_format in ("int8", "int4"))
+                if weight_format == "int4":
+                    # without --all-layers too: the draft has no lm_head for NNCF to keep in int8
+                    _, num_weight_nodes = get_num_quantized_nodes(draft_model)
+                    self.assertGreater(num_weight_nodes["int4"], 0)
+                    self.assertEqual(num_weight_nodes["int8"], 0)
 
                 self.assertEqual(
                     sorted(path.name for path in Path(tmpdir).glob("openvino_*model.xml")),
@@ -1853,7 +1848,6 @@ class OVCLIExportTestCase(unittest.TestCase):
                             model_path,
                             "--task",
                             "text-generation-with-past",
-                            "--trust-remote-code",
                             tmpdir,
                         ],
                         check=True,

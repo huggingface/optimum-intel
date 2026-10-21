@@ -34,8 +34,8 @@ from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
 from utils_tests import F32_CONFIG, MODEL_NAMES
 
-from optimum.exporters.openvino import export_from_model, main_export
-from optimum.exporters.openvino.__main__ import load_native_draft_model
+from optimum.exporters.openvino import export_from_model
+from optimum.exporters.openvino.__main__ import infer_task, load_native_draft_model, main_export
 from optimum.exporters.openvino.convert import _get_submodels_and_export_configs, export_models
 from optimum.exporters.openvino.dflash_utils import (
     MARKOV_HEAD_DEFAULT_TOP_K,
@@ -291,7 +291,7 @@ class DFlashExportTest(unittest.TestCase):
         dflash_config = parse_and_validate_dflash_config(AutoConfig.from_pretrained(MODEL_NAMES[model_name])).values
         with TemporaryDirectory() as tmpdirname:
             output_dir = Path(tmpdirname)
-            main_export(MODEL_NAMES[model_name], output=output_dir, task="text-generation", trust_remote_code=True)
+            main_export(MODEL_NAMES[model_name], output=output_dir, task="text-generation")
             self.assertEqual([path.name for path in output_dir.glob("openvino_*model.xml")], ["openvino_model.xml"])
             draft_ir = ov.Core().read_model(output_dir / "openvino_model.xml")
             self.assertEqual(draft_ir.get_rt_info()["dflash_mode"].value, "True")
@@ -689,6 +689,14 @@ class DFlash2ExportTest(unittest.TestCase):
         )
         self.assertFalse(loading_info["missing_keys"])
         self.assertFalse(loading_info["unexpected_keys"])
+
+    def test_task_is_inferred_for_every_draft_architecture(self):
+        for model_name in ("qwen3_dflash", "qwen3_dflash2", "minicpmv4_7_dspark"):
+            with self.subTest(model_name=model_name):
+                self.assertEqual(
+                    infer_task("auto", MODEL_NAMES[model_name], library_name="transformers"),
+                    "text-generation-with-past",
+                )
 
     def test_config_normalization(self):
         config = self._config()

@@ -123,7 +123,7 @@ def infer_task(
                     token=token,
                     library_name=library_name,
                 )
-            except KeyError as e:
+            except (KeyError, RuntimeError) as e:
                 try:
                     config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=trust_remote_code)
                     with_past_arch_list = [
@@ -131,6 +131,7 @@ def infer_task(
                         "Zamba2ForCausalLM",
                         "LlamaForCausalLMEagle3",
                         "Eagle3LlamaForCausalLM",
+                        *_NATIVE_DRAFT_MODEL_CLASSES,
                     ]
                     if any(arch in config.architectures for arch in with_past_arch_list):
                         # VLM Eagle3 models (targeting VLM architectures like Qwen3-VL)
@@ -142,6 +143,8 @@ def infer_task(
                             task = "image-text-to-text"
                         else:
                             task = "text-generation-with-past"
+                    else:
+                        raise e
                 except Exception:
                     raise KeyError(
                         f"The task could not be automatically inferred. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
@@ -181,7 +184,7 @@ def infer_task(
                     raise e
             else:
                 raise
-        if original_task == "auto" and (config.architectures or [None])[0] in _NATIVE_DRAFT_MODEL_CLASSES:
+        if original_task == "auto" and config_architecture(config) in _NATIVE_DRAFT_MODEL_CLASSES:
             task = "text-generation-with-past"
         if hasattr(config, "export_model_type"):
             model_type = config.export_model_type
