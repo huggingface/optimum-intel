@@ -56,6 +56,33 @@ The following classes are available for the following natural language processin
 
 [[autodoc]] openvino.modeling.OVModelForTokenClassification
     - forward
+    - reset_stream
+
+
+## Guarded generation
+
+Content moderation, see [Content moderation](inference#content-moderation).
+
+### OVGuard
+
+[[autodoc]] openvino.generation_guard.OVGuard
+    - all
+
+### OVGuardConfig
+
+[[autodoc]] openvino.generation_guard.OVGuardConfig
+
+### OVGuardReport
+
+[[autodoc]] openvino.generation_guard.OVGuardReport
+
+### OVGuardVerdict
+
+[[autodoc]] openvino.generation_guard.OVGuardVerdict
+
+### OVGuardViolationError
+
+[[autodoc]] openvino.generation_guard.OVGuardViolationError
 
 
 ## Audio
