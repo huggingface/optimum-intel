@@ -38,6 +38,11 @@ from optimum.exporters.openvino.config import (
     TextSeq2SeqOpenVINOConfig,
     VisionOpenVINOConfig,
 )
+from optimum.exporters.openvino.dflash_utils import (
+    DSPARK_ARCHITECTURES,
+    markov_head_default_top_k,
+    parse_and_validate_dspark_config,
+)
 from optimum.exporters.openvino.input_generators import (
     AquilaDummyPastKeyValuesGenerator,
     ChatGLM2DummyPastKeyValuesGenerator,
@@ -134,6 +139,7 @@ from optimum.exporters.openvino.model_patcher import (
     DeepseekOCR2LMPatcher,
     DeepseekOCR2VisionEmbeddingsPatcher,
     DeepseekPatcher,
+    DSparkVanillaMarkovHeadForExport,
     FalconModelPatcher,
     FluxTransformerModelPatcher,
     FunASRModelPatcher,
@@ -499,14 +505,13 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
             if "dflash" in archs[0].lower():
                 self.dflash = True
                 self.candidate_position_offset = 1
-            elif archs[0] == "Qwen3DSparkModel":
-                if getattr(config, "markov_rank", 0) != 0:
-                    raise ValueError(
-                        "Exporting Qwen3DSparkModel is only supported for DFlash mode (markov_rank == 0). "
-                        "DSpark export is not supported yet (got markov_rank != 0)."
-                    )
+            elif archs[0] in DSPARK_ARCHITECTURES:
                 self.dflash = True
-                self.candidate_position_offset = 0
+                dspark_config = parse_and_validate_dspark_config(config)
+                self.candidate_position_offset = dspark_config.candidate_position_offset
+                if dspark_config.markov_rank > 0:
+                    # The Markov head is exported as a separate model next to the draft backbone.
+                    self.SUPPORTED_BEHAVIORS = ["markov_head"]
         if self.dflash:
             model_type = getattr(config, "model_type", "")
             if model_type != "qwen3":
@@ -589,6 +594,75 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
                 for axis, name in axes.items():
                     if name == "past_sequence_length + sequence_length":
                         axes[axis] = "past_sequence_length + context_length"
+
+    def with_behavior(self, behavior: str):
+        if behavior == "markov_head":
+            return DSparkMarkovHeadOpenVINOConfig(
+                self._config,
+                task="feature-extraction",
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                preprocessors=self._preprocessors,
+            )
+        raise ValueError(f"Unsupported behavior {behavior} for {type(self).__name__}.")
+
+    def get_model_for_behavior(self, model, behavior: str):
+        if behavior == "markov_head":
+            return DSparkVanillaMarkovHeadForExport(
+                model.markov_head, model.config, markov_head_default_top_k(model.config)
+            )
+        raise ValueError(f"Unsupported behavior {behavior} for {type(self).__name__}.")
+
+
+class DSparkMarkovHeadOpenVINOConfig(OpenVINOConfig):
+    """The DSpark Markov-head model, exported next to the draft backbone.
+
+    It holds the dense Markov step and the Top-K lattice as two independent computations over the
+    same weights (see `MarkovHeadForExport`). The lattice takes the draft rows of several blocks packed
+    back to back. edge_scores already include each candidate's draft logit, so the runtime must not
+    add it again.
+    """
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (Eagle3DummyGenerator,)
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    # Tells `convert.py` to stamp the DFlash RT-info block onto the exported graph.
+    dflash = True
+
+    def __init__(
+        self,
+        config: PretrainedConfig,
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        preprocessors: list[Any] | None = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        if parse_and_validate_dspark_config(config).markov_rank == 0:
+            raise ValueError("The DSpark Markov head model requires a draft with a Markov head (markov_rank > 0).")
+        self.markov_head_top_k = markov_head_default_top_k(config)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "prev_token_ids": {0: "num_prev_tokens"},
+            "draft_logits": {0: "num_draft_rows"},
+            "anchor_token_ids": {0: "num_draft_blocks"},
+            "subsequence_begins": {0: "num_draft_blocks + 1"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return {
+            "markov_bias": {0: "num_prev_tokens"},
+            "edge_scores": {0: "num_draft_rows"},
+            "candidate_ids": {0: "num_draft_rows"},
+        }
 
 
 @register_in_tasks_manager(

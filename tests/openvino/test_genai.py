@@ -57,6 +57,7 @@ from utils_tests import (
     REMOTE_CODE_MODELS,
     TEST_IMAGE_URL,
     TEST_NAME_TO_MODEL_TYPE,
+    get_dspark_model_path,
     get_supported_model_for_library,
 )
 
@@ -707,7 +708,8 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
             self.skipTest(f"{speculative_decoding_type} requires openvino-genai >= {min_openvino_version}")
 
         draft_model_name, target_model_name = model_pair
-        draft_model_id, target_model_id = MODEL_NAMES[draft_model_name], MODEL_NAMES[target_model_name]
+        draft_model_id = get_dspark_model_path() if model_arch == "qwen3_dspark" else MODEL_NAMES[draft_model_name]
+        target_model_id = MODEL_NAMES[target_model_name]
         trust_remote_code = model_arch in REMOTE_CODE_MODELS
 
         # export main and draft models and initialize OV LLM pipelines w/o speculative decoding
