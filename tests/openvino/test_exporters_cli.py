@@ -139,6 +139,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("image-to-video", "ltx2"),
         ("text-to-video", "ltx2.3"),
         ("image-to-video", "ltx2.3"),
+        ("text-to-video", "ltx2.5"),
+        ("image-to-video", "ltx2.5"),
         ("feature-extraction", "sam"),
         ("text-to-audio", "speecht5"),
         ("zero-shot-image-classification", "clip"),
@@ -220,6 +222,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "ltx-video-0.9.5": 2,
         "ltx2": 2,
         "ltx2.3": 2,
+        "ltx2.5": 4,  # the text encoder's tokenizer plus the prompt enhancer's processor tokenizer
         "sam": 0,  # no tokenizer
         "speecht5": 2,
         "kokoro": 0,  # uses g2p, no tokenizer
@@ -1290,7 +1293,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             expected_int8 = {k: {"int8": v} for k, v in expected_int8.items()}
             if task.startswith("text2text-generation") and (not task.endswith("with-past") or model.decoder.stateful):
                 del expected_int8["decoder_with_past"]
-            if task == "text-to-video" and model_type.startswith("ltx2"):
+            if task == "text-to-video" and model_type in ["ltx2", "ltx2.3", "ltx2.5"]:
                 # Only the LTX-2 image-to-video pipeline loads a VAE encoder, to encode the input image.
                 del expected_int8["vae_encoder"]
             check_compression_state_per_model(self, model.ov_models, expected_int8)
