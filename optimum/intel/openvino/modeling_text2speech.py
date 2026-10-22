@@ -19,7 +19,7 @@ import re
 import shutil
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import numpy as np
 import openvino
@@ -1976,7 +1976,20 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
         save_directory = Path(save_directory)
         source = Path(str(self._ir_dir))
         if source.is_dir() and self._is_complete_export(source) and source.resolve() != save_directory.resolve():
-            self._copy_assets(source, save_directory)
+            # ``super()._save_pretrained`` already serialized every OpenVINO IR (``*.xml`` / ``*.bin``).
+            asset_files = {
+                "config.json",  # main model configuration
+                "generation_config.json",  # default generation parameters
+                "preprocessor_config.json",  # processor / feature-extractor configuration
+                "tokenizer_config.json",  # tokenizer configuration
+                "tokenizer.json",  # fast (tokenizers) tokenizer definition
+                "vocab.json",  # tokenizer vocabulary
+                "merges.txt",  # BPE merge rules
+            }
+            asset_dirs = {
+                "speech_tokenizer": "neural codec (speech tokenizer) configuration",
+            }
+            self._copy_assets(source, save_directory, set(asset_files), set(asset_dirs))
         elif not self._is_complete_export(save_directory):
             # Fallback to main_export when there is no complete export to copy from.
             # This happens when an instance is loaded with `export=False`.
@@ -1986,23 +1999,26 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
                 task=self.export_feature,
             )
 
-    def _copy_assets(self, source: Path, destination: Path) -> None:
+    def _copy_assets(
+        self,
+        source: Path,
+        destination: Path,
+        asset_files: Set[str],
+        asset_dirs: Set[str],
+    ) -> None:
         """Copy the non-IR assets of a complete export into ``destination``."""
-        ir_files = set()
-        for ir_name in self._all_ov_model_paths.values():
-            ir_files.add(ir_name)
-            ir_files.add(str(Path(ir_name).with_suffix(".bin")))
-        skip_names = {".git", ".gitattributes", ".cache"} | ir_files
+
         for item in source.iterdir():
-            if item.name in skip_names:
+            if item.is_dir():
+                if item.name in asset_dirs:
+                    shutil.copytree(item, destination / item.name, dirs_exist_ok=True)
+                continue
+            if item.name not in asset_files:
                 continue
             dest = destination / item.name
-            if item.is_dir():
-                shutil.copytree(item, dest, dirs_exist_ok=True)
-            else:
-                if dest.resolve() == item.resolve():
-                    continue
-                shutil.copy2(item, dest)
+            if dest.resolve() == item.resolve():
+                continue
+            shutil.copy2(item, dest)
 
     def _apply_quantization(
         self,
