@@ -25,7 +25,6 @@ from optimum.utils import (
     DummyInputGenerator,
     DummyPastKeyValuesGenerator,
     DummySeq2SeqDecoderTextInputGenerator,
-    DummySeq2SeqPastKeyValuesGenerator,
     DummyTextInputGenerator,
     DummyTimestepInputGenerator,
     DummyVisionInputGenerator,
@@ -877,14 +876,24 @@ class LTXVaeDummyInputGenerator(DummyVisionInputGenerator):
     ):
         super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
         self.num_frames = num_frames
+        config = normalized_config.config
+        down_block_types = getattr(config, "down_block_types", ())
+        # LTX Video 0.9.5 encoder blocks require an initial frame followed by one full temporal
+        # compression window; decoder latents keep the requested number of frames.
+        self.sample_num_frames = (
+            getattr(config, "temporal_compression_ratio", 8) + 1
+            if "LTXVideo095DownBlock3D" in down_block_types
+            else num_frames
+        )
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name in ["sample", "latent_sample"]:
-            return self.random_float_tensor(
-                [self.batch_size, self.num_channels, self.num_frames, self.height, self.width]
-            )
+            num_frames = self.sample_num_frames if input_name == "sample" else self.num_frames
+            return self.random_float_tensor([self.batch_size, self.num_channels, num_frames, self.height, self.width])
         if input_name == "timestep":
-            return self.random_int_tensor([1], max_value=20, min_value=1, framework=framework, dtype=int_dtype)
+            return self.random_float_tensor(
+                [self.batch_size], max_value=20, min_value=1, framework=framework, dtype="fp32"
+            )
 
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
@@ -1240,6 +1249,55 @@ class DummyMiniCPMVImageInputGenerator(DummyVisionInputGenerator):
             )
 
 
+class DummyMiniCPMV4_7VisionInputGenerator(DummyVisionInputGenerator):
+    """
+    Dummy inputs for the per-crop MiniCPM-V 4.7 vision graph: the NaViT-packed patches of one crop plus the host-side
+    index tensors (position embedding ids, 2x2 window order for the ViT merger and 2x2 order for the final merger).
+    """
+
+    SUPPORTED_INPUT_NAMES = ("pixel_values", "position_ids", "window_index", "merge_index")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
+        width: int = DEFAULT_DUMMY_SHAPES["width"],
+        height: int = DEFAULT_DUMMY_SHAPES["height"],
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, num_channels, width, height)
+        config = normalized_config.config
+        self.patch_size = config.patch_size
+        self.num_positions = (config.image_size // config.patch_size) ** 2
+        # crop grid in patches, both sides divisible by 4 (2x2 window merge followed by 2x2 merge)
+        self.grid_height = max(4, self.height // self.patch_size // 4 * 4)
+        self.grid_width = max(4, self.width // self.patch_size // 4 * 4)
+
+    @staticmethod
+    def _block_order(height: int, width: int) -> torch.Tensor:
+        # row-major token indices regrouped so that every 2x2 block is contiguous
+        return torch.arange(height * width).view(height // 2, 2, width // 2, 2).permute(0, 2, 1, 3).reshape(-1)
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        num_patches = self.grid_height * self.grid_width
+        if input_name == "pixel_values":
+            return self.random_float_tensor(
+                shape=[1, self.num_channels, self.patch_size, num_patches * self.patch_size],
+                framework=framework,
+                dtype=float_dtype,
+            )
+        if input_name == "position_ids":
+            return self.random_int_tensor(
+                shape=[num_patches], max_value=self.num_positions, framework=framework, dtype=int_dtype
+            )
+        if input_name == "window_index":
+            return self._block_order(self.grid_height, self.grid_width)
+        if input_name == "merge_index":
+            return self._block_order(self.grid_height // 2, self.grid_width // 2)
+
+
 class DummyMiniCPMVResampleInputGenerator(DummyVisionInputGenerator):
     SUPPORTED_INPUT_NAMES = ("image_feature", "pos_embed", "key_padding_mask")
 
@@ -1449,6 +1507,24 @@ class DummyQwen2VLLMInputGenerator(DummyTextInputGenerator):
         return generated_input
 
 
+class DummyMiniCPMV4_7LMInputGenerator(DummyQwen2VLLMInputGenerator):
+    """
+    (3, batch, seq) M-RoPE `position_ids` and an `attention_mask` that covers the past and the current tokens, the past
+    length being the dummy cache length (`sequence_length`) produced by `Qwen3_5DummyPastKeyValuesGenerator`.
+    """
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "attention_mask":
+            return self.random_int_tensor(
+                shape=[self.batch_size, 2 * self.sequence_length],
+                min_value=1,
+                max_value=2,
+                framework=framework,
+                dtype=int_dtype,
+            )
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
 class DummyQwen3_5LMInputGenerator(DummyTextInputGenerator):
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         generated_input = super().generate(input_name, framework, int_dtype, float_dtype)
@@ -1559,17 +1635,16 @@ class DummyQwen3VLVisionEmbedInputGenerator(DummyQwen2VLVisionEmbedInputGenerato
             )
 
 
-class Qwen3ASRDummySeq2SeqPastKeyValuesGenerator(DummySeq2SeqPastKeyValuesGenerator):
+class Qwen3ASRDummySeq2SeqPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     """Custom KV cache generator for Qwen3-ASR with GQA (num_key_value_heads != num_attention_heads).
     Qwen3-ASR has no cross-attention, so only self-attention KV cache is generated (2 per layer)."""
 
     def __init__(self, task, normalized_config, **kwargs):
         super().__init__(task, normalized_config, **kwargs)
-        # Override head count and head_dim for GQA
-        self.decoder_num_attention_heads = normalized_config.decoder_num_attention_heads
+        self.decoder_num_attention_heads = normalized_config.num_key_value_heads
         self.decoder_head_dim = getattr(normalized_config, "head_dim", None)
         if self.decoder_head_dim is None:
-            self.decoder_head_dim = self.decoder_hidden_size // normalized_config.num_attention_heads
+            self.decoder_head_dim = self.hidden_size // normalized_config.num_attention_heads
 
     def generate(self, input_name, framework="pt", int_dtype="int64", float_dtype="fp32"):
         if input_name == "past_key_values":
@@ -1585,7 +1660,7 @@ class Qwen3ASRDummySeq2SeqPastKeyValuesGenerator(DummySeq2SeqPastKeyValuesGenera
                     self.random_float_tensor(decoder_shape, framework=framework, dtype=float_dtype),
                     self.random_float_tensor(decoder_shape, framework=framework, dtype=float_dtype),
                 )
-                for _ in range(self.decoder_num_layers)
+                for _ in range(self.num_layers)
             ]
         return super().generate(input_name, framework=framework, int_dtype=int_dtype, float_dtype=float_dtype)
 
@@ -1607,6 +1682,34 @@ class FunASRDummyAudioInputGenerator(DummyAudioInputGenerator):
                 max_value=1,
                 framework=framework,
                 dtype=float_dtype,
+            )
+        return super().generate(input_name, framework=framework, int_dtype=int_dtype, float_dtype=float_dtype)
+
+
+class SenseVoiceDummyInputGenerator(FunASRDummyAudioInputGenerator):
+    """Dummy input generator for SenseVoiceSmall (CTC).
+
+    SenseVoiceSmall consumes fbank features laid out as (batch, num_frames, feature_size) plus the per-sample
+    valid frame counts (`speech_lengths`) and two integer prefix-query selectors (`language`, `textnorm`)
+    that index a small learned embedding table.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("input_features", "speech_lengths", "language", "textnorm")
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "speech_lengths":
+            # Valid frame count per sample; use the full (padded) frame count so the traced mask is all-ones.
+            return self.random_int_tensor(
+                shape=[self.batch_size],
+                max_value=self.nb_max_frames + 1,
+                min_value=self.nb_max_frames,
+                framework=framework,
+                dtype=int_dtype,
+            )
+        if input_name in ("language", "textnorm"):
+            # Any valid embedding index works for tracing; use 0 (== "auto" language).
+            return self.random_int_tensor(
+                shape=[self.batch_size], max_value=1, min_value=0, framework=framework, dtype=int_dtype
             )
         return super().generate(input_name, framework=framework, int_dtype=int_dtype, float_dtype=float_dtype)
 

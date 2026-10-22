@@ -266,6 +266,7 @@ HUB_MODEL_NAMES = {
     "minicpm": "optimum-intel-internal-testing/tiny-random-minicpm",
     "minicpm3": "optimum-intel-internal-testing/tiny-random-minicpm3",
     "minicpmv": "optimum-intel-internal-testing/tiny-random-minicpmv-2_6",
+    "minicpmv4_7": "optimum-intel-internal-testing/tiny-random-minicpmv47",
     "minicpmo": "optimum-intel-internal-testing/tiny-random-MiniCPM-o-2_6",
     "minicpm_v4_5": "optimum-intel-internal-testing/tiny-random-minicpm-v-4_5",
     "mistral": "optimum-intel-internal-testing/tiny-random-mistral",
@@ -323,6 +324,7 @@ HUB_MODEL_NAMES = {
     "qwen3_dflash": "optimum-intel-internal-testing/tiny-random-qwen3-dflash",
     "qwen3_deepspec_dflash": "optimum-intel-internal-testing/tiny-random-qwen3-deepspec-dflash",
     "fun_asr": "optimum-intel-internal-testing/tiny-random-fun-asr",
+    "sense_voice": "optimum-intel-internal-testing/tiny-random-sense-voice-small",
     "rembert": "optimum-intel-internal-testing/tiny-random-rembert",
     "resnet": "optimum-intel-internal-testing/tiny-random-resnet",
     "roberta": "optimum-intel-internal-testing/tiny-random-roberta",
@@ -377,6 +379,7 @@ HUB_MODEL_NAMES = {
     "sana": "optimum-intel-internal-testing/tiny-random-sana",
     "sana-sprint": "optimum-intel-internal-testing/tiny-random-sana-sprint",
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
+    "ltx-video-0.9.5": "optimum-intel-internal-testing/tiny-random-ltx-video-0.9.5",
     "qwenimage": "optimum-intel-internal-testing/tiny-random-qwen-image",
     "qwenimage21": "optimum-intel-internal-testing/tiny-random-qwen-image-2.1",
     "ltx2": "optimum-intel-internal-testing/tiny-random-ltx2",
@@ -532,6 +535,11 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_embeddings_model": 1,
         "vision_embeddings_model": 30,
     },
+    "minicpmv4_7": {
+        "lm_model": 110,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 28,
+    },
     "llava_next": {
         "lm_model": 30,
         "text_embeddings_model": 1,
@@ -653,6 +661,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vae_encoder": 28,
         "text_encoder": 64,
     },
+    "ltx-video-0.9.5": {
+        "transformer": 34,
+        "vae_decoder": 46,
+        "vae_encoder": 32,
+        "text_encoder": 18,
+    },
     "ltx2": {
         "transformer": 108,
         "vae_decoder": 26,
@@ -740,15 +754,16 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     },
     "ouro": {"model": 34},
     "qwen3_asr": {
-        "encoder": 36,
-        "decoder": 32,
-        "decoder_with_past": 32,
+        "audio_encoder": 36,
+        "text_embeddings": 2,
+        "language_model": 30,
     },
     "fun_asr": {
         "encoder": 46,
         "decoder": 30,
         "decoder_with_past": 30,
     },
+    "sense_voice": {"model": 34},
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
@@ -815,6 +830,7 @@ ARCH_TO_MODEL_CLASS = {
     "gemma4_moe": "OVModelForVisualCausalLM",
     "gemma4_unified": "OVModelForVisualCausalLM",
     "muse_glimmer": "OVModelForVisualCausalLM",
+    "minicpmv4_7": "OVModelForVisualCausalLM",
     "qwen3_omni_moe": "OVModelForMultimodalLM",
     "stable-diffusion": "OVDiffusionPipeline",
     "whisper": "OVModelForSpeechSeq2Seq",
@@ -1100,6 +1116,7 @@ TEST_NAME_TO_MODEL_TYPE = {
     "llama_compressed_tensors": "llama",
     "llava_next_mistral": "llava_next",
     "ltx-video": "ltx-video-transformer",
+    "ltx-video-0.9.5": "ltx-video-transformer",
     "ltx2": "ltx2-video-transformer",
     "ltx2.3": "ltx2-video-transformer",
     "mistral-nemo": "mistral",

@@ -15,6 +15,7 @@
 
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import openvino as ov
 import torch
@@ -34,6 +35,8 @@ from optimum.exporters.openvino import export_from_model, main_export
 from optimum.exporters.openvino.model_configs import (
     BertOpenVINOConfig,
     LTX2TextEncoderOpenVINOConfig,
+    LTXVaeDecoderOpenVINOConfig,
+    LTXVaeEncoderOpenVINOConfig,
     Qwen3OmniMoeConfigBehavior,
 )
 from optimum.exporters.openvino.model_patcher import LTX2TextEncoderPatcher
@@ -112,6 +115,7 @@ class ExportModelTest(unittest.TestCase):
         "flux": OVFluxPipeline,
         "qwenimage": OVQwenImagePipeline,
         "ltx-video": OVLTXPipeline,
+        "ltx-video-0.9.5": OVLTXPipeline,
         "ltx2": OVLTX2Pipeline,
         "ltx2.3": OVLTX2Pipeline,
         "kokoro": OVModelForTextToSpeechSeq2Seq,
@@ -131,6 +135,7 @@ class ExportModelTest(unittest.TestCase):
         "lfm2_moe": OVModelForCausalLM,
         "qwen3_asr": OVModelForSpeechSeq2Seq,
         "fun_asr": OVModelForSpeechSeq2Seq,
+        "sense_voice": OVModelForSpeechSeq2Seq,
         "mamba": OVModelForCausalLM,
         "falcon_mamba": OVModelForCausalLM,
         "gemma4": OVModelForVisualCausalLM,
@@ -148,6 +153,7 @@ class ExportModelTest(unittest.TestCase):
         "qwen3_omni_moe": OVModelForMultimodalLM,
         "muse_glimmer": OVModelForVisualCausalLM,
         "deepseek_ocr2": OVModelForVisualCausalLM,
+        "minicpmv4_7": OVModelForVisualCausalLM,
     }
 
     if is_diffusers_version(">=", "0.41.0.dev0"):
@@ -178,6 +184,7 @@ class ExportModelTest(unittest.TestCase):
         "qwenimage21": {"text_encoder": "8.0", "transformer": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
         "stable-diffusion-xl-refiner": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
         "ltx-video": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
+        "ltx-video-0.9.5": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
         "ltx2": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
         "ltx2.3": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
     }
@@ -194,7 +201,7 @@ class ExportModelTest(unittest.TestCase):
         auto_model = self.SUPPORTED_ARCHITECTURES[model_type]
         task = auto_model.export_feature
         model_name = MODEL_NAMES[model_type]
-        if model_type == "fun_asr":
+        if model_type in ("fun_asr", "sense_voice"):
             library_name = "funasr"
         else:
             library_name = TasksManager.infer_library_from_model(model_name)
@@ -223,6 +230,10 @@ class ExportModelTest(unittest.TestCase):
             from optimum.intel.openvino.modeling_funasr import _FunASRForSpeechSeq2Seq
 
             model = _FunASRForSpeechSeq2Seq.from_pretrained(model_name, **loading_kwargs)
+        elif model_type == "sense_voice":
+            from optimum.intel.openvino.modeling_funasr import _SenseVoiceForCTC
+
+            model = _SenseVoiceForCTC.from_pretrained(model_name)
         elif model_type == "kokoro":
             model = TasksManager.get_model_from_task(
                 task=task,
@@ -299,7 +310,7 @@ class ExportModelTest(unittest.TestCase):
                     self.assertTrue(
                         ov_model.language_model.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
                     )
-                    if model_type == "gemma4_unified":
+                    if model_type in {"gemma3n", "gemma4_unified"}:
                         vision_model = ov_model.vision_embeddings.model
                         self.assertTrue(vision_model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"]))
                         self.assertEqual(
@@ -512,6 +523,45 @@ class LTX2ExportContractTest(unittest.TestCase):
         export_config = LTX2TextEncoderOpenVINOConfig(Gemma3Config())
         self.assertEqual(set(export_config.outputs), {"prompt_embeds"})
         self.assertIs(export_config._MODEL_PATCHER, LTX2TextEncoderPatcher)
+
+
+class LTXVideoExportContractTest(unittest.TestCase):
+    def test_vae_dummy_inputs_for_both_versions(self):
+        cases = [
+            (
+                SimpleNamespace(
+                    down_block_types=["LTXVideoDownBlock3D"] * 4,
+                    in_channels=3,
+                    latent_channels=128,
+                    patch_size=4,
+                    spatio_temporal_scaling=[True, True, True, False],
+                    timestep_conditioning=False,
+                ),
+                2,
+            ),
+            (
+                SimpleNamespace(
+                    down_block_types=["LTXVideo095DownBlock3D"] * 4,
+                    in_channels=3,
+                    latent_channels=128,
+                    spatial_compression_ratio=32,
+                    temporal_compression_ratio=8,
+                    timestep_conditioning=True,
+                ),
+                9,
+            ),
+        ]
+        for config, encoder_frames in cases:
+            encoder_inputs = LTXVaeEncoderOpenVINOConfig(config).generate_dummy_inputs(framework="pt")
+            decoder_config = LTXVaeDecoderOpenVINOConfig(config)
+            decoder_inputs = decoder_config.generate_dummy_inputs(framework="pt")
+            self.assertEqual(tuple(encoder_inputs["sample"].shape[2:]), (encoder_frames, 64, 64))
+            self.assertEqual(tuple(decoder_inputs["latent_sample"].shape[2:]), (2, 64, 64))
+            self.assertEqual("timestep" in decoder_inputs, config.timestep_conditioning)
+            if config.timestep_conditioning:
+                self.assertEqual(tuple(decoder_inputs["timestep"].shape), (2,))
+                self.assertEqual(decoder_inputs["timestep"].dtype, torch.float32)
+                self.assertEqual(decoder_config.inputs["timestep"], {0: "batch_size"})
 
 
 class CustomExportModelTest(unittest.TestCase):

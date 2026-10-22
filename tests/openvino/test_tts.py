@@ -185,6 +185,10 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
             self.assertIsInstance(ov_model, _OVModelForQwen3TTS)
             self.assertEqual(getattr(ov_model.config, "model_type", None), "qwen3_tts")
             self.assertEqual(sum(p.numel() for p in ov_model.model.parameters()), 0)
+            # The stateful decoder stacks overflow f16 on GPU without the activations scale.
+            for name, component in ov_model.components.items():
+                has_scale = component.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
+                self.assertEqual(has_scale, name in ("talker_model", "code_predictor_model"), name)
 
             inputs = ov_model.preprocess_input(
                 text=text, language="English", ref_audio=(ref_audio, sampling_rate), ref_text=ref_text
@@ -214,6 +218,7 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
 
     def test_compare_to_kokoro(self):
         from optimum.exporters.openvino import export_from_model
+        from optimum.exporters.tasks import TasksManager
         from optimum.intel.openvino.modeling_text2speech import _OVModelForKokoroTextToSpeech
 
         set_seed(SEED)

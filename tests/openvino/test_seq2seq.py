@@ -600,6 +600,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "ministral3",
         "muse_glimmer",
         "deepseek_ocr2",
+        "minicpmv4_7",
     ]
     if is_openvino_version(">=", "2026.3") and is_compressed_tensors_available():
         SUPPORTED_ARCHITECTURES.append("qwen3_5_compressed_tensors")
@@ -614,6 +615,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "gemma4_moe",
         "gemma4_unified",
         "gemma4_unified-it",
+        "minicpmv4_7",
     ]
     SUPPORT_AUDIO = ["gemma4", "gemma4_unified-it", "qwen3_omni_moe"]
     # "llama" is registered for image-text-to-text
@@ -670,6 +672,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "gemma4_unified",
             "gemma4_unified-it",
             "muse_glimmer",
+            "minicpmv4_7",
         ]:
             from transformers import AutoModelForImageTextToText
 
@@ -952,6 +955,29 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         self.assertTrue(torch.equal(outputs_with_temporal_ids, outputs_without_temporal_ids))
 
         del ov_model
+        gc.collect()
+
+    @parameterized.expand(["minicpmv", "minicpm_v4_5"])
+    def test_minicpmv_resampler_padding_mask(self, model_arch):
+        # image slices of different sizes are padded to the longest one before the resampler;
+        # the padded positions must be ignored by the attention, as in the reference model
+        if "minicpmv" not in self.SUPPORTED_ARCHITECTURES:
+            self.skipTest("minicpmv is not supported by the installed transformers version")
+        model_id = MODEL_NAMES[model_arch]
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=True).eval()
+        ov_model = self.OVMODEL_CLASS.from_pretrained(
+            model_id, export=True, trust_remote_code=True, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
+        )
+        tgt_sizes = torch.tensor([[8, 8], [6, 5], [4, 4]], dtype=torch.int32)
+        set_seed(SEED)
+        image_features = torch.randn(3, 64, transformers_model.config.vision_config.hidden_size)
+        with torch.no_grad():
+            transformers_outputs = transformers_model.resampler(image_features, tgt_sizes)
+        ov_outputs = ov_model.resampling(image_features, tgt_sizes)
+        max_diff = torch.abs(ov_outputs - transformers_outputs).max()
+        self.assertLess(max_diff, 1e-4, f"Max abs diff {max_diff}")
+
+        del transformers_model, ov_model
         gc.collect()
 
     @parameterized.expand(
