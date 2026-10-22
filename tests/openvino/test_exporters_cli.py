@@ -903,6 +903,17 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "vision_embeddings_model": {"int8": 22},
             },
         ),
+        # data-aware, the recipe of the openbmb/MiniCPM-OCR-1.0 default int4 config
+        (
+            "image-text-to-text",
+            "minicpm_ocr",
+            "int4 --group-size 8 --ratio 0.8 --dataset textvqa --num-samples 1 --awq --scale-estimation",
+            {
+                "lm_model": {"int8": 28, "int4": 42},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 22},
+            },
+        ),
     ]
 
     # Pre-quantized compressed-tensors (AWQ pack-quantized) model. It is already quantized, so
