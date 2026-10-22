@@ -9435,30 +9435,15 @@ class DFlash2CandidateSelector(nn.Module):
         draft_hidden_states: torch.Tensor,
         anchor_token_ids: torch.LongTensor,
     ) -> torch.Tensor:
-        predecessor_ids = self.predecessor_ids(candidate_ids, anchor_token_ids)
-        return self.score(
-            F.embedding(predecessor_ids, self.predecessor_codebook),
-            F.embedding(candidate_ids, self.successor_codebook),
-            unary_logits,
-            draft_hidden_states,
-        )
-
-    def predecessor_ids(self, candidate_ids: torch.LongTensor, anchor_token_ids: torch.LongTensor) -> torch.LongTensor:
         batch_size = candidate_ids.shape[0]
         anchor_ids = anchor_token_ids.reshape(batch_size, 1, 1).expand(-1, 1, self.selector_top_k)
-        return torch.cat([anchor_ids, candidate_ids[:, :-1, :]], dim=1)
-
-    def score(
-        self,
-        predecessor_codes: torch.Tensor,
-        successor_codes: torch.Tensor,
-        unary_logits: torch.Tensor,
-        draft_hidden_states: torch.Tensor,
-    ) -> torch.Tensor:
+        predecessor_ids = torch.cat([anchor_ids, candidate_ids[:, :-1, :]], dim=1)
+        predecessor_codes = F.embedding(predecessor_ids, self.predecessor_codebook).to(torch.float32)
+        successor_codes = F.embedding(candidate_ids, self.successor_codebook).to(torch.float32)
         projection_input = draft_hidden_states.to(self.hidden_projection.weight.dtype)
         projected_hidden = self.hidden_projection(projection_input).to(torch.float32)
-        gated_predecessors = predecessor_codes.to(torch.float32) * projected_hidden.unsqueeze(2)
-        transition_scores = torch.matmul(gated_predecessors, successor_codes.to(torch.float32).transpose(-1, -2))
+        gated_predecessors = predecessor_codes * projected_hidden.unsqueeze(2)
+        transition_scores = torch.matmul(gated_predecessors, successor_codes.transpose(-1, -2))
         return transition_scores + unary_logits.to(torch.float32).unsqueeze(-2)
 
 
