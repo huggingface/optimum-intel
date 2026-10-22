@@ -723,10 +723,12 @@ class OVGuard:
             tokenizer (`PreTrainedTokenizerBase`, *optional*):
                 Tokenizer of the guard model. Loaded from the model directory when not given.
             kwargs:
-                Passed on to [`OVGenerativeGuard`] for generative guards.
+                Passed on to [`OVGenerativeGuard`] for generative guards, except `trust_remote_code`,
+                which is used to load the tokenizer when it is not given.
         """
+        trust_remote_code = kwargs.pop("trust_remote_code", False)
         if tokenizer is None:
-            tokenizer = _load_tokenizer(model.config._name_or_path, trust_remote_code=False)
+            tokenizer = _load_tokenizer(model.config._name_or_path, trust_remote_code=trust_remote_code)
         if get_token_classifier_guard_spec(model.config) is not None:
             return cls(OVTokenClassifierGuard(model, tokenizer))
         return cls(OVGenerativeGuard(model, tokenizer, **kwargs))

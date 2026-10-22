@@ -168,6 +168,7 @@ class OVGuardConfigAndReportTest(unittest.TestCase):
         self.assertIn("Violent", str(error))
 
 
+@unittest.skipIf("qwen3_guard" not in MODEL_NAMES, "Qwen3Guard-Stream remote code requires transformers<5")
 class OVTokenClassifierGuardTest(unittest.TestCase):
     """Guards backed by a token classifier, exercised with a tiny random Qwen3Guard-Stream."""
 
@@ -349,13 +350,15 @@ class OVGuardedGenerationTest(unittest.TestCase):
         llm.config.eos_token_id = None
         return llm
 
-    def _load_token_classifier_guard(self, with_past: bool = True) -> OVGuard:
+    def _load_token_classifier_guard(self, with_past: bool = True, device: str = OPENVINO_DEVICE) -> OVGuard:
+        if "qwen3_guard" not in MODEL_NAMES:
+            self.skipTest("Qwen3Guard-Stream remote code requires transformers<5")
         return OVGuard.from_pretrained(
             MODEL_NAMES["qwen3_guard"],
             task="token-classification-with-past" if with_past else "token-classification",
             export=True,
             trust_remote_code=True,
-            device=OPENVINO_DEVICE,
+            device=device,
         )
 
     def _load_generative_guard(self, **kwargs) -> OVGuard:
@@ -627,14 +630,7 @@ class OVGuardedGenerationTest(unittest.TestCase):
     # --- device placement ----------------------------------------------------------------------
 
     def test_guard_runs_on_its_own_device(self):
-        llm = self._load_llm()
-        guard = OVGuard.from_pretrained(
-            MODEL_NAMES["qwen3_guard"],
-            task="token-classification-with-past",
-            export=True,
-            trust_remote_code=True,
-            device="CPU",
-        )
+        llm, guard = self._load_llm(), self._load_token_classifier_guard(device="CPU")
         self.assertEqual(guard.device, "CPU")
         self.assertEqual(llm._device, OPENVINO_DEVICE)
         out = llm.generate(
