@@ -31,7 +31,6 @@ from openvino.exceptions import OVTypeError
 from openvino.tools.ovc import convert_model
 from optimum.exporters.openvino.dflash_utils import (
     DFLASH2_GPU_MIN_ACTIVATIONS_SCALE_FACTOR,
-    MARKOV_HEAD_INTERFACE,
     MarkovHeadSpec,
     parse_and_validate_dflash_config,
 )
@@ -1073,12 +1072,12 @@ def _add_dflash_mode_to_rt_info(
     also gets markov_rank and markov_head_type, which tell runtimes to load its Markov head model.
 
     With `markov_head_model`, the model is the Markov head model of the draft instead. It is not marked
-    as a draft (dflash_mode marks the draft backbone): dflash/interface names its input/output contract,
-    dflash/top_k is the K of its TopK. It repeats markov_rank and markov_head_type so that runtimes can check
-    that it belongs to the draft backbone next to it.
+    as a draft (dflash_mode marks the draft backbone), and dflash/top_k is the K of its TopK. It repeats
+    markov_rank and markov_head_type so that runtimes can check that it belongs to the draft backbone next
+    to it. Runtimes find its computations and read their results by port name, so a port whose meaning
+    changes needs a new name.
     """
     if markov_head_model:
-        model.set_rt_info(MARKOV_HEAD_INTERFACE, ["dflash", "interface"])
         model.set_rt_info(str(markov_head.top_k), ["dflash", "top_k"])
         model.set_rt_info(str(markov_head.markov_rank), ["dflash", "markov_rank"])
         model.set_rt_info(markov_head.markov_head_type, ["dflash", "markov_head_type"])

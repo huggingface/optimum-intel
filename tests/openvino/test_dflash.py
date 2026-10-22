@@ -401,7 +401,6 @@ class DSparkExportTest(unittest.TestCase):
 
             markov_rt_info = markov_head_ir.get_rt_info()["dflash"]
             expected_rt_info = {
-                "interface": "markov_head_v1",
                 "top_k": str(MARKOV_HEAD_DEFAULT_TOP_K),
                 "markov_rank": str(config.markov_rank),
                 "markov_head_type": "vanilla",
@@ -853,7 +852,6 @@ class DFlash2ExportTest(unittest.TestCase):
             self.assertEqual(
                 {name: markov_rt_info[name].value for name in markov_rt_info},
                 {
-                    "interface": "markov_head_v1",
                     "top_k": str(top_k),
                     "markov_rank": str(dflash_config["selector_rank"]),
                     "markov_head_type": "dflash2",

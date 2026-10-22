@@ -1120,7 +1120,6 @@ class OVCLIExportTestCase(unittest.TestCase):
 
             markov_model = core.read_model(Path(tmpdir) / "openvino_markov_head_model.xml")
             markov_rt_info = markov_model.get_rt_info()["dflash"]
-            self.assertEqual(markov_rt_info["interface"].value, "markov_head_v1")
             self.assertEqual(markov_rt_info["markov_head_type"].value, "dflash2")
             self.assertEqual(markov_rt_info["top_k"].value, str(dflash_config["selector_top_k"]))
             self.assertFalse(markov_model.has_rt_info(["runtime_options"]))
@@ -1895,7 +1894,6 @@ class OVCLIExportTestCase(unittest.TestCase):
                 )
                 markov_model = core.read_model(Path(tmpdir) / "openvino_markov_head_model.xml")
                 markov_rt_info = markov_model.get_rt_info()["dflash"]
-                self.assertEqual(markov_rt_info["interface"].value, "markov_head_v1")
                 self.assertEqual(markov_rt_info["top_k"].value, "64")
                 self.assertFalse(markov_model.has_rt_info(["runtime_options"]))
                 # The Markov head model is never weight-compressed; a floating-point weight format still applies.

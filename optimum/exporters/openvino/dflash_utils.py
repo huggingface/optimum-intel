@@ -35,7 +35,6 @@ DSPARK_ARCHITECTURES = {"Qwen3DSparkModel"}
 DSPARK_SUPPORTED_MARKOV_HEAD_TYPES = ("vanilla",)
 # The DFlash-2 candidate selector is a Markov head whose transitions are gated by the draft hidden states.
 DFLASH2_MARKOV_HEAD_TYPE = "dflash2"
-MARKOV_HEAD_INTERFACE = "markov_head_v1"
 # K of the TopK in the exported candidate scorer of a DSpark Markov head. Runtimes may replace it at load time.
 MARKOV_HEAD_DEFAULT_TOP_K = 64
 # The DFlash-2 draft requires at least this activation scale for correct GPU FP16 execution. It is
