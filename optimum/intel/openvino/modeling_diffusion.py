@@ -167,86 +167,6 @@ core = Core()
 logger = logging.getLogger(__name__)
 
 
-# Names of every pipeline component that is backed by an OpenVINO model and can therefore be
-# individually placed on a device / configured through the per-component `ov_config` form.
-_ALL_COMPONENT_NAMES = frozenset(
-    {
-        DIFFUSION_MODEL_UNET_SUBFOLDER,
-        DIFFUSION_MODEL_TRANSFORMER_SUBFOLDER,
-        DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER,
-        DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER,
-        DIFFUSION_MODEL_TEXT_ENCODER_SUBFOLDER,
-        DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER,
-        DIFFUSION_MODEL_TEXT_ENCODER_3_SUBFOLDER,
-        DIFFUSION_MODEL_VISION_ENCODER_SUBFOLDER,
-        DIFFUSION_MODEL_TEXT_ENCODER_I2I_SUBFOLDER,
-        DIFFUSION_MODEL_CONNECTORS_SUBFOLDER,
-        DIFFUSION_MODEL_AUDIO_VAE_DECODER_SUBFOLDER,
-        DIFFUSION_MODEL_VOCODER_SUBFOLDER,
-    }
-)
-
-
-def _normalize_ov_config_devices(
-    ov_config: Optional[Dict[str, Any]], default_device: str
-) -> Tuple[str, Dict[str, Any], Dict[str, Dict[str, Any]]]:
-    """
-    Split an ``ov_config`` into the pipeline-wide default configuration and optional per-component
-    overrides.
-
-    Two forms are supported:
-
-    * Flat (legacy): a mapping of OpenVINO properties applied to every component, e.g.
-      ``{"CACHE_DIR": "/tmp/cache", "PERFORMANCE_HINT": "LATENCY"}``.
-    * Per-component: a mapping of component name (or the special key ``"default"``) to that
-      component's settings, where each value is itself a dict that may hold a ``"device"`` entry
-      plus OpenVINO properties, e.g.
-      ``{"transformer": {"device": "GPU"}, "default": {"device": "CPU"}}``.
-
-    Returns ``(default_device, default_props, per_component)`` where ``per_component`` maps a
-    component name to ``{"device": str, "props": dict}``.
-    """
-    ov_config = {} if ov_config is None else dict(ov_config)
-    default_device = (default_device or "CPU").upper()
-
-    # The per-component form is identified by its nested dict values; OpenVINO property values are
-    # never dicts, so this cannot be confused with the flat form.
-    is_per_component = any(isinstance(value, dict) for value in ov_config.values())
-    if not is_per_component:
-        return default_device, ov_config, {}
-
-    non_dict_keys = [key for key, value in ov_config.items() if not isinstance(value, dict)]
-    if non_dict_keys:
-        raise ValueError(
-            "When `ov_config` provides per-component settings, every value must be a dict, but "
-            f"got non-dict value(s) for: {', '.join(map(str, non_dict_keys))}. Put shared OpenVINO "
-            "properties under a `default` entry instead of mixing them with per-component entries."
-        )
-
-    unknown_keys = [key for key in ov_config if key != "default" and key not in _ALL_COMPONENT_NAMES]
-    if unknown_keys:
-        logger.warning(
-            "Ignoring unknown component name(s) in `ov_config`: %s. Known components: %s.",
-            ", ".join(sorted(unknown_keys)),
-            ", ".join(sorted(_ALL_COMPONENT_NAMES)),
-        )
-
-    default_entry = ov_config.get("default", {})
-    if "device" in default_entry:
-        default_device = str(default_entry["device"]).upper()
-    default_props = {key: value for key, value in default_entry.items() if key != "device"}
-
-    per_component: Dict[str, Dict[str, Any]] = {}
-    for name, entry in ov_config.items():
-        if name == "default":
-            continue
-        device = str(entry["device"]).upper() if "device" in entry else default_device
-        props = {key: value for key, value in entry.items() if key != "device"}
-        per_component[name] = {"device": device, "props": props}
-
-    return default_device, default_props, per_component
-
-
 # TODO: support DiffusionPipeline.from_pipe()
 # TODO: makes more sense to have a compositional OVMixin class
 # TODO: instead of one bloated __init__, we should consider an __init__ per pipeline
@@ -311,10 +231,11 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
+        self._device = device.upper()
         self.is_dynamic = dynamic_shapes
         self._compile_only = compile_only
         self.model_save_dir = model_save_dir
-        self._init_ov_config(ov_config, device)
+        self.ov_config = {} if ov_config is None else {**ov_config}
         self.preprocessors = kwargs.get("preprocessors", [])
 
         if self._compile_only:
@@ -441,26 +362,6 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
         if compile and not self._compile_only:
             self.compile()
-
-    def _init_ov_config(self, ov_config: Optional[Dict[str, Any]], device: str):
-        """
-        Parse ``ov_config`` (flat or per-component form) and store the pipeline default device, the
-        default OpenVINO properties and the per-component overrides consumed by each `OVPipelinePart`.
-        """
-        default_device, default_props, per_component = _normalize_ov_config_devices(ov_config, device)
-        self._device = default_device
-        self.ov_config = default_props
-        self._component_ov_config = per_component
-
-    def _set_ov_config_parameters(self):
-        super()._set_ov_config_parameters()
-        # Apply the same default OpenVINO properties to each per-component config. Component parts
-        # reference these dicts directly, so the defaults reach them even though the parts were
-        # created before this runs.
-        for component_config in getattr(self, "_component_ov_config", {}).values():
-            props = component_config["props"]
-            if props.get("PERFORMANCE_HINT") is None:
-                props["PERFORMANCE_HINT"] = "LATENCY"
 
     @property
     def _component_names(self) -> List[str]:
@@ -849,10 +750,6 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
 
         if isinstance(device, str):
             self._device = device.upper()
-            # A pipeline-wide `.to(device)` overrides any per-component placement from `ov_config`.
-            for component in self.components.values():
-                if isinstance(component, OVPipelinePart):
-                    component._own_device = None
             self.clear_requests()
         elif device is not None:
             raise ValueError(
@@ -1322,16 +1219,7 @@ class OVPipelinePart(OVModelHostMixin, ConfigMixin, CacheMixin):
         self.parent_pipeline = parent_pipeline
         self.request = None if not parent_pipeline._compile_only else self.model
 
-        # Per-component `ov_config` overrides (device + OpenVINO properties). When this component is
-        # configured explicitly it gets its own device and a dedicated properties dict; otherwise it
-        # falls back to the pipeline-wide device and shares the pipeline default properties.
-        component_config = getattr(parent_pipeline, "_component_ov_config", {}).get(model_name)
-        if component_config is not None:
-            self._own_device = component_config["device"]
-            self.ov_config = component_config["props"]
-        else:
-            self._own_device = None
-            self.ov_config = parent_pipeline.ov_config
+        self.ov_config = parent_pipeline.ov_config
 
         if isinstance(parent_pipeline.model_save_dir, TemporaryDirectory):
             self.model_save_dir = Path(parent_pipeline.model_save_dir.name) / self.model_name
@@ -1349,13 +1237,7 @@ class OVPipelinePart(OVModelHostMixin, ConfigMixin, CacheMixin):
 
     @property
     def _device(self) -> str:
-        if self._own_device is not None:
-            return self._own_device
         return self.parent_pipeline._device
-
-    @_device.setter
-    def _device(self, value: Optional[str]):
-        self._own_device = None if value is None else value.upper()
 
     @property
     def device(self) -> torch.device:
@@ -2680,10 +2562,11 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
         quantization_config: Optional[Union[OVWeightQuantizationConfig, Dict]] = None,
         **kwargs,
     ):
+        self._device = device.upper()
         self.is_dynamic = dynamic_shapes
         self._compile_only = compile_only
         self.model_save_dir = model_save_dir
-        self._init_ov_config(ov_config, device)
+        self.ov_config = {} if ov_config is None else {**ov_config}
         self.preprocessors = kwargs.get("preprocessors", [])
 
         if self._compile_only:
