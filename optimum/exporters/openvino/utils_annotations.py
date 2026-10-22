@@ -236,3 +236,73 @@ def add_hidden_states_rt_info(source_model, ov_model, config: Any):
             "Skipping hidden-state RT-info annotation; exporting the ordinary model without it: %s",
             error,
         )
+
+
+MTP_HIDDEN_STATES_RT_INFO_KEY = "mtp_hidden_states"
+
+
+def _in_scope(name: str, scope: str) -> bool:
+    return f"{scope}." in name or f"{scope}/" in name
+
+
+def discover_mtp_hidden_states_rt_info(ov_model, text_config) -> Dict[str, Any]:
+    """
+    Return the locator of the main model value consumed by the Multi-Token Prediction (MTP) head of models with
+    hyper-connections (Qwen3.8-Flash-Next): the hyper-connection streams [batch, seq, hc_count * hidden] entering the
+    final `hyper_connection_mixer`, i.e. the output of the last decoder layer. The lm_head input, which speculative
+    decoding pipelines take by default, is the mixer output of width `hidden` and is not the MTP input.
+
+    The streams are the value consumed by the mixer whose producer does not itself depend on other mixer values (the
+    producer may still carry a mixer name, as conversion moves the names of removed nodes to their inputs).
+    """
+    scope = "language_model.hyper_connection_mixer"
+    hidden_size = int(text_config.hc_count * text_config.hidden_size)
+    ops = ov_model.get_ordered_ops()
+    candidates = {}
+    for node in ops:
+        if not _in_scope(node.get_friendly_name(), scope):
+            continue
+        for input_port in node.inputs():
+            output = input_port.get_source_output()
+            producer = output.get_node()
+            if producer.get_type_name() == "Constant" or not _is_rank3_hidden_output(output, hidden_size):
+                continue
+            depends_on_mixer = any(
+                _in_scope(producer_input.get_source_output().get_node().get_friendly_name(), scope)
+                for producer_input in producer.inputs()
+                if producer_input.get_source_output().get_node().get_type_name() != "Constant"
+            )
+            if _in_scope(producer.get_friendly_name(), scope) and depends_on_mixer:
+                continue
+            candidates[(producer.get_friendly_name(), int(output.get_index()))] = output
+    if len(candidates) != 1:
+        raise ValueError(f"Expected one input of the hyper-connection mixer, found {len(candidates)}.")
+    producer, output_index = next(iter(candidates))
+    # friendly names are the persistent locator; duplicate producers are unsafe
+    if Counter(op.get_friendly_name() for op in ops)[producer] != 1:
+        raise ValueError(f"The friendly name of the MTP hidden-state producer {producer} is not unique.")
+    return {
+        "layer": int(text_config.num_hidden_layers) - 1,
+        "producer": producer,
+        "output_index": output_index,
+        "hidden_size": hidden_size,
+    }
+
+
+def add_mtp_hidden_states_rt_info(ov_model, config: Any):
+    """
+    Annotate the language model with the locator of the MTP head input (`mtp_hidden_states` rt_info, a JSON string
+    {"layer", "producer", "output_index", "hidden_size"}), so that a speculative decoding pipeline can expose it as an
+    output on demand. The graph is left untouched.
+    """
+    # only the language model, not the other models sharing its config (text embeddings, MTP head)
+    if not isinstance(config, LMInputEmbedsConfigHelper):
+        return
+    text_config = getattr(config, "_config", None)
+    if text_config is None or getattr(text_config, "mtp_num_hidden_layers", 0) <= 0:
+        return
+    try:
+        annotation = discover_mtp_hidden_states_rt_info(ov_model, text_config)
+        ov_model.set_rt_info(json.dumps(annotation, separators=(",", ":")), MTP_HIDDEN_STATES_RT_INFO_KEY)
+    except Exception as error:
+        logger.warning("Skipping MTP hidden-state RT-info annotation: %s", error)

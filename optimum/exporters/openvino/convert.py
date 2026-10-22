@@ -82,7 +82,7 @@ from .stateful import (
     ensure_stateful_is_available,
     patch_stateful,
 )
-from .utils_annotations import add_hidden_states_rt_info
+from .utils_annotations import add_hidden_states_rt_info, add_mtp_hidden_states_rt_info
 
 
 logger = logging.getLogger(__name__)
@@ -172,6 +172,8 @@ def _save_model(
         "gemma4",
     }:
         add_hidden_states_rt_info(source_model, model, config)
+    if getattr(getattr(config, "_config", None), "model_type", None) == "qwen4_exp_text":
+        add_mtp_hidden_states_rt_info(model, config)
 
     save_model(model, path, compress_to_fp16)
     del model

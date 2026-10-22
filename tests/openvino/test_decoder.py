@@ -310,6 +310,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "qwen3_vl_text",
             "qwen3_5_text",
             "qwen3_5_moe_text",
+            "qwen4_exp_text",
             "gemma4_text",
             "gemma4_unified_text",
             "qwen3_omni_moe_text",

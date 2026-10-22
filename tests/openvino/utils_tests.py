@@ -319,6 +319,7 @@ HUB_MODEL_NAMES = {
     "qwen3_5_dflash": "optimum-intel-internal-testing/tiny-random-qwen3.5-dflash",
     "qwen3_5_moe": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe",
     "qwen3_5_moe_mtp": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe-mtp",
+    "qwen4_exp": "optimum-intel-internal-testing/tiny-random-qwen38-flash-next",
     "qwen3_5_moe_dflash": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe-dflash",
     "qwen3_asr": "optimum-intel-internal-testing/tiny-random-qwen3-asr",
     "qwen3_dflash": "optimum-intel-internal-testing/tiny-random-qwen3-dflash",
@@ -636,6 +637,15 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_merger_model": 10,
         "vision_embeddings_pos_model": 1,
         "mtp_model": 28,
+    },
+    "qwen4_exp": {
+        "lm_model": 328,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 1,
+        "vision_embeddings_merger_model": 10,
+        "vision_embeddings_pos_model": 1,
+        "ngram_embeddings_model": 1,
+        "mtp_model": 46,
     },
     "qwen3_omni_moe": {
         "lm_model": 34,
