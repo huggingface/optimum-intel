@@ -9395,7 +9395,7 @@ class GroupedDynamicCausalConv(nn.Module):
             if tap == 0:
                 shifted_states = rows
             else:
-                # select rather than multiply, so discarded context rows can never inject inf/nan
+                # select rather than multiply, so a row of another block can never inject inf/nan
                 shifted_states = F.pad(rows, (0, 0, tap, 0))[:-tap].masked_fill(~block_tap_masks[tap], 0.0)
             output = output + shifted_states.reshape(-1, self.num_groups, self.group_size) * kernel[:, tap, :, :]
         return output.reshape(hidden_states.shape)
