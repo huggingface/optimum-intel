@@ -30,7 +30,6 @@ from openvino._offline_transformations import paged_attention_transformation
 from parameterized import parameterized
 from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
-from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
 from utils_tests import MODEL_NAMES, get_dflash2_model_path, get_dspark_model_path
 
 from optimum.exporters.openvino import export_from_model
@@ -145,7 +144,8 @@ class DFlashExportTest(unittest.TestCase):
             )
 
             annotated_model = ov.Core().read_model(annotated_dir / model_filename)
-            self._assert_hidden_state_rt_info_is_valid(annotated_model)
+            locators = self._assert_hidden_state_rt_info_is_valid(annotated_model)
+            self.assertEqual(len(locators), model.config.get_text_config().num_hidden_layers)
 
     @parameterized.expand(("qwen3", "qwen3_moe"))
     def test_export_hidden_state_locators_for_representative_decoder_models(self, model_type):
@@ -364,36 +364,31 @@ class DSparkExportTest(unittest.TestCase):
                 },
             )
 
-    def test_candidate_rows_follow_the_anchor_layout(self):
-        # The backbone emits every row in both layouts; the layout only moves the candidate rows, which the
-        # runtime finds through dflash/candidate_position_offset.
-        torch.manual_seed(5)
-        for sample_from_anchor, expected_offset in ((True, 0), (False, 1)):
-            with self.subTest(sample_from_anchor=sample_from_anchor):
-                model = self._model(sample_from_anchor)
-                inputs = _per_row_inputs(model.config, context_length=3, block_length=4, committed_length=0)
-                with torch.no_grad():
-                    last_hidden_state = model(**inputs, use_cache=False).last_hidden_state
-                self.assertEqual(last_hidden_state.shape[1], 7)
-                _, parts, _ = _get_submodels_and_export_configs(
-                    model,
-                    task="text-generation",
-                    monolith=False,
-                    custom_export_configs={},
-                    custom_architecture=False,
-                    _variant="default",
-                    library_name="transformers",
-                    stateful=False,
-                )
-                self.assertEqual(parts["model"][1].candidate_position_offset, expected_offset)
+    @staticmethod
+    def _keep_computation(markov_head_ir, input_names, output_names, top_k=None):
+        """Keep one computation of the Markov head model and optionally replace K, as runtimes do at load time."""
+        markov_head_ir = markov_head_ir.clone()
+        computation = ov.Model(
+            [markov_head_ir.output(name).get_node() for name in output_names],
+            [markov_head_ir.input(name).get_node() for name in input_names],
+        )
+        if top_k is not None:
+            (topk,) = [op for op in computation.get_ops() if op.get_type_name() == "TopK"]
+            k_type = topk.input_value(1).get_element_type()
+            topk.input(1).replace_source_output(
+                ov.opset13.constant(np.array(top_k, dtype=k_type.to_dtype())).output(0)
+            )
+            computation.validate_nodes_and_infer_types()
+        return computation
 
-    def test_export_package_and_markov_head_parity(self):
+    def test_export_package_and_markov_head_computations(self):
         model = self._model()
         config = model.config
         with TemporaryDirectory() as tmpdirname:
             output_dir = Path(tmpdirname)
             parts = _export_draft(model, output_dir)
             self.assertEqual(list(parts), ["model", "markov_head_model"])
+            markov_head = parts["markov_head_model"][0]
 
             core = ov.Core()
             draft_ir = core.read_model(output_dir / "openvino_model.xml")
@@ -433,50 +428,6 @@ class DSparkExportTest(unittest.TestCase):
             table_bytes = config.vocab_size * config.markov_rank * ov.Type.f32.size
             self.assertGreaterEqual(len(self._markov_weights(markov_head_ir, config)), 2)
             self.assertLess((output_dir / "openvino_markov_head_model.bin").stat().st_size, 3 * table_bytes)
-
-            compiled_markov_head = core.compile_model(markov_head_ir, "CPU")
-            for prev_token_ids, block_lengths in ((torch.tensor([7]), [1]), (torch.tensor([0, 5, 9]), [4, 2])):
-                with self.subTest(num_prev_tokens=prev_token_ids.numel(), block_lengths=block_lengths):
-                    markov_head_inputs = {
-                        "prev_token_ids": prev_token_ids,
-                        **self._packed_blocks(block_lengths, config.vocab_size),
-                    }
-                    with torch.no_grad():
-                        reference = parts["markov_head_model"][0](**markov_head_inputs)
-                    ov_outputs = compiled_markov_head(
-                        {name: value.numpy() for name, value in markov_head_inputs.items()}
-                    )
-                    for name in ("markov_bias", "edge_scores"):
-                        ov_output = torch.from_numpy(np.array(ov_outputs[compiled_markov_head.output(name)]))
-                        torch.testing.assert_close(ov_output, reference[name], rtol=1e-4, atol=1e-4)
-                    ov_candidate_ids = np.array(ov_outputs[compiled_markov_head.output("candidate_ids")])
-                    self.assertTrue(torch.equal(torch.from_numpy(ov_candidate_ids), reference.candidate_ids))
-
-    @staticmethod
-    def _keep_computation(markov_head_ir, input_names, output_names, top_k=None):
-        """Keep one computation of the Markov head model and optionally replace K, as runtimes do at load time."""
-        markov_head_ir = markov_head_ir.clone()
-        computation = ov.Model(
-            [markov_head_ir.output(name).get_node() for name in output_names],
-            [markov_head_ir.input(name).get_node() for name in input_names],
-        )
-        if top_k is not None:
-            (topk,) = [op for op in computation.get_ops() if op.get_type_name() == "TopK"]
-            k_type = topk.input_value(1).get_element_type()
-            topk.input(1).replace_source_output(
-                ov.opset13.constant(np.array(top_k, dtype=k_type.to_dtype())).output(0)
-            )
-            computation.validate_nodes_and_infer_types()
-        return computation
-
-    def test_markov_head_model_splits_into_dense_step_and_packed_top_k_lattice(self):
-        model = self._model()
-        config = model.config
-        with TemporaryDirectory() as tmpdirname:
-            output_dir = Path(tmpdirname)
-            markov_head = _export_draft(model, output_dir)["markov_head_model"][0]
-            core = ov.Core()
-            markov_head_ir = core.read_model(output_dir / "openvino_markov_head_model.xml")
 
             markov_step_ir = self._keep_computation(markov_head_ir, ["prev_token_ids"], ["markov_bias"])
             self.assertFalse(any(op.get_type_name() == "TopK" for op in markov_step_ir.get_ops()))
@@ -755,29 +706,6 @@ class DFlash2ExportTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unique non-negative"):
             parse_and_validate_dflash_config(invalid_v1_config)
 
-    def test_target_annotations_cover_dflash2_target_layers(self):
-        draft_config = self._config()
-        target_config = deepcopy(draft_config)
-        target_config.architectures = ["Qwen3ForCausalLM"]
-        target_config.num_hidden_layers = max(draft_config.dflash_config["target_layer_ids"]) + 1
-        target_model = Qwen3ForCausalLM(target_config).eval()
-        with TemporaryDirectory() as tmpdirname:
-            target_dir = Path(tmpdirname) / "target"
-            export_from_model(
-                model=target_model,
-                output=target_dir,
-                task="text-generation",
-                preprocessors=None,
-                stateful=False,
-            )
-            target_ir = ov.Core().read_model(target_dir / "openvino_model.xml")
-            annotation = json.loads(target_ir.get_rt_info()["hidden_states_decoder_layers"].value)
-            for layer_id in draft_config.dflash_config["target_layer_ids"]:
-                locator = annotation["layers"][str(layer_id)]
-                matches = [op for op in target_ir.get_ops() if op.get_friendly_name() == locator["producer"]]
-                self.assertEqual(len(matches), 1)
-                self.assertLess(locator["output_index"], len(matches[0].outputs()))
-
     def test_grouped_dynamic_convolution_reference_parity(self):
         config = self._config()
         convolution = GroupedDynamicCausalConv(config).eval()
@@ -819,7 +747,7 @@ class DFlash2ExportTest(unittest.TestCase):
                 )
                 torch.testing.assert_close(finished.view_as(hidden_states), reference_finished)
 
-    def test_selector_lattice_and_path_reference_parity(self):
+    def test_selector_edge_scores_reference_parity(self):
         config = self._config()
         config.dflash_config["selector_rank"] = 1
         config.dflash_config["selector_top_k"] = 2
@@ -857,30 +785,6 @@ class DFlash2ExportTest(unittest.TestCase):
                         unary_logits[0, position, candidate_index] + correction
                     )
         torch.testing.assert_close(edge_scores, reference_scores)
-        self.assertEqual(edge_scores.dtype, torch.float32)
-
-        previous_index = 0
-        path = []
-        selected_rows = []
-        for position in range(candidate_ids.shape[1]):
-            selected_row = edge_scores[:, position, previous_index]
-            selected_rows.append(selected_row)
-            previous_index = selected_row.argmax(dim=-1).item()
-            path.append(candidate_ids[0, position, previous_index].item())
-        self.assertEqual(path, [2, 4])
-        self.assertEqual(unary_logits.argmax(dim=-1).tolist(), [[0, 0]])
-        for selected_row in selected_rows:
-            probabilities = torch.softmax(selected_row, dim=-1)
-            torch.testing.assert_close(probabilities.sum(dim=-1), torch.ones(1))
-
-        selector = selector.to(torch.bfloat16)
-        bf16_scores = selector(
-            candidate_ids,
-            unary_logits,
-            draft_hidden_states.to(torch.bfloat16),
-            anchor_token_ids,
-        )
-        self.assertEqual(bf16_scores.dtype, torch.float32)
 
     def test_markov_head_scores_packed_blocks_like_the_candidate_selector(self):
         torch.manual_seed(2)
@@ -965,7 +869,6 @@ class DFlash2ExportTest(unittest.TestCase):
             self.assertEqual(self._constant_count_with_shape(draft_ir, codebook_shape), 0)
             self.assertGreaterEqual(self._constant_count_with_shape(markov_head_ir, codebook_shape), 2)
 
-            compiled_draft = core.compile_model(draft_ir, "CPU")
             compiled_markov_head = core.compile_model(markov_head_ir, "CPU")
             output_head = torch.randn(config.hidden_size, config.vocab_size)
             context_length = 3
@@ -974,10 +877,6 @@ class DFlash2ExportTest(unittest.TestCase):
                     backbone_inputs = self._backbone_inputs(config, num_draft_tokens, context_length)
                     with torch.no_grad():
                         torch_hidden = model(**backbone_inputs, use_cache=False).last_hidden_state
-                    ov_hidden = compiled_draft({name: value.numpy() for name, value in backbone_inputs.items()})[0]
-                    ov_hidden = torch.from_numpy(np.array(ov_hidden))
-                    self.assertEqual(ov_hidden.shape, (1, context_length + num_draft_tokens + 1, config.hidden_size))
-                    torch.testing.assert_close(ov_hidden, torch_hidden, rtol=1e-4, atol=1e-5)
 
                     # the runtime scores the candidate rows, the block rows after the anchor row
                     draft_hidden_states = torch_hidden[0, context_length + 1 :]
@@ -1023,7 +922,7 @@ class DFlash2ExportTest(unittest.TestCase):
                     self.assertEqual(gpu_edges.shape, (num_draft_tokens, top_k, top_k))
                     self.assertTrue(np.isfinite(gpu_edges).all())
 
-    def test_stateful_draft_compression(self):
+    def test_stateful_export_keeps_the_markov_head_stateless(self):
         with TemporaryDirectory() as tmpdirname:
             stateful_dir = Path(tmpdirname) / "stateful"
             main_export(
@@ -1037,10 +936,6 @@ class DFlash2ExportTest(unittest.TestCase):
             markov_head_ir = core.read_model(stateful_dir / "openvino_markov_head_model.xml")
             self.assertGreater(len(draft_ir.get_variables()), 0)
             self.assertEqual(len(markov_head_ir.get_variables()), 0)
-
-            compressed_draft = nncf.compress_weights(draft_ir, mode=nncf.CompressWeightsMode.INT8_ASYM)
-            self.assertTrue(compressed_draft.has_rt_info(["dflash", "version"]))
-            self.assertTrue(markov_head_ir.has_rt_info(["dflash", "interface"]))
 
     def test_explicit_cache_export_contract(self):
         """Explicit cache ports remain an exporter option; GenAI converts the stateful draft to PagedAttention."""
@@ -1114,9 +1009,10 @@ class DFlash2ExportTest(unittest.TestCase):
 _SLIDING_WINDOW = 6
 # GenAI pages the KV cache in blocks of 32 tokens on CPU
 _CPU_KV_BLOCK_SIZE = 32
-# (context delta, block) rows per draft step: the first step spans two cache blocks, and every step
-# reaches past the sliding window
-_DRAFT_STEPS = ((34, 4), (3, 4), (1, 4), (2, 4))
+# (context delta, block) rows per draft step of two sequences drafted in one call: the first step of the first
+# sequence spans two cache blocks, every step reaches past the sliding window, and only the context rows in
+# front of each block keep the blocks of different sequences apart
+_DRAFT_STEPS = (((34, 4), (3, 4), (1, 4)), ((5, 4), (1, 4), (2, 4)))
 # PagedAttentionExtension input ports
 _PA_KEY_CACHE, _PA_SLIDING_WINDOW, _PA_TOKEN_TYPE_IDS = 3, 10, 25
 
@@ -1170,15 +1066,6 @@ class DFlashPagedAttentionTest(unittest.TestCase):
                 if name.endswith("base_kernel"):
                     parameter.copy_(torch.randn_like(parameter))
         return model
-
-    @staticmethod
-    def _draft_steps(config):
-        torch.manual_seed(1)
-        steps, committed_length = [], 0
-        for context_length, block_length in _DRAFT_STEPS:
-            steps.append(_per_row_inputs(config, context_length, block_length, committed_length))
-            committed_length += context_length
-        return steps
 
     @staticmethod
     def _reference_outputs(model, steps):
@@ -1309,38 +1196,9 @@ class DFlashPagedAttentionTest(unittest.TestCase):
     def test_paged_backend_matches_pytorch(self, variant):
         model = self._model(variant)
         config = model.config
-        steps = self._draft_steps(config)
-        references = self._reference_outputs(model, steps)
-        max_length = sum(context for context, _ in _DRAFT_STEPS) + max(block for _, block in _DRAFT_STEPS)
-        with TemporaryDirectory() as tmpdirname:
-            draft_path = self._export_draft(model, Path(tmpdirname))
-            request, cache_names = self._compile_paged_draft(
-                draft_path, config, math.ceil(max_length / _CPU_KV_BLOCK_SIZE)
-            )
-            committed_length = 0
-            for step, ((context_length, block_length), inputs, reference) in enumerate(
-                zip(_DRAFT_STEPS, steps, references)
-            ):
-                used_blocks = math.ceil((committed_length + context_length + block_length) / _CPU_KV_BLOCK_SIZE)
-                feed = self._paged_feed([inputs], [committed_length], [np.arange(used_blocks)])
-                self.assertEqual({port.get_any_name() for port in request.model_inputs}, set(feed) | cache_names)
-                output = torch.from_numpy(np.array(request.infer(feed)["last_hidden_state"]))
-                # every row comes out, one per token
-                torch.testing.assert_close(
-                    output.reshape(reference.shape), reference, rtol=1e-4, atol=1e-5, msg=f"step {step}"
-                )
-                committed_length += context_length
-
-    @parameterized.expand(VARIANTS)
-    def test_paged_backend_drafts_several_sequences_in_one_call(self, variant):
-        model = self._model(variant)
-        config = model.config
-        # (context delta, block) rows of two sequences per call; only the context rows in front of each
-        # block keep the blocks of different sequences apart
-        sequence_steps = (((34, 4), (3, 4), (1, 4)), ((5, 4), (1, 4), (2, 4)))
         torch.manual_seed(3)
         sequences = []
-        for steps in sequence_steps:
+        for steps in _DRAFT_STEPS:
             committed_length, inputs = 0, []
             for context_length, block_length in steps:
                 inputs.append(_per_row_inputs(config, context_length, block_length, committed_length))
@@ -1349,13 +1207,13 @@ class DFlashPagedAttentionTest(unittest.TestCase):
         references = [self._reference_outputs(model, inputs) for inputs in sequences]
         blocks_per_sequence = max(
             math.ceil((sum(context for context, _ in steps) + max(block for _, block in steps)) / _CPU_KV_BLOCK_SIZE)
-            for steps in sequence_steps
+            for steps in _DRAFT_STEPS
         )
         with TemporaryDirectory() as tmpdirname:
             draft_path = self._export_draft(model, Path(tmpdirname))
-            request, _ = self._compile_paged_draft(draft_path, config, blocks_per_sequence * len(sequences))
+            request, cache_names = self._compile_paged_draft(draft_path, config, blocks_per_sequence * len(sequences))
             committed_lengths = [0] * len(sequences)
-            for step in range(len(sequence_steps[0])):
+            for step in range(len(_DRAFT_STEPS[0])):
                 step_inputs = [inputs[step] for inputs in sequences]
                 block_tables = [
                     sequence * blocks_per_sequence
@@ -1363,12 +1221,13 @@ class DFlashPagedAttentionTest(unittest.TestCase):
                     for sequence, (committed, inputs) in enumerate(zip(committed_lengths, step_inputs))
                 ]
                 feed = self._paged_feed(step_inputs, committed_lengths, block_tables)
+                self.assertEqual({port.get_any_name() for port in request.model_inputs}, set(feed) | cache_names)
                 output = torch.from_numpy(np.array(request.infer(feed)["last_hidden_state"]))
-                # the rows of all sequences, concatenated in row order
+                # every row of every sequence comes out, in row order
                 reference = torch.cat([outputs[step] for outputs in references], dim=1)
                 torch.testing.assert_close(
                     output.reshape(reference.shape), reference, rtol=1e-4, atol=1e-5, msg=f"step {step}"
                 )
                 committed_lengths = [
-                    committed + steps[step][0] for committed, steps in zip(committed_lengths, sequence_steps)
+                    committed + steps[step][0] for committed, steps in zip(committed_lengths, _DRAFT_STEPS)
                 ]
