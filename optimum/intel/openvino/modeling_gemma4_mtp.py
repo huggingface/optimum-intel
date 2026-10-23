@@ -104,14 +104,14 @@ _TARGET_EXTRA_OUTPUTS = (
 )
 
 # Names of the inputs / outputs of the assistant IR.
-_ASSISTANT_REQUIRED_INPUTS = (
-    "inputs_embeds",
-    "position_ids",
+# Shared K/V inputs have the (batch, num_kv_heads, kv_sequence_length, head_dim) layout.
+_ASSISTANT_KV_INPUTS = (
     "full_attention_key",
     "full_attention_value",
     "sliding_attention_key",
     "sliding_attention_value",
 )
+_ASSISTANT_REQUIRED_INPUTS = ("inputs_embeds", "position_ids", *_ASSISTANT_KV_INPUTS)
 _ASSISTANT_REQUIRED_OUTPUTS = ("logits", "last_hidden_state")
 
 
@@ -532,6 +532,26 @@ class Gemma4AssistantOVForCausalLM(OVModel, GenerationMixin):
             compile_only=compile_only,
             **kwargs,
         )
+
+    def _reshape(
+        self,
+        model: openvino.Model,
+        batch_size: int,
+        sequence_length: int,
+        height: Optional[int] = None,
+        width: Optional[int] = None,
+    ):
+        # The sequence axis of the shared K/V inputs is 2. Axis 1 is the number of KV heads, which must stay
+        # static: it is defined by the target model whose KV cache the assistant reads.
+        shapes = {}
+        for model_input in model.inputs:
+            shape = model_input.get_partial_shape()
+            shape[0] = batch_size
+            sequence_axis = 2 if model_input.get_any_name() in _ASSISTANT_KV_INPUTS else 1
+            shape[sequence_axis] = sequence_length
+            shapes[model_input] = shape
+        model.reshape(shapes)
+        return model
 
     # -- forward -----------------------------------------------------------
 
