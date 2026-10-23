@@ -557,7 +557,7 @@ class LTXVideoExportContractTest(unittest.TestCase):
             decoder_config = LTXVaeDecoderOpenVINOConfig(config)
             decoder_inputs = decoder_config.generate_dummy_inputs(framework="pt")
             self.assertEqual(tuple(encoder_inputs["sample"].shape[2:]), (encoder_frames, 64, 64))
-            self.assertEqual(tuple(decoder_inputs["latent_sample"].shape[2:]), (2, 64, 64))
+            self.assertEqual(tuple(decoder_inputs["latent_sample"].shape[2:]), (2, 8, 8))
             self.assertEqual("timestep" in decoder_inputs, config.timestep_conditioning)
             if config.timestep_conditioning:
                 self.assertEqual(tuple(decoder_inputs["timestep"].shape), (2,))
