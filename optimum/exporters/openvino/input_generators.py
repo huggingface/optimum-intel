@@ -17,7 +17,12 @@ from typing import Optional, Tuple
 
 import torch
 
-from optimum.exporters.openvino.utils import is_ltx2_3_transformer_config
+from optimum.exporters.openvino.utils import (
+    LTX2_ROPE_INPUTS,
+    build_ltx2_rope_modules,
+    compute_ltx2_rope_inputs,
+    is_ltx2_3_transformer_config,
+)
 from optimum.intel.utils.import_utils import is_diffusers_version
 from optimum.utils import (
     DEFAULT_DUMMY_SHAPES,
@@ -997,11 +1002,6 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
         "audio_hidden_states",
         "encoder_hidden_states",
         "encoder_attention_mask",
-        "num_frames",
-        "height",
-        "width",
-        "fps",
-        "audio_num_frames",
         "video_coords",
         "audio_coords",
         "audio_encoder_hidden_states",
@@ -1010,6 +1010,7 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
         "audio_timestep",
         "cross_modality_gate",
         "stg_perturbation_mask",
+        *(name for names in LTX2_ROPE_INPUTS.values() for name in names),
     )
 
     def __init__(
@@ -1022,12 +1023,10 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
         width: int = 16,
         height: int = 8,
         num_frames: int = 2,
-        frame_rate: int = 24,
         **kwargs,
     ):
         super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
         self.num_frames = num_frames
-        self.frame_rate = frame_rate
         self.vae_scale_factors = normalized_config.config.vae_scale_factors
         self.audio_in_channels = normalized_config.config.audio_in_channels
         self.audio_scale_factor = normalized_config.config.audio_scale_factor
@@ -1054,6 +1053,8 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
             )
 
         self.is_ltx2_3 = is_ltx2_3_transformer_config(normalized_config.config)
+        self.rope_modules = build_ltx2_rope_modules(normalized_config.config)
+        self._rope_inputs = None
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         import torch
@@ -1068,22 +1069,22 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
             return self.random_float_tensor(
                 [self.batch_size, audio_num_frames * audio_mel_bins, self.audio_in_channels]
             )
-        if input_name == "width":
-            return torch.tensor(self.width)
-        if input_name == "height":
-            return torch.tensor(self.height)
-        if input_name == "num_frames":
-            return torch.tensor(self.num_frames)
-        if input_name == "fps":
-            return torch.tensor(float(self.frame_rate))
-        if input_name == "audio_num_frames":
-            return torch.tensor(max(1, self.num_frames))
         if input_name == "video_coords":
             return self.random_float_tensor([self.batch_size, 3, self.num_frames * self.height * self.width, 2])
         if input_name == "audio_coords":
             audio_num_frames = max(1, self.num_frames)
             audio_mel_bins = 64 // self.audio_scale_factor
             return self.random_float_tensor([self.batch_size, 1, audio_num_frames * audio_mel_bins, 2])
+        if any(input_name in names for names in LTX2_ROPE_INPUTS.values()):
+            # Real cos/sin of the dummy coordinates, so their shapes follow the rotary layout
+            # (`rope_type`) and head split of the checkpoint, exactly as the runtime computes them.
+            if self._rope_inputs is None:
+                self._rope_inputs = compute_ltx2_rope_inputs(
+                    self.rope_modules,
+                    self.generate("video_coords", framework, int_dtype, float_dtype),
+                    self.generate("audio_coords", framework, int_dtype, float_dtype),
+                )
+            return self._rope_inputs[input_name]
         if input_name == "encoder_hidden_states":
             return self.random_float_tensor([self.batch_size, self.encoder_seq_length, self.text_embed_dim])
         if input_name == "encoder_attention_mask":
@@ -1115,7 +1116,14 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
 
 
 class LTX2ConnectorsDummyInputGenerator(DummyVisionInputGenerator):
-    SUPPORTED_INPUT_NAMES = ("text_encoder_hidden_states", "attention_mask")
+    SUPPORTED_INPUT_NAMES = (
+        "text_encoder_hidden_states",
+        "attention_mask",
+        "video_connector_rotary_cos",
+        "video_connector_rotary_sin",
+        "audio_connector_rotary_cos",
+        "audio_connector_rotary_sin",
+    )
 
     def __init__(
         self,
@@ -1141,6 +1149,18 @@ class LTX2ConnectorsDummyInputGenerator(DummyVisionInputGenerator):
         self.caption_channels = normalized_config.config.caption_channels
         text_proj_in_factor = getattr(normalized_config.config, "text_proj_in_factor", 1)
         self.input_channels = self.caption_channels * text_proj_in_factor
+        self.rope_type = getattr(config, "rope_type", "interleaved")
+        # Per connector: (attention heads, head dim), from the `LTX2TextConnectors` defaults when absent.
+        self.connector_heads = {
+            "video_connector": (
+                getattr(config, "video_connector_num_attention_heads", 30),
+                getattr(config, "video_connector_attention_head_dim", 128),
+            ),
+            "audio_connector": (
+                getattr(config, "audio_connector_num_attention_heads", 30),
+                getattr(config, "audio_connector_attention_head_dim", 128),
+            ),
+        }
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name == "text_encoder_hidden_states":
@@ -1149,6 +1169,15 @@ class LTX2ConnectorsDummyInputGenerator(DummyVisionInputGenerator):
             import torch
 
             return torch.ones(self.batch_size, self.sequence_length, dtype=torch.float32)
+        if input_name.endswith(("_rotary_cos", "_rotary_sin")):
+            # Only the shape matters for tracing, as in the QwenImage2.1 transformer: the layout of
+            # `LTX2RotaryPosEmbed1d` for the connector's attention.
+            heads, head_dim = self.connector_heads[input_name.rsplit("_rotary_", 1)[0]]
+            if self.rope_type == "split":
+                shape = [self.batch_size, heads, self.sequence_length, head_dim // 2]
+            else:
+                shape = [self.batch_size, self.sequence_length, heads * head_dim]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
