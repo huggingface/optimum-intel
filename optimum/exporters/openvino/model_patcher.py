@@ -8278,8 +8278,12 @@ def _lfm3_attention_forward(attn, hidden_states, cos, sin, attention_mask, past_
     key = attn.k_norm(key.view(batch_size, seq_len, -1, head_dim)).transpose(1, 2)
     value = value.view(batch_size, seq_len, -1, head_dim).transpose(1, 2)
 
-    query = query * cos + _lfm3_rotate_half(query) * sin
-    key = key * cos + _lfm3_rotate_half(key) * sin
+    # the rotation is done in f32 as in the remote model; cos / sin feed the Multiply directly (no Convert in between),
+    # as expected by the RoPE patterns of SDPAToPagedAttention and the plugins
+    dtype = query.dtype
+    query, key = query.float(), key.float()
+    query = (query * cos + _lfm3_rotate_half(query) * sin).to(dtype)
+    key = (key * cos + _lfm3_rotate_half(key) * sin).to(dtype)
 
     key = torch.cat([past_key.to(key.dtype), key], dim=-2)
     value = torch.cat([past_value.to(value.dtype), value], dim=-2)
@@ -8305,11 +8309,14 @@ def _lfm3_short_conv_forward(conv_module, hidden_states, attention_mask, conv_st
     else:
         weight, bias = conv_module.conv, None
 
+    # Zero the padded positions; a no-op for decoding steps where the attention mask of new tokens is ones.
+    # The mask is applied to the input of in_proj (no bias) as in the remote LFM3: the attention_mask -> Slice ->
+    # Unsqueeze -> Multiply form is removed by SDPAToPagedAttention (EliminateConvPaddingMaskGating).
+    hidden_states = hidden_states * attention_mask[:, -seq_len:, None].to(hidden_states.dtype)
+
     BCx = conv_module.in_proj(hidden_states).transpose(-1, -2)
     B, C, x = BCx.chunk(3, dim=-2)
     Bx = B * x
-    # zero the padded positions; a no-op for decoding steps where the attention mask of new tokens is ones
-    Bx = Bx * attention_mask[:, None, -seq_len:].to(Bx.dtype)
 
     conv_out, new_conv_state = ov_causal_conv1d(conv_state, Bx, weight, bias)
     y = (C * conv_out).transpose(-1, -2).contiguous()
@@ -8340,31 +8347,48 @@ def lfm3_language_model_forward(
     if attention_mask is None:
         attention_mask = torch.ones(batch_size, key_cache[0].shape[-2] + seq_len, dtype=torch.int64)
 
-    past_len = key_cache[0].shape[-2]
-    query_positions = torch.arange(seq_len) + past_len
+    # The positions, masks and RoPE below are written in the forms that SDPAToPagedAttention recognizes, so that the
+    # model is continuous batching compatible: the past length is read from the (positive) sequence axis of the KV
+    # cache, positions are a Range(past_len, past_len + seq_len) (PrevSequenceLengthPattern, PositionIDsReplacerLFM2).
+    past_len = key_cache[0].shape[2]
+    query_positions = torch.arange(past_len, past_len + seq_len)
     key_positions = torch.arange(attention_mask.shape[-1])
     causal = key_positions[None, :] <= query_positions[:, None]
-    in_window = key_positions[None, :] > query_positions[:, None] - lm_config.sliding_window
     padding = attention_mask[:, None, None, :].bool()
+    full_allowed = causal[None, None] & padding
     # torch.finfo(torch.float16).min is used as -inf to stay finite for fully masked (padded) rows in f16 inference
     min_value = torch.finfo(torch.float16).min
-    full_allowed = causal[None, None] & padding
-    sliding_allowed = full_allowed & in_window[None, None]
+    full_mask = torch.zeros_like(full_allowed, dtype=dtype).masked_fill(~full_allowed, min_value)
+    # Sliding window: a key is out of the window when query_pos - key_pos >= sliding_window. The
+    # Select(~allowed, min, Select(out_of_window, min, 0)) form lets SDPAToPagedAttention extract the window size.
+    distance = query_positions[:, None] - key_positions[None, :]
+    out_of_window = distance >= torch.tensor(lm_config.sliding_window, dtype=distance.dtype)
+    window_mask = torch.where(out_of_window[None, None], min_value, torch.zeros((), dtype=dtype))
     masks = {
-        "full_attention": torch.zeros_like(full_allowed, dtype=dtype).masked_fill(~full_allowed, min_value),
-        "sliding_attention": torch.zeros_like(sliding_allowed, dtype=dtype).masked_fill(~sliding_allowed, min_value),
+        "full_attention": full_mask,
+        "sliding_attention": torch.where(~full_allowed, min_value, window_mask),
     }
 
     # cos / sin are computed as in transformers (MatMul of inv_freq and position ids -> Transpose -> Concat -> Cos / Sin)
     # so that the GPU plugin keeps this subgraph in f32 (IncreasePositionIdsPrecision); in f16 the rotation angles of
-    # positions beyond a few hundred tokens lose all precision
-    position_ids_expanded = query_positions[None, None, :].expand(batch_size, 1, -1).float()
+    # positions beyond a few hundred tokens lose all precision. They stay in f32, the rotation is done in f32.
+    # As in transformers, inv_freq is expanded over the batch of position_ids (1, the positions are shared by all
+    # sequences): after SDPAToPagedAttention every token is a batch row and the positions are rewired to position_ids.
+    # Every RoPE table gets its own positions Range, computed from the KV cache of a layer of its type:
+    # PositionIDsReplacerLFM2 rewires (and transposes the table of) one Range per match, a shared Range would leave
+    # the second table (sliding_attention) in the wrong layout.
+    attention_layer_types = [layer_type for layer_type in lm_config.layer_types if layer_type != "conv"]
     rope = {}
     for layer_type, inv_freq in lm_config.inv_freq.items():
-        inv_freq_expanded = inv_freq[None, :, None].float().expand(batch_size, -1, 1)
+        if layer_type not in attention_layer_types:
+            continue
+        type_past_len = key_cache[attention_layer_types.index(layer_type)].shape[2]
+        position_ids = torch.arange(type_past_len, type_past_len + seq_len).unsqueeze(0)
+        position_ids_expanded = position_ids.unsqueeze(1).float()
+        inv_freq_expanded = inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
         freqs = (inv_freq_expanded @ position_ids_expanded).transpose(1, 2)
         emb = torch.cat((freqs, freqs), dim=-1)
-        rope[layer_type] = (emb.cos()[:, None].to(dtype), emb.sin()[:, None].to(dtype))
+        rope[layer_type] = (emb.cos().unsqueeze(1), emb.sin().unsqueeze(1))
 
     new_conv_states, new_keys, new_values = [], [], []
     hidden_states = inputs_embeds

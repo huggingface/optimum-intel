@@ -7702,14 +7702,20 @@ class LFM3OpenVINOConfig(LFM2OpenVINOConfig):
         layer_types = self._normalized_config.layer_types
         num_conv_layers = layer_types.count("conv")
         # both full_attention and sliding_attention layers keep a full KV cache
-        num_atten_layers = len(layer_types) - num_conv_layers
+        attention_layer_types = [layer_type for layer_type in layer_types if layer_type != "conv"]
 
         for i in range(num_conv_layers):
             inputs_or_outputs[f"{cache_name_prefix}.conv.{i}"] = {0: "batch_size"}
 
-        for i in range(num_atten_layers):
-            inputs_or_outputs[f"{cache_name_prefix}.key.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
-            inputs_or_outputs[f"{cache_name_prefix}.value.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
+        for i, layer_type in enumerate(attention_layer_types):
+            # The KV caches of sliding_attention layers get a distinct sequence dimension name: same-named dimensions
+            # share one symbol and the per-layer-type RoPE positions computed from them would be merged into a
+            # single Range, which SDPAToPagedAttention cannot rewire for both RoPE tables.
+            sequence_name = decoder_sequence_name
+            if layer_type == "sliding_attention":
+                sequence_name = decoder_sequence_name.replace("past_sequence_length", "past_sliding_sequence_length")
+            inputs_or_outputs[f"{cache_name_prefix}.key.{i}"] = {0: "batch_size", 2: sequence_name}
+            inputs_or_outputs[f"{cache_name_prefix}.value.{i}"] = {0: "batch_size", 2: sequence_name}
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
