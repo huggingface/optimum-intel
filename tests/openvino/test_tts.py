@@ -232,7 +232,6 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
 
     def test_compare_to_kokoro(self):
         from optimum.exporters.openvino import export_from_model
-        from optimum.exporters.tasks import TasksManager
         from optimum.intel.openvino.modeling_text2speech import _OVModelForKokoroTextToSpeech
 
         set_seed(SEED)

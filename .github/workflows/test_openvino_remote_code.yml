@@ -95,7 +95,7 @@ jobs:
           # one of them is named after its model type.
           pytest tests/openvino/test_exporters_cli.py -k "qwen3_tts" --durations=0
           pytest tests/openvino/test_export.py -k "qwen3_tts" --durations=0
-          pytest tests/openvino/test_seq2seq.py -k "qwen3_tts" --durations=0
+          pytest tests/openvino/test_tts.py -k "qwen3_tts" --durations=0
           pytest tests/openvino/test_transformations.py -k "qwen3_tts" --durations=0
           pytest tests/openvino/test_cb_compatible.py -k "qwen3_tts" --durations=0
 

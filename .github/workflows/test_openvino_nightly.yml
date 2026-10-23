@@ -49,6 +49,7 @@ jobs:
             "*export*",
             "*decoder*",
             "*seq2seq*",
+            "*tts*",
             "*modeling*",
             "*diffusion*",
             "*quantization*",
@@ -80,6 +81,10 @@ jobs:
             openvino-version: "openvino-stable"
             export-mode: "torchdynamo"
             test-pattern: "*seq2seq*"
+          - nncf-version: "nncf-stable"
+            openvino-version: "openvino-stable"
+            export-mode: "torchdynamo"
+            test-pattern: "*tts*"
           - nncf-version: "nncf-stable"
             openvino-version: "openvino-stable"
             export-mode: "torchdynamo"
