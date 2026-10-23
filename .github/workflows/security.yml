@@ -3,11 +3,13 @@ name: Security Checks
 on:
   push:
 
-permissions:
-  contents: read
+
+permissions: {}
 
 jobs:
   secrets:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
 
     steps:
@@ -33,4 +35,4 @@ jobs:
           ref: ${{env.branch}}
           fetch-depth: ${{env.depth}}
       - name: Scan for secrets
-        uses: trufflesecurity/trufflehog@27b0417c16317ca9a472a9a8092acce143b49c55  # main
+        uses: trufflesecurity/trufflehog@e76dff8a7e57d6df0c60ad8cbf5d5cba505a8fc9 # v3.99.2
