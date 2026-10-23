@@ -45,6 +45,7 @@ from transformers import (
 )
 import test_decoder as _test_decoder
 import test_seq2seq as _test_seq2seq
+import test_tts as _test_tts
 from utils_tests import (
     DFLASH_MODELS,
     DFLASH_VLM_MODELS,
@@ -583,7 +584,7 @@ class Speech2TextPipelineTestCase(unittest.TestCase):
 
 @pytest.mark.skipif(OPENVINO_DEVICE == "NPU", reason="Text2Speech test is not yet supported on NPU")
 class Text2SpeechPipelineTestCase(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = _test_seq2seq.OVModelForTextToSpeechSeq2SeqIntegrationTest.SUPPORTED_ARCHITECTURES
+    SUPPORTED_ARCHITECTURES = _test_tts.OVModelForTextToSpeechSeq2SeqIntegrationTest.SUPPORTED_ARCHITECTURES
     VOCODER = "fxmarty/speecht5-hifigan-tiny"
 
     GEN_KWARGS = {
