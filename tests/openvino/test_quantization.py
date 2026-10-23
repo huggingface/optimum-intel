@@ -2303,6 +2303,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
 
     QUANTIZATION_CONFIG_DICTS = (
         (dict(bits=8, sym=True), OVWeightQuantizationConfig, None),
+        (dict(bits=8, sym=True, group_size=32), OVWeightQuantizationConfig, None),
         (
             dict(
                 dataset="wikitext2",
@@ -2404,6 +2405,11 @@ class OVQuantizationConfigTest(unittest.TestCase):
     )
 
     QUANTIZATION_CONFIGS_WITH_KWARGS = (
+        (
+            OVWeightQuantizationConfig,
+            {"bits": 8, "sym": True, "group_size": 32},
+            {"mode": nncf.CompressWeightsMode.INT8_SYM, "group_size": 32},
+        ),
         (
             OVWeightQuantizationConfig,
             {
