@@ -2022,6 +2022,71 @@ class Lfm2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         return past_key_values
 
 
+class Lfm3DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
+    """
+    Generates dummy cache_params inputs for LFM3 architectures: one conv state per `conv` layer followed by
+    a key/value pair per attention layer (both `full_attention` and `sliding_attention` layers keep a full KV cache).
+    """
+
+    SUPPORTED_INPUT_NAMES = ("cache_params",)
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        super().__init__(
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            **kwargs,
+        )
+        config = normalized_config.config
+        self.num_conv_layers = config.layer_types.count("conv")
+        self.num_atten_layers = len(config.layer_types) - self.num_conv_layers
+        self.conv_L_cache = config.conv_L_cache
+        self.num_key_value_heads = config.num_key_value_heads
+        self.head_dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        past_key_values = []
+
+        for _ in range(self.num_conv_layers):
+            conv_state_shape = (self.batch_size, self.hidden_size, self.conv_L_cache)
+            past_key_values.append(self.random_float_tensor(conv_state_shape, framework=framework, dtype=float_dtype))
+
+        for _ in range(self.num_atten_layers):
+            kv_shape = (self.batch_size, self.num_key_value_heads, self.sequence_length, self.head_dim)
+            past_key_values.append(self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype))
+            past_key_values.append(self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype))
+
+        return past_key_values
+
+
+class DummyLfm3VlVisionInputGenerator(DummyInputGenerator):
+    """
+    Generates LFM3-VL vision encoder inputs: `pixel_values` of shape (num_images, grid_height, grid_width, patch_dim),
+    i.e. Qwen-style flattened patches rearranged to raster order, one 2D patch grid per temporal patch.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("pixel_values",)
+
+    def __init__(self, task: str, normalized_config: NormalizedVisionConfig, batch_size: int = 2, **kwargs):
+        self.task = task
+        self.batch_size = batch_size
+        self.patch_dim = normalized_config.config.vision_patch_dim
+        # the patch grid must be divisible by the spatial merge size
+        self.grid_size = 4 * normalized_config.config.vision_spatial_merge_size
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        shape = [self.batch_size, self.grid_size, self.grid_size + 2 * 2, self.patch_dim]
+        return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+
+
 class DummyVideoChatFlashQwenInputGenerator(DummyVisionInputGenerator):
     SUPPORTED_INPUT_NAMES = ("hidden_states", "rotary_pos_emb")
 

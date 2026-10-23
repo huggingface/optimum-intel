@@ -8313,6 +8313,111 @@ if is_transformers_version(">=", "5.18.0"):
     _OVMiniCPMV4_7ForCausalLM._frame_end_idx = staticmethod(MiniCPMV4_7Model._frame_end_idx)
 
 
+class _OVLfm3VlForCausalLM(OVModelForVisualCausalLM):
+    """
+    LFM3-VL (remote code, LiquidAI/lfm3-vl-1.9b-rl). Images and videos are preprocessed Qwen-style (flattened
+    patches + `*_grid_thw`); the vision encoder treats every temporal patch as an independent 2D image whose
+    projected features replace the `<|image|>` / `<|video|>` placeholder tokens. The language model is a hybrid
+    conv / attention model with 1D positions, so no rope index computation is needed.
+    """
+
+    def get_vision_embeddings(self, pixel_values, grid_thw=None, **kwargs):
+        if grid_thw is None:
+            raise ValueError("`image_grid_thw` / `video_grid_thw` is required with pixel values for LFM3-VL")
+        merge = self.config.vision_spatial_merge_size
+        pixel_values = torch.as_tensor(pixel_values, dtype=torch.float32)
+        features = []
+        offset = 0
+        for temporal, height, width in grid_thw.tolist():
+            num_patches = temporal * height * width
+            patches = pixel_values[offset : offset + num_patches]
+            offset += num_patches
+            # the image processor emits patches in merge-block-major order, the vision model expects raster order
+            patches = patches.view(temporal, height // merge, width // merge, merge, merge, -1)
+            patches = patches.permute(0, 1, 3, 2, 4, 5).reshape(temporal, height, width, -1)
+            image_features = torch.from_numpy(self.vision_embeddings(patches).last_hidden_state)
+            features.append(image_features.reshape(-1, image_features.shape[-1]))
+        if offset != pixel_values.shape[0]:
+            raise ValueError("pixel values and grid_thw disagree")
+        return torch.cat(features, dim=0)
+
+    def get_multimodal_embeddings(
+        self,
+        input_ids,
+        pixel_values=None,
+        attention_mask=None,
+        position_ids=None,
+        pixel_values_videos=None,
+        image_grid_thw=None,
+        video_grid_thw=None,
+        **kwargs,
+    ):
+        inputs_embeds = kwargs.pop("inputs_embeds", None)
+        if inputs_embeds is None:
+            inputs_embeds = torch.from_numpy(self.get_text_embeddings(input_ids))
+        for values, grid_thw, token_id in (
+            (pixel_values, image_grid_thw, self.config.image_token_id),
+            (pixel_values_videos, video_grid_thw, self.config.video_token_id),
+        ):
+            if values is None:
+                continue
+            visual_embeds = self.get_vision_embeddings(values, grid_thw)
+            visual_mask = input_ids == token_id
+            if int(visual_mask.sum()) != visual_embeds.shape[0]:
+                raise ValueError("visual token count does not match projected visual features")
+            inputs_embeds[visual_mask] = visual_embeds.to(inputs_embeds.dtype)
+        return inputs_embeds, attention_mask, position_ids
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        inputs_embeds=None,
+        pixel_values=None,
+        attention_mask=None,
+        **kwargs,
+    ):
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+        if past_key_values is not None:
+            # visual features are merged into the prompt only at the prefill step
+            model_inputs["pixel_values"] = None
+            model_inputs["pixel_values_videos"] = None
+        return model_inputs
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+        content = []
+        if image is not None:
+            content.append({"type": "image"})
+        if video is not None:
+            content.append({"type": "video"})
+        content.append({"type": "text", "text": text})
+        # thinking is disabled as in the LFM3-VL model card usage example
+        text_prompt = processor.apply_chat_template(
+            [{"role": "user", "content": content}], tokenize=False, add_generation_prompt=True, enable_thinking=False
+        )
+        return processor(text=[text_prompt], images=image, videos=video, return_tensors="pt")
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "muse_glimmer": _OVMuseGlimmerForCausalLM,
     "llava": _OVLlavaForCausalLM,
@@ -8348,4 +8453,5 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "minicpmo": _OVMiniCPMOForCausalLM,
     "videochat_flash_qwen": _OVVideoChatFlashQwenForCausalLM,
     "deepseek_ocr2": _OVDeepseekOCR2ForCausalLM,
+    "lfm3_vl": _OVLfm3VlForCausalLM,
 }

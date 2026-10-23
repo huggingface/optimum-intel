@@ -245,6 +245,8 @@ HUB_MODEL_NAMES = {
     "levit": "optimum-intel-internal-testing/tiny-random-LevitModel",
     "lfm2": "optimum-intel-internal-testing/tiny-random-lfm2",
     "lfm2_moe": "optimum-intel-internal-testing/tiny-random-lfm2-moe",
+    "lfm3": "optimum-intel-internal-testing/tiny-random-lfm3",
+    "lfm3_vl": "optimum-intel-internal-testing/tiny-random-lfm3-vl",
     "longt5": "optimum-intel-internal-testing/tiny-random-longt5",
     "llama": "optimum-intel-internal-testing/tiny-random-LlamaForCausalLM",
     "llama_awq": "optimum-intel-internal-testing/tiny-random-LlamaForCausalLM",
@@ -731,6 +733,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "exaone4": {"model": 16},
     "lfm2": {"model": 52 if is_transformers_version("<", "5") else 54},
     "lfm2_moe": {"model": 46},
+    "lfm3": {"model": 98},
+    "lfm3_vl": {
+        "lm_model": 72,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 25,
+    },
     "hunyuan_v1_dense": {"model": 32},
     "qwen3_eagle3": {"model": 20},
     "qwen3_dflash": {"model": 30},
@@ -818,6 +826,9 @@ REMOTE_CODE_MODELS = (
     "maira2",
     "phi4mm",
     "gemma3n",
+    # LFM3 / LFM3-VL are available as remote code only
+    "lfm3",
+    "lfm3_vl",
 )
 
 if is_transformers_version("<", "5"):
@@ -833,6 +844,8 @@ ARCH_TO_MODEL_CLASS = {
     "qwen3": "OVModelForCausalLM",
     "lfm2": "OVModelForCausalLM",
     "lfm2_moe": "OVModelForCausalLM",
+    "lfm3": "OVModelForCausalLM",
+    "lfm3_vl": "OVModelForVisualCausalLM",
     "qwen3_moe": "OVModelForCausalLM",
     "llama4": "OVModelForCausalLM",
     "llava": "OVModelForVisualCausalLM",

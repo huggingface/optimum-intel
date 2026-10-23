@@ -52,6 +52,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyGemma4UnifiedVisionInputGenerator,
     DummyGemma4VisionInputGenerator,
     DummyKokoroInputGenerator,
+    DummyLfm3VlVisionInputGenerator,
     DummyLLavaMultiModalProjectorInputGenerator,
     DummyMiniCPMV4_7LMInputGenerator,
     DummyMiniCPMV4_7VisionInputGenerator,
@@ -99,6 +100,7 @@ from optimum.exporters.openvino.input_generators import (
     Gemma4DummyPastKeyValuesGenerator,
     GPTBigCodeDummyPastKeyValuesGenerator,
     Lfm2DummyPastKeyValuesGenerator,
+    Lfm3DummyPastKeyValuesGenerator,
     LTX2AudioVaeDecoderDummyInputGenerator,
     LTX2ConnectorsDummyInputGenerator,
     LTX2TransformerDummyInputGenerator,
@@ -161,6 +163,9 @@ from optimum.exporters.openvino.model_patcher import (
     KokoroModelPatcher,
     Lfm2ModelPatcher,
     Lfm2MoeModelPatcher,
+    Lfm3ModelPatcher,
+    Lfm3VlLanguageModelPatcher,
+    Lfm3VlVisionEmbeddingsPatcher,
     Llama4ImageEmbeddingsModelPatcher,
     Llama4TextModelPatcher,
     LlavaImageEmbeddingModelPatcher,
@@ -7665,6 +7670,148 @@ class LFM2MoeOpenVINOConfig(LFM2OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "5.0"
     MAX_TRANSFORMERS_VERSION = "5.4.0"
     _MODEL_PATCHER = Lfm2MoeModelPatcher
+
+
+@register_in_tasks_manager(
+    "lfm3",
+    *[
+        "text-generation",
+        "text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class LFM3OpenVINOConfig(LFM2OpenVINOConfig):
+    # LFM3 is available as remote code only (LiquidAI/LFM3-1.7B-RL), validated with transformers 5.20
+    MIN_TRANSFORMERS_VERSION = "5.12.0"
+    MAX_TRANSFORMERS_VERSION = None
+    _MODEL_PATCHER = Lfm3ModelPatcher
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Lfm3DummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = Lfm3DummyPastKeyValuesGenerator
+
+    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        if direction not in ["inputs", "outputs"]:
+            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+
+        if direction == "inputs":
+            decoder_sequence_name = "past_sequence_length"
+            cache_name_prefix = "cache_params.past"
+        else:
+            decoder_sequence_name = "past_sequence_length + sequence_length"
+            cache_name_prefix = "cache_params.present"
+
+        layer_types = self._normalized_config.layer_types
+        num_conv_layers = layer_types.count("conv")
+        # both full_attention and sliding_attention layers keep a full KV cache
+        num_atten_layers = len(layer_types) - num_conv_layers
+
+        for i in range(num_conv_layers):
+            inputs_or_outputs[f"{cache_name_prefix}.conv.{i}"] = {0: "batch_size"}
+
+        for i in range(num_atten_layers):
+            inputs_or_outputs[f"{cache_name_prefix}.key.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
+            inputs_or_outputs[f"{cache_name_prefix}.value.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            # a distinct dimension name: same-named dimensions share one symbol in the converted model, and the mask
+            # is longer than input_ids at decoding steps
+            "attention_mask": {0: "batch_size", 1: "past_sequence_length + sequence_length"},
+        }
+        if self.use_past_in_inputs:
+            self.add_past_key_values(common_inputs, direction="inputs")
+        return common_inputs
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        dummy_inputs = super().generate_dummy_inputs(framework, **kwargs)
+        # the attention mask covers both the past and the new tokens, as passed by OVModelWithMambaForCausalLM
+        if self.use_past_in_inputs and "attention_mask" in dummy_inputs:
+            num_conv_layers = self._normalized_config.layer_types.count("conv")
+            past_length = dummy_inputs["cache_params"][num_conv_layers].shape[-2]
+            attention_mask = dummy_inputs["attention_mask"]
+            past_mask = torch.ones((attention_mask.shape[0], past_length), dtype=attention_mask.dtype)
+            dummy_inputs["attention_mask"] = torch.cat([past_mask, attention_mask], dim=-1)
+        return dummy_inputs
+
+
+@register_in_tasks_manager("lfm3_vl", *["image-text-to-text"], library_name="transformers")
+class LFM3VlOpenVINOConfig(BaseVLMOpenVINOConfig):
+    # LFM3-VL is available as remote code only (LiquidAI/lfm3-vl-1.9b-rl), validated with transformers 5.20
+    MIN_TRANSFORMERS_VERSION = "5.12.0"
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyLfm3VlVisionInputGenerator,)
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            behavior=behavior,
+            preprocessors=preprocessors,
+        )
+        self._orig_config = config
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {"pixel_values": {0: "num_images", 1: "grid_height", 2: "grid_width"}}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {"last_hidden_state": {0: "num_images", 1: "num_image_tokens"}}
+
+    def with_behavior(
+        self,
+        behavior: Union[str, VLMConfigBehavior],
+    ):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        # LFM3-VL keeps the language model config at the top level of the config (no text_config)
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config("lfm3", self._orig_config, self.int_dtype, self.float_dtype)
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                "lfm3",
+                self._orig_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=Lfm3VlLanguageModelPatcher,
+            )
+
+        return super().with_behavior(behavior)
+
+    def get_model_for_behavior(self, model, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.get_input_embeddings()
+            text_embedding.config = model.config
+            return text_embedding
+
+        # the language model patcher uses the tied text embeddings of the full model as lm_head
+        return model
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+        return Lfm3VlVisionEmbeddingsPatcher(self, model, model_kwargs)
 
 
 @register_in_tasks_manager(
