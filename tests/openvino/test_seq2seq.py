@@ -592,6 +592,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "videochat_flash_qwen",
         "internvl_chat",
         "minicpmv",
+        "minicpm_v4_5",
         "minicpmo",
         "llava-qwen2",
         "phi3_v",
@@ -622,6 +623,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "qwen3_vl",
         "videochat_flash_qwen",
         "muse_glimmer",
+        "minicpm_v4_5",
         "gemma4",
         "gemma4_moe",
         "gemma4_unified",
@@ -756,7 +758,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 transformers_inputs["inputs"] = transformers_inputs.pop("input_ids")
             ov_outputs = ov_model.generate(**inputs, generation_config=generation_config)
             # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
-            if model_arch in ["minicpmv", "minicpmo", "internvl_chat", "videochat_flash_qwen"]:
+            if model_arch in ["minicpmv", "minicpm_v4_5", "minicpmo", "internvl_chat", "videochat_flash_qwen"]:
                 ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
             with torch.no_grad():
                 transformers_outputs = transformers_model.generate(
@@ -846,7 +848,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         self._check_device_and_request(ov_model, test_device, False)
 
         # pytorch minicpmv and internvl_chat are not designed to be used via forward
-        if model_arch not in ["minicpmv", "minicpmo", "internvl_chat", "videochat_flash_qwen"]:
+        if model_arch not in ["minicpmv", "minicpm_v4_5", "minicpmo", "internvl_chat", "videochat_flash_qwen"]:
             set_seed(SEED)
             ov_outputs = ov_model(**inputs)
             set_seed(SEED)
@@ -883,8 +885,8 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             transformers_inputs["past_key_values"] = DynamicCache()
 
         with torch.no_grad():
-            if model_arch in ["minicpmo"]:
-                # `generate` method for minicpmo requires tokenizer
+            if model_arch in ["minicpmo", "minicpm_v4_5"]:
+                # MiniCPM's custom generate method requires the tokenizer to resolve terminator IDs.
                 tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in REMOTE_CODE_MODELS)
                 additional_inputs["tokenizer"] = tokenizer
             transformers_outputs = transformers_model.generate(
@@ -895,7 +897,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 transformers_outputs = transformers_outputs[1].sequences
 
         # original minicpmv, internvl always skip input tokens in generation results, while transformers based approach provide them
-        if model_arch in ["minicpmv", "minicpmo", "internvl_chat", "videochat_flash_qwen"]:
+        if model_arch in ["minicpmv", "minicpm_v4_5", "minicpmo", "internvl_chat", "videochat_flash_qwen"]:
             ov_outputs = ov_outputs[:, inputs["input_ids"].shape[1] :]
         self.assertTrue(
             torch.equal(ov_outputs, transformers_outputs),
@@ -915,11 +917,14 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 num_frames = 32
             input_video, _ = load_video(video_path, num_frames=num_frames, backend="opencv")
             question = "Why is this video funny?"
-            inputs = ov_model.preprocess_inputs(**preprocessors, text=question, video=input_video)
+            video_kwargs = {"video_temporal_ids": [[0, 100]]} if model_arch == "minicpm_v4_5" else {}
+            inputs = ov_model.preprocess_inputs(**preprocessors, text=question, video=input_video, **video_kwargs)
             compare_outputs(inputs, ov_model, transformers_model, gen_config)
 
             # check video+image scenario
-            inputs = ov_model.preprocess_inputs(**preprocessors, text=question, video=input_video, image=image)
+            inputs = ov_model.preprocess_inputs(
+                **preprocessors, text=question, video=input_video, image=image, **video_kwargs
+            )
             compare_outputs(inputs, ov_model, transformers_model, gen_config)
 
         if model_arch in self.SUPPORT_AUDIO:
@@ -983,9 +988,13 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         tgt_sizes = torch.tensor([[8, 8], [6, 5], [4, 4]], dtype=torch.int32)
         set_seed(SEED)
         image_features = torch.randn(3, 64, transformers_model.config.vision_config.hidden_size)
+        temporal_groups = [[0, 1], [100]] if model_arch == "minicpm_v4_5" else None
         with torch.no_grad():
-            transformers_outputs = transformers_model.resampler(image_features, tgt_sizes)
-        ov_outputs = ov_model.resampling(image_features, tgt_sizes)
+            if temporal_groups is None:
+                transformers_outputs = transformers_model.resampler(image_features, tgt_sizes)
+            else:
+                transformers_outputs = transformers_model.resampler(image_features, tgt_sizes, temporal_groups)
+        ov_outputs = ov_model.resampling(image_features, tgt_sizes, temporal_groups)
         max_diff = torch.abs(ov_outputs - transformers_outputs).max()
         self.assertLess(max_diff, 1e-4, f"Max abs diff {max_diff}")
 
