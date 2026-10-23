@@ -319,6 +319,7 @@ HUB_MODEL_NAMES = {
     "qwen3_5_dflash": "optimum-intel-internal-testing/tiny-random-qwen3.5-dflash",
     "qwen3_5_moe": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe",
     "qwen3_5_moe_mtp": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe-mtp",
+    "qwen3_5_moe_mtp_legacy_weights": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe-mtp-legacy",
     "qwen3_5_moe_dflash": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe-dflash",
     "qwen3_asr": "optimum-intel-internal-testing/tiny-random-qwen3-asr",
     "qwen3_dflash": "optimum-intel-internal-testing/tiny-random-qwen3-dflash",
@@ -379,6 +380,7 @@ HUB_MODEL_NAMES = {
     "sana": "optimum-intel-internal-testing/tiny-random-sana",
     "sana-sprint": "optimum-intel-internal-testing/tiny-random-sana-sprint",
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
+    "ltx-video-0.9.5": "optimum-intel-internal-testing/tiny-random-ltx-video-0.9.5",
     "qwenimage": "optimum-intel-internal-testing/tiny-random-qwen-image",
     "qwenimage21": "optimum-intel-internal-testing/tiny-random-qwen-image-2.1",
     "ltx2": "optimum-intel-internal-testing/tiny-random-ltx2",
@@ -449,6 +451,7 @@ if is_transformers_version("<=", "4.57.6"):
 MTP_VLM_MODELS = {
     "qwen3_5_mtp": ("qwen3_5_mtp", "qwen3_5_mtp"),
     "qwen3_5_moe_mtp": ("qwen3_5_moe_mtp", "qwen3_5_moe_mtp"),
+    "qwen3_5_moe_mtp_legacy_weights": ("qwen3_5_moe_mtp_legacy_weights", "qwen3_5_moe_mtp_legacy_weights"),
 }
 
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
@@ -637,6 +640,14 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_pos_model": 1,
         "mtp_model": 28,
     },
+    "qwen3_5_moe_mtp_legacy_weights": {
+        "lm_model": 110,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 1,
+        "vision_embeddings_merger_model": 10,
+        "vision_embeddings_pos_model": 1,
+        "mtp_model": 28,
+    },
     "qwen3_omni_moe": {
         "lm_model": 34,
         "text_embeddings_model": 1,
@@ -660,6 +671,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vae_decoder": 28,
         "vae_encoder": 28,
         "text_encoder": 64,
+    },
+    "ltx-video-0.9.5": {
+        "transformer": 34,
+        "vae_decoder": 46,
+        "vae_encoder": 32,
+        "text_encoder": 18,
     },
     "ltx2": {
         "transformer": 108,
@@ -1110,6 +1127,7 @@ TEST_NAME_TO_MODEL_TYPE = {
     "llama_compressed_tensors": "llama",
     "llava_next_mistral": "llava_next",
     "ltx-video": "ltx-video-transformer",
+    "ltx-video-0.9.5": "ltx-video-transformer",
     "ltx2": "ltx2-video-transformer",
     "ltx2.3": "ltx2-video-transformer",
     "mistral-nemo": "mistral",
@@ -1124,6 +1142,7 @@ TEST_NAME_TO_MODEL_TYPE = {
     "qwen3_5_compressed_tensors": "qwen3_5",
     "qwen3_5_mtp": "qwen3_5",
     "qwen3_5_moe_mtp": "qwen3_5_moe",
+    "qwen3_5_moe_mtp_legacy_weights": "qwen3_5_moe",
     "qwen3_dflash": "qwen3",
     "qwen3_deepspec_dflash": "qwen3",
     "qwen3_eagle3": "llama",

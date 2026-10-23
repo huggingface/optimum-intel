@@ -3049,6 +3049,7 @@ class LTXVaeDecoderOpenVINOConfig(VisionOpenVINOConfig):
             "latent_sample": {0: "batch_size", 2: "num_frames", 3: "latent_height", 4: "latent_width"},
         }
         if self._normalized_config.config.timestep_conditioning:
+            # Diffusers conditions each decoded sample independently and slices `timestep` with the latent batch.
             base_input["timestep"] = {0: "batch_size"}
         return base_input
 

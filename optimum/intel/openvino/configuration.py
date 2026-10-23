@@ -1247,7 +1247,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             self.bits = bits
 
         if self.bits not in [2, 3, 4, 8]:
-            raise ValueError(f"Only support quantization to [4,8] bits but found {self.bits}")
+            raise ValueError(f"Only support quantization to [2,3,4,8] bits but found {self.bits}")
 
         if self.bits == 8 and self.dtype:
             if self.ratio != 1:
