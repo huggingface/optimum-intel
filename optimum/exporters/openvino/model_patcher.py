@@ -3048,6 +3048,11 @@ def maira_vision_embed_forward(self, pixel_values):
 
 
 class LlavaImageEmbeddingModelPatcher(ModelPatcher):
+    # Traceable vision-embedding forward installed in place of the model's forward during export.
+    # Subclasses that only need to trace a different vision tower (but share the identical
+    # save/restore bookkeeping) override this attribute instead of re-implementing __init__/__exit__.
+    _vision_embed_forward = staticmethod(llava_vision_embed_forward)
+
     def __init__(
         self,
         config: "OpenVINOConfig",
@@ -3055,7 +3060,7 @@ class LlavaImageEmbeddingModelPatcher(ModelPatcher):
         model_kwargs: Dict[str, Any],
     ):
         model.__orig_forward = model.forward
-        model.forward = types.MethodType(llava_vision_embed_forward, model)
+        model.forward = types.MethodType(self._vision_embed_forward, model)
         super().__init__(config, model, model_kwargs)
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -8055,7 +8060,30 @@ def lfm2_short_conv_forward_patched(
     return y
 
 
-# This patcher class serves the following purposes:
+def lfm2_vl_vision_embeddings_forward(self, pixel_values, pos_embeds):
+    patch_embeds = self.embeddings.patch_embedding(pixel_values)
+    hidden_states = patch_embeds + pos_embeds
+    encoder_outputs = self.encoder(inputs_embeds=hidden_states, attention_mask=None)
+    last_hidden_state = self.post_layernorm(encoder_outputs.last_hidden_state)
+    return last_hidden_state
+
+
+class Lfm2VlVisionEmbeddingsModelPatcher(LlavaImageEmbeddingModelPatcher):
+    """Patches the LFM2-VL Siglip2 naflex vision tower for a traceable OpenVINO export.
+
+    The original tower resizes the positional embedding table per image via a data-dependent
+    ``F.interpolate`` (whose target size comes from ``spatial_shapes.tolist()``), which TorchScript
+    bakes into constants. The exported submodel therefore takes the already-resized ``pos_embeds`` as a
+    plain input (computed in Python at runtime) and processes a single, fully-valid image, so no
+    padding attention mask is required.
+
+    Only the traced vision forward differs from :class:`LlavaImageEmbeddingModelPatcher`; the original
+    forward save/restore bookkeeping is reused from the base patcher.
+    """
+
+    _vision_embed_forward = staticmethod(lfm2_vl_vision_embeddings_forward)
+
+
 # 1. Packs the KV-cache and conv_state tensors into a Lfm2HybridConvCacheWrap structure
 #    for subsequent invocation of the model's `forward` method.
 # 2. Patches the Lfm2ShortConv so that the traced `slow_forward` function works correctly
@@ -8067,9 +8095,115 @@ class Lfm2ModelPatcher(OVDecoderModelPatcher):
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        from transformers.models.lfm2.modeling_lfm2 import Lfm2HybridConvCache
+        try:
+            # Removed in transformers >= 5.5, where Lfm2 switched to the modular `DynamicCache`
+            # with per-layer `LinearAttentionLayer` (conv) / `DynamicLayer` (attention) cache layers.
+            from transformers.models.lfm2.modeling_lfm2 import Lfm2HybridConvCache
+
+            _has_legacy_lfm2_cache = True
+        except ImportError:
+            _has_legacy_lfm2_cache = False
 
         super().__init__(config, model, model_kwargs)
+
+        if not _has_legacy_lfm2_cache:
+            # transformers >= 5.5 modular cache path. Build a standard `DynamicCache` from the
+            # flat list of cache tensors, prefill its per-layer states, let the native
+            # attention/conv layers update it, then extract the updated states back into a flat list.
+            # The `conv_cache` / `conv_layer_idx_mapping` compatibility attributes are attached so the
+            # shared `lfm2_short_conv_forward_patched` conv patch works unchanged.
+            from transformers.cache_utils import DynamicCache
+
+            def patched_forward(
+                input_ids: Optional[torch.LongTensor] = None,
+                attention_mask: Optional[torch.Tensor] = None,
+                position_ids: Optional[torch.LongTensor] = None,
+                cache_params=None,
+                inputs_embeds: Optional[torch.FloatTensor] = None,
+                labels: Optional[torch.LongTensor] = None,
+                use_cache: Optional[bool] = None,
+                cache_position=None,
+                logits_to_keep: Union[int, torch.Tensor] = 0,
+            ):
+                cfg = self.real_config._config
+                layer_types = cfg.layer_types
+                conv_layer_idxs = [i for i, lt in enumerate(layer_types) if lt == "conv"]
+                atten_layer_idxs = [i for i, lt in enumerate(layer_types) if lt == "full_attention"]
+                num_conv_layers = len(conv_layer_idxs)
+
+                use_cache = False
+                wrapped_cache_params = None
+                if cache_params is not None:
+                    use_cache = True
+                    wrapped_cache_params = DynamicCache(config=cfg)
+
+                    # The native `DynamicLayer`/`LinearAttentionLayer` cache updates simply concatenate
+                    # the prefilled states (graph inputs, materialized at the dummy-generator dtype) with
+                    # the freshly projected states (produced at the model's compute dtype). When those two
+                    # dtypes differ (e.g. a bf16 checkpoint with fp32 dummy cache tensors) SDPA raises a
+                    # query/key dtype mismatch. The legacy `Lfm2HybridConvCache` wrapper normalized this
+                    # explicitly; replicate that by casting the prefilled states to the compute dtype.
+                    compute_dtype = self._model.get_input_embeddings().weight.dtype
+
+                    for compact_idx, global_idx in enumerate(conv_layer_idxs):
+                        conv_state = cache_params[compact_idx].to(compute_dtype)
+                        layer = wrapped_cache_params.layers[global_idx]
+                        layer.dtype, layer.device = conv_state.dtype, conv_state.device
+                        layer.max_batch_size, layer.conv_kernel_size = conv_state.shape[0], conv_state.shape[-1]
+                        # `lfm2_short_conv_forward_patched` writes the updated state back in-place via
+                        # `copy_`; clone so the traced write target is a computed node rather than a
+                        # graph input (which the OpenVINO frontend cannot convert).
+                        layer.conv_states = conv_state.clone()
+                        layer.is_conv_states_initialized = True
+                        layer.has_previous_state = True
+
+                    for compact_idx, global_idx in enumerate(atten_layer_idxs):
+                        key_states = cache_params[num_conv_layers + compact_idx * 2].to(compute_dtype)
+                        value_states = cache_params[num_conv_layers + compact_idx * 2 + 1].to(compute_dtype)
+                        layer = wrapped_cache_params.layers[global_idx]
+                        layer.dtype, layer.device = key_states.dtype, key_states.device
+                        layer.keys = key_states
+                        layer.values = value_states
+                        layer.is_initialized = True
+
+                    # Compatibility attributes consumed by `lfm2_short_conv_forward_patched`.
+                    wrapped_cache_params.conv_cache = [
+                        wrapped_cache_params.layers[global_idx].conv_states for global_idx in conv_layer_idxs
+                    ]
+                    wrapped_cache_params.conv_layer_idx_mapping = {
+                        global_idx: compact_idx for compact_idx, global_idx in enumerate(conv_layer_idxs)
+                    }
+
+                causal_lm_output = self.model_orig_forward(
+                    input_ids=input_ids,
+                    inputs_embeds=inputs_embeds,
+                    attention_mask=attention_mask,
+                    past_key_values=wrapped_cache_params,
+                    use_cache=use_cache,
+                )
+                outputs = {"logits": causal_lm_output.logits}
+
+                if use_cache:
+                    key_values = causal_lm_output.past_key_values
+                    # Emit the present states in the same dtype as the incoming cache tensors (graph
+                    # inputs). The internal SDPA runs in the model compute dtype, but the stateful
+                    # transformation requires the ReadValue/Assign pair to share a dtype, so cast the
+                    # updated states back to the input cache dtype.
+                    cache_out_dtype = cache_params[0].dtype
+                    present_key_values = []
+                    for global_idx in conv_layer_idxs:
+                        present_key_values.append(key_values.layers[global_idx].conv_states.to(cache_out_dtype))
+                    for global_idx in atten_layer_idxs:
+                        present_key_values.append(key_values.layers[global_idx].keys.to(cache_out_dtype))
+                        present_key_values.append(key_values.layers[global_idx].values.to(cache_out_dtype))
+                    outputs["present_key_values"] = present_key_values
+
+                return outputs
+
+            self.patched_forward = patched_forward
+            self.model_orig_forward = self.orig_forward
+            self.orig_forward = patched_forward
+            return
 
         # This cache wrapper class serves for following purposes:
         # 1. Wraps KV-cache and conv_state to allow model instantiation from tensor lists.
@@ -8201,13 +8335,21 @@ class Lfm2ModelPatcher(OVDecoderModelPatcher):
         self.model_orig_forward = self.orig_forward
         self.orig_forward = patched_forward
 
+    def _get_decoder_layers(self):
+        # Plain Lfm2: `model.model.layers`. Lfm2-VL language model: the decoder lives under
+        # `model.model.language_model.layers`.
+        base = self._model.model
+        if hasattr(base, "layers"):
+            return base.layers
+        return base.language_model.layers
+
     def __enter__(self):
         from transformers.models.lfm2.modeling_lfm2 import Lfm2ShortConv
 
         super().__enter__()
         setattr(self._model, self.orig_forward_name, self.patched_forward)
 
-        for layer in self._model.model.layers:
+        for layer in self._get_decoder_layers():
             if hasattr(layer, "conv") and isinstance(layer.conv, Lfm2ShortConv):
                 conv_layer = layer.conv
             else:
@@ -8221,7 +8363,7 @@ class Lfm2ModelPatcher(OVDecoderModelPatcher):
         super().__exit__(exc_type, exc_value, traceback)
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
 
-        for layer in self._model.model.layers:
+        for layer in self._get_decoder_layers():
             if hasattr(layer, "conv") and isinstance(layer.conv, Lfm2ShortConv):
                 conv_layer = layer.conv
             else:

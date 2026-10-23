@@ -144,6 +144,87 @@ def _create_tiny_kokoro_model():
     return str(output_dir)
 
 
+def _create_tiny_lfm2_vl_model():
+    """Generate a tiny random LFM2-VL (``lfm2_vl``) model for testing and return its local path.
+
+    LFM2-VL = Lfm2 hybrid conv/attention text backbone + Siglip2 naflex vision tower + downsample
+    projector. The tiny fixture shrinks every scale dimension while preserving the architectural
+    invariants required for export (model_type, architectures, GQA head grouping, conv/attention
+    layer mix, vision tower, projector bridge, special/image token ids). Only lightweight config,
+    tokenizer and processor assets are pulled from the Hub; the original weights are never loaded.
+    The result is cached on disk, so subsequent calls are cheap.
+    """
+    from transformers import AutoConfig, AutoProcessor, AutoTokenizer, Lfm2VlForConditionalGeneration
+
+    original_model_id = "LiquidAI/LFM2.5-VL-3B"
+    cache_marker = "tiny_lfm2_vl_v1"
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_lfm2_vl"
+    marker_file = output_dir / "TINY_MODEL_MARKER.json"
+    config_file = output_dir / "config.json"
+    if marker_file.exists() and config_file.exists():
+        try:
+            marker = json.loads(marker_file.read_text())
+            cfg = json.loads(config_file.read_text())
+            if (
+                marker.get("marker") == cache_marker
+                and cfg.get("model_type") == "lfm2_vl"
+                and cfg.get("architectures") == ["Lfm2VlForConditionalGeneration"]
+            ):
+                return str(output_dir)
+        except Exception:
+            pass
+
+    cfg = AutoConfig.from_pretrained(original_model_id)
+
+    # text config (lfm2 hybrid conv/attention) - keep GQA grouping and a conv/attention mix
+    t = cfg.text_config
+    t.hidden_size = 64
+    t.num_attention_heads = 4
+    t.num_key_value_heads = 2
+    t.intermediate_size = 128
+    t.block_auto_adjust_ff_dim = False
+    t.initializer_range = 0.2
+    t.layer_types = ["conv", "conv", "full_attention", "conv", "full_attention", "conv"]
+    t.num_hidden_layers = len(t.layer_types)
+    t.full_attn_idxs = [i for i, lt in enumerate(t.layer_types) if lt == "full_attention"]
+    for attr in ("block_dim", "conv_dim"):
+        if hasattr(t, attr):
+            setattr(t, attr, t.hidden_size)
+
+    # vision config (siglip2 naflex)
+    v = cfg.vision_config
+    v.hidden_size = 96
+    v.num_attention_heads = 3
+    v.intermediate_size = 128
+    v.num_hidden_layers = 2
+    if hasattr(v, "initializer_range"):
+        v.initializer_range = 0.2
+
+    # projector bridge
+    cfg.projector_hidden_size = 64
+
+    for config_obj in (cfg, t, v):
+        config_obj.torch_dtype = "float32"
+        config_obj.dtype = "float32"
+
+    torch.manual_seed(SEED)
+    model = Lfm2VlForConditionalGeneration(cfg).to(torch.float32).eval()
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    model.save_pretrained(output_dir, safe_serialization=True)
+    AutoProcessor.from_pretrained(original_model_id).save_pretrained(output_dir)
+    AutoTokenizer.from_pretrained(original_model_id).save_pretrained(output_dir)
+    try:
+        from transformers import GenerationConfig
+
+        GenerationConfig.from_pretrained(original_model_id).save_pretrained(output_dir)
+    except Exception:
+        pass
+
+    marker_file.write_text(json.dumps({"marker": cache_marker}))
+    return str(output_dir)
+
+
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -245,6 +326,7 @@ HUB_MODEL_NAMES = {
     "levit": "optimum-intel-internal-testing/tiny-random-LevitModel",
     "lfm2": "optimum-intel-internal-testing/tiny-random-lfm2",
     "lfm2_moe": "optimum-intel-internal-testing/tiny-random-lfm2-moe",
+    "lfm2_vl": _create_tiny_lfm2_vl_model(),
     "longt5": "optimum-intel-internal-testing/tiny-random-longt5",
     "llama": "optimum-intel-internal-testing/tiny-random-LlamaForCausalLM",
     "llama_awq": "optimum-intel-internal-testing/tiny-random-LlamaForCausalLM",
@@ -543,6 +625,13 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_embeddings_model": 1,
         "vision_embeddings_model": 28,
     },
+    "lfm2_vl": {
+        "lm_model": 78,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 13,
+        "vision_embeddings_pos_model": 1,
+        "multi_modal_projector_model": 2,
+    },
     "llava_next": {
         "lm_model": 30,
         "text_embeddings_model": 1,
@@ -834,6 +923,7 @@ ARCH_TO_MODEL_CLASS = {
     "qwen3": "OVModelForCausalLM",
     "lfm2": "OVModelForCausalLM",
     "lfm2_moe": "OVModelForCausalLM",
+    "lfm2_vl": "OVModelForVisualCausalLM",
     "qwen3_moe": "OVModelForCausalLM",
     "llama4": "OVModelForCausalLM",
     "llava": "OVModelForVisualCausalLM",

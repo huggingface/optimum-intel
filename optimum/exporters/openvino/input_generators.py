@@ -1680,6 +1680,62 @@ class DummyQwen3VLVisionEmbedInputGenerator(DummyQwen2VLVisionEmbedInputGenerato
             )
 
 
+class DummyLfm2VlVisionEmbedInputGenerator(DummyVisionInputGenerator):
+    """Dummy inputs for the LFM2-VL vision-side submodels.
+
+    The Siglip2 naflex vision tower consumes already-patchified ``pixel_values`` of shape
+    ``(batch, num_patches, num_channels * patch_size ** 2)`` together with precomputed, image-specific
+    ``pos_embeds`` (the positional-embedding interpolation is done in Python at runtime because a
+    data-dependent ``F.interpolate`` cannot be traced). ``input`` indexes the position-embedding table
+    for the ``vision_embeddings_pos`` submodel and ``image_features`` feeds the multimodal projector.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("pixel_values", "pos_embeds", "input", "image_features")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = 1,
+        num_patches: int = 256,
+        **kwargs,
+    ):
+        self.task = task
+        self.normalized_config = normalized_config
+        config = normalized_config.config
+        self.batch_size = batch_size
+        self.num_patches = getattr(config, "num_patches", num_patches)
+        self.embed_dim = config.hidden_size
+        self.num_channels = getattr(config, "num_channels", 3)
+        self.patch_size = config.patch_size
+        self.patch_dim = self.num_channels * self.patch_size * self.patch_size
+        # A square patch grid that is divisible by the projector downsample factor.
+        self.grid_size = int(self.num_patches**0.5)
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "pixel_values":
+            return self.random_float_tensor(
+                [self.batch_size, self.num_patches, self.patch_dim], framework=framework, dtype=float_dtype
+            )
+        if input_name == "pos_embeds":
+            return self.random_float_tensor(
+                [self.batch_size, self.num_patches, self.embed_dim], framework=framework, dtype=float_dtype
+            )
+        if input_name == "input":
+            return self.random_int_tensor(
+                [self.batch_size, self.num_patches],
+                max_value=self.num_patches,
+                framework=framework,
+                dtype=int_dtype,
+            )
+        if input_name == "image_features":
+            return self.random_float_tensor(
+                [self.batch_size, self.grid_size, self.grid_size, self.embed_dim],
+                framework=framework,
+                dtype=float_dtype,
+            )
+
+
 class Qwen3ASRDummySeq2SeqPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     """Custom KV cache generator for Qwen3-ASR with GQA (num_key_value_heads != num_attention_heads).
     Qwen3-ASR has no cross-attention, so only self-attention KV cache is generated (2 per layer)."""
