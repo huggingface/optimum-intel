@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+from packaging.version import Version
 from transformers import AutoImageProcessor, PretrainedConfig
 from transformers.utils import is_torch_available
 
@@ -27,8 +28,12 @@ from openvino import Dimension, PartialShape, Symbol
 from openvino.utils.types import get_element_type
 from optimum.exporters.openvino.base import OpenVINOConfig
 from optimum.exporters.tasks import TasksManager
-from optimum.intel.utils.import_utils import is_safetensors_available
-from optimum.utils import is_diffusers_available
+from optimum.intel.utils.import_utils import (
+    _transformers_version,
+    is_diffusers_available,
+    is_safetensors_available,
+    is_transformers_version,
+)
 from optimum.utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
 
 
@@ -64,6 +69,48 @@ LTX2_FP32_PARAMETERS = (
     "prompt_scale_shift_table",
     "audio_prompt_scale_shift_table",
 )
+
+
+def check_transformers_version_compatibility(config: Union["OpenVINOConfig", type]):
+    """
+    Raise `ValueError` if the installed transformers version does not satisfy the
+    `MIN_TRANSFORMERS_VERSION`/`MAX_TRANSFORMERS_VERSION` bounds declared in the models `OpenVINOConfig`
+    """
+    config = getattr(config, "func", config)
+    min_version = getattr(config, "MIN_TRANSFORMERS_VERSION", None)
+    max_version = getattr(config, "MAX_TRANSFORMERS_VERSION", None)
+    if min_version is None and max_version is None:
+        return
+
+    if isinstance(min_version, Version):
+        min_version = min_version.base_version
+    if isinstance(max_version, Version):
+        max_version = max_version.base_version
+
+    min_ok = min_version is None or not is_transformers_version("<", min_version)
+    max_ok = max_version is None or not is_transformers_version(">", max_version)
+    if min_ok and max_ok:
+        return
+
+    max_version = max_version.replace("99", "*") if max_version is not None else None
+    if min_version is not None and max_version is not None:
+        requirement = (
+            f"transformers=={min_version}"
+            if min_version == max_version
+            else f"transformers>={min_version},<={max_version}"
+        )
+    elif min_version is not None:
+        requirement = f"transformers>={min_version}"
+    else:
+        requirement = f"transformers<={max_version}"
+
+    model_type = getattr(config, "model_type", None)
+    model_desc = f"the `{model_type}` model" if model_type else "this model"
+
+    raise ValueError(
+        f"Exporting {model_desc} to OpenVINO requires `{requirement}`, but transformers=={_transformers_version} is "
+        f'currently installed. Please run `pip install "{requirement}"` and try again.'
+    )
 
 
 def is_auto_compression_disabled(model: Any) -> bool:
@@ -468,6 +515,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "internvl_chat",
     "maira2",
     "minicpmv",
+    "minicpmv4_7",
     "phi3_v",
     "qwen2_vl",
     "qwen2_5_vl",
@@ -488,6 +536,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "videochat_flash_qwen",
     "deepseek_ocr2",
     "qwen3_omni_moe",
+    "qwen3_asr",
     "muse_glimmer",
 ]
 
@@ -563,6 +612,14 @@ def get_multi_head_token_classification_spec(
             return spec
     return None
 
+# GraniteMoeHybrid's `config.layer_types` used "mamba"/"attention" for transformers < 5.13 and later
+# renamed to "linear_attention"/"full_attention" in v5.13 https://github.com/huggingface/transformers/pull/46738
+if is_transformers_version(">=", "5.13"):
+    GRANITEMOEHYBRID_MAMBA_LAYER_TYPE = "linear_attention"
+    GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE = "full_attention"
+else:
+    GRANITEMOEHYBRID_MAMBA_LAYER_TYPE = "mamba"
+    GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE = "attention"
 
 # All transformers, diffusers, timm and sentence transformers models that were supported via optimum-onnx OnnxConfigs for which support is now removed
 ONNX_SUPPORTED_ARCHITECTURES = {
@@ -841,7 +898,33 @@ def load_preprocessors(
             )
         except Exception:
             pass
+    if model_type == "minicpmv4_7":
+        # The checkpoint processor configs point at remote code and transformers has no AutoProcessor mapping for
+        # minicpmv4_7, so the processor is not saved otherwise. Assemble it from the native classes (MiniCPM-V 4.7
+        # reuses the 4.6 image and video processors), so the exported model can be loaded with AutoProcessor.
+        try:
+            preprocessors.append(load_minicpmv4_7_processor(src_name_or_path, subfolder=subfolder))
+        except Exception as ex:
+            logger.warning(f"MiniCPM-V 4.7 processor could not be loaded from {src_name_or_path}: {ex}")
     return preprocessors
+
+
+# TODO: remove load_minicpmv4_7_processor once official 4.7 checkpoints are published
+def load_minicpmv4_7_processor(model_name_or_path: Union[str, Path], subfolder: str = ""):
+    from transformers import (
+        AutoTokenizer,
+        MiniCPMV4_6ImageProcessor,
+        MiniCPMV4_6VideoProcessor,
+        MiniCPMV4_7Processor,
+    )
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, subfolder=subfolder)
+    return MiniCPMV4_7Processor(
+        image_processor=MiniCPMV4_6ImageProcessor.from_pretrained(model_name_or_path, subfolder=subfolder),
+        video_processor=MiniCPMV4_6VideoProcessor.from_pretrained(model_name_or_path, subfolder=subfolder),
+        tokenizer=tokenizer,
+        chat_template=tokenizer.chat_template,
+    )
 
 
 def patch_qwenvl_configs():

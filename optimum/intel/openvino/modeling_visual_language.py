@@ -39,8 +39,15 @@ from transformers import (
 )
 from transformers.modeling_outputs import BaseModelOutputWithPooling
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLModel
-from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLModel, VisionRotaryEmbedding
+from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLModel
 from transformers.utils import ModelOutput
+
+
+try:
+    from transformers.models.qwen2_vl.modeling_qwen2_vl import VisionRotaryEmbedding
+except ImportError:
+    # renamed in newer transformers releases
+    from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLVisionRotaryEmbedding as VisionRotaryEmbedding
 
 from optimum.exporters.openvino import main_export
 from optimum.exporters.openvino.stateful import ensure_stateful_is_available, model_has_input_output_name
@@ -81,6 +88,10 @@ if is_transformers_version(">=", "5.2"):
         Qwen3_5VisionModel,
         Qwen3_5VisionRotaryEmbedding,
     )
+
+if is_transformers_version(">=", "5.18"):
+    from transformers.models.minicpmv4_7.modeling_minicpmv4_7 import MiniCPMV4_7Model
+    from transformers.vision_utils import get_vision_nearest_position_ids, get_vision_window_index
 
 
 if TYPE_CHECKING:
@@ -222,7 +233,9 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
 
             if self.config.model_type in ["qwen3_5", "qwen3_5_moe"] and position_ids.ndim != 3:
                 position_ids = np.repeat(np.expand_dims(position_ids, 0), 4, axis=0)
-            elif (self.config.model_type in ["qwen2_vl", "qwen2_5_vl", "qwen3_vl"]) and position_ids.ndim == 2:
+            elif (
+                self.config.model_type in ["qwen2_vl", "qwen2_5_vl", "qwen3_vl", "qwen3_asr"]
+            ) and position_ids.ndim == 2:
                 # Qwen2-VL and Qwen3-VL use 3D mrope (3 spatial dimensions)
                 position_ids = np.repeat(np.expand_dims(position_ids, 0), 3, axis=0)
             elif self.config.model_type == "qwen3_omni_moe" and position_ids.ndim == 2:
@@ -370,6 +383,12 @@ class OVResampler(OVModelPart):
 
     def forward(self, image_feature, pos_embed, key_padding_mask):
         self.compile()
+        if key_padding_mask.dtype == torch.bool and self.input_dtypes.get("key_padding_mask") != "boolean":
+            # the resampler is exported with a floating point key_padding_mask, which nn.MultiheadAttention adds to
+            # the attention scores, so padded positions must be -inf instead of True (which would become 1.0)
+            key_padding_mask = torch.zeros(key_padding_mask.shape, dtype=torch.float32).masked_fill_(
+                key_padding_mask, float("-inf")
+            )
         result = self.request(
             {"image_feature": image_feature, "pos_embed": pos_embed, "key_padding_mask": key_padding_mask}
         )[0]
@@ -431,6 +450,67 @@ class OVAudioEncoder(OVModelPart):
         else:
             inputs = {k: v for k, v in kwargs.items() if k in self.input_names}
         return self.request(inputs)[0]
+
+
+class OVQwen3AudioEncoder(OVAudioEncoder):
+    def encode(self, input_features, feature_attention_mask):
+        encoder_inputs, feature_lens, chunk_lens = self._prepare_inputs(input_features, feature_attention_mask)
+        output = super().forward(**encoder_inputs)
+        return self._compact_features(output, chunk_lens), feature_lens
+
+    def _prepare_inputs(self, input_features, feature_attention_mask):
+        thinker_config = getattr(self.config, "thinker_config", self.config)
+        audio_config = getattr(thinker_config, "audio_config", None)
+        n_window = getattr(audio_config, "n_window", 100) if audio_config else 100
+        n_window_infer = getattr(audio_config, "n_window_infer", 400) if audio_config else 400
+
+        feature_lens = feature_attention_mask.sum(-1).to(torch.int64)
+        if torch.any(feature_lens == 0):
+            raise ValueError("Each sample must contain at least one valid audio frame.")
+        audio_flat = input_features.permute(0, 2, 1)[feature_attention_mask.bool()].permute(1, 0)
+
+        aftercnn_lens = _get_feat_extract_output_lengths(feature_lens)
+        chunk_num = torch.ceil(feature_lens / (n_window * 2)).long()
+        chunk_lengths = torch.tensor([n_window * 2] * chunk_num.sum(), dtype=torch.long)
+        tail_chunk_index = torch.nn.functional.pad(chunk_num, (1, 0), value=-1).cumsum(0)[1:]
+        chunk_lengths[tail_chunk_index] = feature_lens % (n_window * 2)
+        chunk_lengths[chunk_lengths == 0] = n_window * 2
+
+        chunk_list = audio_flat.T.split(chunk_lengths.tolist(), dim=0)
+        padded_feature = torch.nn.utils.rnn.pad_sequence(chunk_list, batch_first=True).transpose(1, 2)
+        chunk_output_lens = _get_feat_extract_output_lengths(chunk_lengths)
+        padded_mask_after_cnn = torch.nn.utils.rnn.pad_sequence(
+            [torch.ones(length, dtype=torch.bool) for length in chunk_output_lens],
+            batch_first=True,
+        )
+
+        window_aftercnn = padded_mask_after_cnn.shape[-1] * (n_window_infer // (n_window * 2))
+        cu_chunk_lens = [0]
+        for cnn_len in aftercnn_lens:
+            cnn_len_val = cnn_len.item()
+            cu_chunk_lens += [window_aftercnn] * (cnn_len_val // window_aftercnn)
+            remainder = cnn_len_val % window_aftercnn
+            if remainder != 0:
+                cu_chunk_lens += [remainder]
+        cu_seqlens = torch.tensor(cu_chunk_lens, device=aftercnn_lens.device).cumsum(-1, dtype=torch.int32)
+
+        encoder_inputs = {
+            "padded_feature": padded_feature,
+            "padded_mask_after_cnn": padded_mask_after_cnn,
+            "aftercnn_lens": aftercnn_lens,
+            "cu_seqlens": cu_seqlens,
+        }
+        return encoder_inputs, aftercnn_lens, chunk_output_lens
+
+    @staticmethod
+    def _compact_features(audio_output, chunk_output_lens):
+        audio_output = torch.from_numpy(audio_output) if not isinstance(audio_output, torch.Tensor) else audio_output
+        if audio_output.ndim != 3:
+            return audio_output
+        return torch.cat(
+            [audio_output[chunk_idx, : length.item()] for chunk_idx, length in enumerate(chunk_output_lens)],
+            dim=0,
+        )
 
 
 class OVTalkerDecoder(OVModelPart):
@@ -4236,7 +4316,7 @@ if is_transformers_version(">=", "4.57"):
     _OVQwen3VLForCausalLM.get_placeholder_mask = Qwen3VLModel.get_placeholder_mask
     _OVQwen3VLForCausalLM.get_rope_index = Qwen3VLModel.get_rope_index
     _OVQwen3VLForCausalLM.get_video_features = Qwen3VLModel.get_video_features
-    _OVQwen3VLForCausalLM.rot_pos_emb = Qwen3VLVisionModel.rot_pos_emb
+    _OVQwen3VLForCausalLM.rot_pos_emb = getattr(Qwen3VLVisionModel, "rot_pos_emb", None)
     _OVQwen3VLForCausalLM.get_vision_position_ids = getattr(Qwen3VLModel, "get_vision_position_ids", None)
 
 
@@ -4296,6 +4376,8 @@ class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
         )
         # OVQwen3OmniMoeVisionEmbeddings merges deepstack into the vision graph; swap in for the default wrapper.
         self.vision_embeddings = OVQwen3OmniMoeVisionEmbeddings(self.vision_embeddings.model, self)
+        if self.audio_encoder is not None:
+            self.audio_encoder = OVQwen3AudioEncoder(self.audio_encoder.model, self, model_name="audio_encoder")
 
         self._apply_component_device_overrides()
         if enable_compilation and not self._compile_only:
@@ -4654,60 +4736,9 @@ class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
             cached_features, cached_lens = cached
             return cached_features.clone(), cached_lens.clone()
 
-        thinker_config = getattr(self.config, "thinker_config", self.config)
-        audio_config = getattr(thinker_config, "audio_config", None)
-        n_window = getattr(audio_config, "n_window", 100) if audio_config else 100
-        n_window_infer = getattr(audio_config, "n_window_infer", 400) if audio_config else 400
-
-        feature_lens = feature_attention_mask.sum(-1).to(torch.int64)
-        if feature_lens.sum() == 0:
-            raise ValueError("feature_attention_mask is all-zero; no valid audio frames to process.")
-        audio_flat = input_features.permute(0, 2, 1)[feature_attention_mask.bool()].permute(1, 0)
-
-        aftercnn_lens = _get_feat_extract_output_lengths(feature_lens)
-        chunk_num = torch.ceil(feature_lens / (n_window * 2)).long()
-        chunk_lengths = torch.tensor([n_window * 2] * chunk_num.sum(), dtype=torch.long)
-        tail_chunk_index = torch.nn.functional.pad(chunk_num, (1, 0), value=-1).cumsum(0)[1:]
-        chunk_lengths[tail_chunk_index] = feature_lens % (n_window * 2)
-        chunk_lengths[chunk_lengths == 0] = n_window * 2
-
-        chunk_list = audio_flat.T.split(chunk_lengths.tolist(), dim=0)
-        padded_feature = torch.nn.utils.rnn.pad_sequence(chunk_list, batch_first=True).transpose(1, 2)
-        feature_lens_after_cnn = _get_feat_extract_output_lengths(chunk_lengths)
-        padded_mask_after_cnn = torch.nn.utils.rnn.pad_sequence(
-            [torch.ones(length, dtype=torch.bool) for length in feature_lens_after_cnn],
-            batch_first=True,
-        )
-
-        # cu_seqlens are required by the audio encoder's windowed attention kernels.
-        window_aftercnn = padded_mask_after_cnn.shape[-1] * (n_window_infer // (n_window * 2))
-        cu_chunk_lens = [0]
-        for cnn_len in aftercnn_lens:
-            cnn_len_val = cnn_len.item()
-            cu_chunk_lens += [window_aftercnn] * (cnn_len_val // window_aftercnn)
-            remainder = cnn_len_val % window_aftercnn
-            if remainder != 0:
-                cu_chunk_lens += [remainder]
-        cu_seqlens = torch.tensor(cu_chunk_lens, device=aftercnn_lens.device).cumsum(-1, dtype=torch.int32)
-
         if self.audio_encoder is None:
             raise ValueError("Audio encoder model not loaded. Cannot process audio inputs.")
-        audio_out = self.audio_encoder(
-            padded_feature=padded_feature,
-            padded_mask_after_cnn=padded_mask_after_cnn,
-            aftercnn_lens=aftercnn_lens,
-            cu_seqlens=cu_seqlens,
-        )
-        audio_out = torch.from_numpy(audio_out) if not isinstance(audio_out, torch.Tensor) else audio_out
-
-        # Encoder returns padded [N_chunks, aftercnn_time, dim]; drop pad frames per chunk before concatenation.
-        if audio_out.ndim == 3:
-            valid_tokens = []
-            for i, length in enumerate(feature_lens_after_cnn):
-                valid_tokens.append(audio_out[i, : length.item()])
-            audio_features = torch.cat(valid_tokens, dim=0)
-        else:
-            audio_features = audio_out
+        audio_features, aftercnn_lens = self.audio_encoder.encode(input_features, feature_attention_mask)
         self._lru_put(
             self._audio_cache,
             cache_key,
@@ -7570,8 +7601,25 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM):
         pixel_values_videos=None,
         image_grid_thw=None,
         video_grid_thw=None,
+        mm_token_type_ids=None,
+        is_first_iteration=False,
+        next_sequence_length=None,
         **kwargs,
     ):
+        # reconstruct cache_position as partially removed in v5.3 and totally removed in v5.5
+        if is_transformers_version(">=", "5.3") and (
+            cache_position is None or (not is_first_iteration and cache_position[0] == 0)
+        ):
+            if next_sequence_length is not None:
+                past_len = input_ids.shape[1] - next_sequence_length
+                cache_position = torch.arange(past_len, past_len + next_sequence_length, device=input_ids.device)
+            elif not is_first_iteration and attention_mask is not None:
+                # v5.3 decode step: input_ids is already sliced to 1 token, use attention_mask length
+                past_len = attention_mask.shape[1] - 1
+                cache_position = torch.tensor([past_len], device=input_ids.device)
+            else:
+                cache_position = torch.arange(input_ids.shape[1], device=input_ids.device)
+
         # Overwritten -- in specific circumstances we don't want to forward image inputs to the model
         if past_key_values is not None:
             if inputs_embeds is not None and input_ids.shape[1] == 0:  # Exception 4
@@ -7602,6 +7650,7 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM):
                 "image_grid_thw": image_grid_thw,
                 "video_grid_thw": video_grid_thw,
                 "cache_position": cache_position,
+                "mm_token_type_ids": mm_token_type_ids,
             }
         )
         return model_inputs
@@ -7762,12 +7811,28 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM):
         if position_ids is None and input_ids is not None and (attention_mask is None or attention_mask.ndim == 2):
             # calculate RoPE index once per generation in the pre-fill stage only
             if (cache_position is not None and cache_position[0] == 0) or self.rope_deltas is None:
-                vision_positions, rope_deltas = self.get_rope_index(
-                    input_ids,
-                    image_grid_thw=image_grid_thw,
-                    video_grid_thw=video_grid_thw,
-                    attention_mask=attention_mask,
-                )
+                if is_transformers_version(">=", "5.3"):
+                    # since transformers v5.3, get_rope_index requires mm_token_type_ids
+                    mm_token_type_ids = kwargs.get("mm_token_type_ids")
+                    if mm_token_type_ids is None:
+                        mm_token_type_ids = torch.zeros_like(input_ids, dtype=torch.int32)
+                        mm_token_type_ids[input_ids == self.config.image_token_id] = 1
+                        mm_token_type_ids[input_ids == self.config.video_token_id] = 2
+                    vision_positions, rope_deltas = self.get_rope_index(
+                        input_ids,
+                        mm_token_type_ids,
+                        image_grid_thw=image_grid_thw,
+                        video_grid_thw=video_grid_thw,
+                        attention_mask=attention_mask,
+                    )
+                else:
+                    vision_positions, rope_deltas = self.get_rope_index(
+                        input_ids,
+                        image_grid_thw=image_grid_thw,
+                        video_grid_thw=video_grid_thw,
+                        attention_mask=attention_mask,
+                    )
+
                 self.rope_deltas = rope_deltas
                 # Compute text positions (simple cumsum) and concatenate as dim 0
                 # to create shape (4, batch, seq_len): [text_pos, temporal, height, width]
@@ -7904,7 +7969,9 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM):
 if is_transformers_version(">=", "5.2"):
     _OVQwen3_5ForCausalLM.get_placeholder_mask = Qwen3_5Model.get_placeholder_mask
     _OVQwen3_5ForCausalLM.get_rope_index = Qwen3_5Model.get_rope_index
-    _OVQwen3_5ForCausalLM.rot_pos_emb = Qwen3_5VisionModel.rot_pos_emb
+    _OVQwen3_5ForCausalLM.rot_pos_emb = getattr(Qwen3_5VisionModel, "rot_pos_emb", None)
+if is_transformers_version(">=", "5.15"):
+    _OVQwen3_5ForCausalLM.get_vision_position_ids = Qwen3_5Model.get_vision_position_ids
 
 
 class _OVMuseGlimmerForCausalLM(OVModelForVisualCausalLM):
@@ -8007,6 +8074,281 @@ class _OVMuseGlimmerForCausalLM(OVModelForVisualCausalLM):
         return inputs
 
 
+class _OVMiniCPMV4_7ForCausalLM(OVModelForVisualCausalLM):
+    """
+    OpenVINO runtime for MiniCPM-V 4.7 (native transformers implementation).
+
+    The vision graph encodes one crop at a time (see `MiniCPMV4_7VisionEmbeddingsPatcher`); the crop-dependent index
+    tensors are computed here. The canvas M-RoPE positions are computed once at prefill with the transformers
+    `get_rope_index` and extended with the cached `rope_deltas` while decoding.
+    """
+
+    def __init__(
+        self,
+        language_model: ov.Model,
+        text_embeddings: ov.Model,
+        vision_embeddings: ov.Model,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = None,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        **kwargs,
+    ):
+        if is_transformers_version("<", "5.18.0"):
+            raise ImportError("MiniCPM-V 4.7 requires transformers >= 5.18.0.")
+        super().__init__(
+            language_model=language_model,
+            text_embeddings=text_embeddings,
+            vision_embeddings=vision_embeddings,
+            config=config,
+            device=device,
+            dynamic_shapes=dynamic_shapes,
+            ov_config=ov_config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
+            **kwargs,
+        )
+        if config.downsample_mode != "16x":
+            raise NotImplementedError(f"Only the 16x downsample mode is supported, got {config.downsample_mode}.")
+        vision_config = config.vision_config
+        self.patch_size = vision_config.patch_size
+        self.num_patches_per_side = vision_config.image_size // vision_config.patch_size
+        self.window_kernel_size = tuple(vision_config.window_kernel_size)
+        self.window_size = self.window_kernel_size[0]
+        self.merge_kernel_size = tuple(config.merge_kernel_size)
+        self.rope_deltas = None
+
+    def _encode_crops(self, pixel_values: torch.Tensor, target_sizes: torch.Tensor) -> torch.Tensor:
+        """Runs the vision graph on every crop of the NaViT-packed `pixel_values` `(1, C, patch, sum(h*w)*patch)`."""
+        features = []
+        start = 0
+        for height, width in target_sizes.tolist():
+            num_patches = height * width
+            crop = pixel_values[..., start * self.patch_size : (start + num_patches) * self.patch_size]
+            start += num_patches
+
+            crop_size = torch.tensor([[height, width]])
+            position_ids = get_vision_nearest_position_ids(crop_size, self.num_patches_per_side)
+            window_index, window_cu_seqlens = get_vision_window_index(
+                torch.nn.functional.pad(crop_size, (1, 0), value=1),
+                spatial_merge_size=1,
+                window_size=self.window_size,
+                patch_size=1,
+            )
+            if (window_cu_seqlens.diff() != self.window_size**2).any():
+                raise ValueError(f"Crop grid ({height}, {width}) must be divisible by the window size.")
+            # merge_index: token order for the final merger. The ViT window merger leaves a (height / window_h,
+            # width / window_w) grid; regroup it so that every merge_h x merge_w block is contiguous (MiniCPMV4_7Merger)
+            grid_h, grid_w = height // self.window_kernel_size[0], width // self.window_kernel_size[1]
+            merge_h, merge_w = self.merge_kernel_size
+            merge_index = (
+                torch.arange(grid_h * grid_w)
+                .view(grid_h // merge_h, merge_h, grid_w // merge_w, merge_w)
+                .permute(0, 2, 1, 3)
+                .reshape(-1)
+            )
+            features.append(
+                torch.from_numpy(
+                    self.vision_embeddings(
+                        crop,
+                        position_ids=position_ids,
+                        window_index=window_index,
+                        merge_index=merge_index,
+                    )[0]
+                )
+            )
+        return torch.cat(features, dim=0)
+
+    def get_image_features(self, pixel_values, target_sizes):
+        return self._encode_crops(pixel_values[:1], target_sizes)
+
+    def get_video_features(self, pixel_values_videos, target_sizes_videos):
+        # Mirrors MiniCPMV4_7Model.get_video_features: repack the frames into one NaViT sequence
+        num_frames = pixel_values_videos.shape[0]
+        pixel_values = pixel_values_videos.permute(1, 2, 0, 3).reshape(
+            1, pixel_values_videos.shape[1], pixel_values_videos.shape[2], -1
+        )
+        return self._encode_crops(pixel_values, target_sizes_videos.repeat(num_frames, 1))
+
+    def _scatter_features(self, inputs_embeds, input_ids, features, token_id):
+        mask = input_ids == token_id
+        if mask.sum().item() != features.shape[0]:
+            raise ValueError(
+                f"Multimodal features and tokens do not match, tokens: {mask.sum().item()}, "
+                f"features: {features.shape[0]}"
+            )
+        mask = mask.unsqueeze(-1).expand_as(inputs_embeds)
+        return inputs_embeds.masked_scatter(mask, features.to(inputs_embeds.dtype))
+
+    def get_multimodal_embeddings(
+        self,
+        input_ids,
+        pixel_values=None,
+        attention_mask=None,
+        position_ids=None,
+        past_key_values=None,
+        pixel_values_videos=None,
+        target_sizes=None,
+        target_sizes_videos=None,
+        mm_token_type_ids=None,
+        **kwargs,
+    ):
+        is_prefill = past_key_values is None
+        batch_size = input_ids.shape[0]
+        if is_prefill and batch_size > 1 and (pixel_values is not None or pixel_values_videos is not None):
+            # Beam search / num_return_sequences: the rows are copies of one prompt, while the crop-packed vision
+            # inputs (kept unexpanded by `_expand_inputs_for_generation`) describe that prompt only. Embed the first
+            # row and repeat it.
+            if not (input_ids == input_ids[:1]).all():
+                raise NotImplementedError("MiniCPM-V 4.7 supports only one multimodal prompt per batch.")
+            inputs_embeds, _, position_ids = self.get_multimodal_embeddings(
+                input_ids[:1],
+                pixel_values=pixel_values,
+                attention_mask=attention_mask[:1] if attention_mask is not None else None,
+                pixel_values_videos=pixel_values_videos,
+                target_sizes=target_sizes,
+                target_sizes_videos=target_sizes_videos,
+                mm_token_type_ids=mm_token_type_ids[:1] if mm_token_type_ids is not None else None,
+            )
+            self.rope_deltas = self.rope_deltas.repeat(batch_size, 1)
+            return inputs_embeds.repeat(batch_size, 1, 1), attention_mask, position_ids.repeat(1, batch_size, 1)
+
+        inputs_embeds = torch.from_numpy(self.get_text_embeddings(input_ids))
+
+        if is_prefill and pixel_values is not None:
+            image_features = self.get_image_features(pixel_values, target_sizes)
+            inputs_embeds = self._scatter_features(
+                inputs_embeds, input_ids, image_features, self.config.image_token_id
+            )
+        if is_prefill and pixel_values_videos is not None:
+            video_features = self.get_video_features(pixel_values_videos, target_sizes_videos)
+            inputs_embeds = self._scatter_features(
+                inputs_embeds, input_ids, video_features, self.config.video_token_id
+            )
+
+        batch_size, seq_len = input_ids.shape
+        has_multimodal = target_sizes is not None or target_sizes_videos is not None
+        if is_prefill and has_multimodal and mm_token_type_ids is not None:
+            position_ids, self.rope_deltas = self.get_rope_index(
+                input_ids,
+                mm_token_type_ids=mm_token_type_ids,
+                target_sizes=target_sizes,
+                target_sizes_videos=target_sizes_videos,
+                attention_mask=attention_mask,
+            )
+        else:
+            if is_prefill:
+                self.rope_deltas = torch.zeros((batch_size, 1), dtype=torch.long)
+            # text positions (the same on the three M-RoPE axes) shifted by the canvas offset of the prompt
+            if attention_mask is not None:
+                text_positions = attention_mask.long().cumsum(-1) - 1
+                text_positions = text_positions.masked_fill(attention_mask == 0, 0)[:, -seq_len:]
+            else:
+                past_length = 0 if is_prefill else self.language_model._past_length
+                text_positions = torch.arange(past_length, past_length + seq_len).unsqueeze(0).expand(batch_size, -1)
+            position_ids = (text_positions + self.rope_deltas).unsqueeze(0).expand(3, -1, -1)
+
+        return inputs_embeds, attention_mask, position_ids
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        inputs_embeds=None,
+        pixel_values=None,
+        attention_mask=None,
+        pixel_values_videos=None,
+        target_sizes=None,
+        target_sizes_videos=None,
+        mm_token_type_ids=None,
+        **kwargs,
+    ):
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+        # positions are derived from the attention mask and the prompt's rope deltas in `get_multimodal_embeddings`
+        model_inputs["position_ids"] = None
+        is_prefill = past_key_values is None
+        model_inputs.update(
+            {
+                "pixel_values": pixel_values if is_prefill else None,
+                "pixel_values_videos": pixel_values_videos if is_prefill else None,
+                "target_sizes": target_sizes,
+                "target_sizes_videos": target_sizes_videos,
+                "mm_token_type_ids": mm_token_type_ids if is_prefill else None,
+            }
+        )
+        return model_inputs
+
+    def generate(self, *args, **kwargs):
+        self.rope_deltas = None
+        return super().generate(*args, **kwargs)
+
+    def _expand_inputs_for_generation(self, expand_size=1, is_encoder_decoder=False, input_ids=None, **model_kwargs):
+        # The generic expansion repeats every tensor along dim 0 per beam. The vision inputs are not batch-major
+        # (one packed patch sequence, one `target_sizes` row per crop), so they are kept as is, see
+        # `get_multimodal_embeddings`.
+        vision_inputs = {
+            name: model_kwargs.pop(name)
+            for name in ("pixel_values", "pixel_values_videos", "target_sizes", "target_sizes_videos")
+            if name in model_kwargs
+        }
+        input_ids, model_kwargs = super()._expand_inputs_for_generation(
+            expand_size=expand_size, is_encoder_decoder=is_encoder_decoder, input_ids=input_ids, **model_kwargs
+        )
+        model_kwargs.update(vision_inputs)
+        return input_ids, model_kwargs
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+        content = [{"type": "text", "text": text}]
+        if video is not None:
+            content.insert(0, {"type": "video"})
+        if image is not None:
+            content.insert(0, {"type": "image"})
+        text_prompt = processor.apply_chat_template(
+            [{"role": "user", "content": content}], tokenize=False, add_generation_prompt=True
+        )
+        kwargs = {}
+        if video is not None and not isinstance(video, str):
+            # already decoded frames come without the fps / duration metadata the video processor samples frames
+            # with, so they are used as given
+            kwargs["do_sample_frames"] = False
+        return processor(
+            text=text_prompt,
+            images=[image] if image is not None else None,
+            videos=[video] if video is not None else None,
+            return_tensors="pt",
+            **kwargs,
+        )
+
+
+if is_transformers_version(">=", "5.18.0"):
+    _OVMiniCPMV4_7ForCausalLM.get_rope_index = MiniCPMV4_7Model.get_rope_index
+    _OVMiniCPMV4_7ForCausalLM.get_vision_position_ids = MiniCPMV4_7Model.get_vision_position_ids
+    _OVMiniCPMV4_7ForCausalLM._group_visual_frames = MiniCPMV4_7Model._group_visual_frames
+    _OVMiniCPMV4_7ForCausalLM._frame_end_idx = staticmethod(MiniCPMV4_7Model._frame_end_idx)
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "muse_glimmer": _OVMuseGlimmerForCausalLM,
     "llava": _OVLlavaForCausalLM,
@@ -8014,6 +8356,7 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "llava_next_video": _OVLlavaNextVideoForCausalLM,
     "mistral3": _OVMistral3ForCausalLM,
     "minicpmv": _OVMiniCPMVForCausalLM,
+    "minicpmv4_7": _OVMiniCPMV4_7ForCausalLM,
     "llava-qwen2": _OVNanoLlavaForCausalLM,
     "maira2": _OVMaira2ForCausalLM,
     "phi3_v": _OVPhi3VisionForCausalLM,
