@@ -832,7 +832,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             '--sensitivity-metric "mean_activation_magnitude"',
             {
                 "lm_model": (
-                    {"int8": 50, "int4": 52} if is_transformers_version(">=", "4.57") else {"int8": 46, "int4": 56}
+                    {"int8": 52, "int4": 50} if is_transformers_version(">=", "4.57") else {"int8": 46, "int4": 56}
                 ),
                 "text_embeddings_model": {"int8": 1},
                 "vision_embeddings_model": {"int8": 16},

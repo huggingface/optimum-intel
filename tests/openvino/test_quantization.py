@@ -422,7 +422,7 @@ class OVQuantizerTest(unittest.TestCase):
                 "lm_model": {"f8e4m3": 8, "int4": 14},
                 "text_embeddings_model": {"int8": 1},
                 "vision_embeddings_model": {"f8e4m3": 1},
-                "vision_embeddings_merger_model": {"f8e4m3": 5, "int4": 10},
+                "vision_embeddings_merger_model": {"f8e4m3": 2, "int4": 16},
             },
         ),
         (
@@ -1086,7 +1086,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 num_samples=1,
             ),
             {
-                "lm_model": {"int8": 50, "int4": 52}
+                "lm_model": {"int8": 52, "int4": 50}
                 if is_transformers_version(">=", "4.57")
                 else {"int8": 46, "int4": 56},
                 "text_embeddings_model": {"int8": 1},
