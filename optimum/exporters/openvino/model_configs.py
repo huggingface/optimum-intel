@@ -183,6 +183,7 @@ from optimum.exporters.openvino.model_patcher import (
     MuseGlimmerVisionEmbeddingsModelPatcher,
     OVDecoderModelPatcher,
     OVSeq2SeqModelPatcher,
+    ParaformerModelPatcher,
     Phi3ModelPatcher,
     Phi3VisionImageEmbeddingsPatcher,
     Phi4MMAudioEncoderPatcher,
@@ -216,7 +217,6 @@ from optimum.exporters.openvino.model_patcher import (
     Qwen3TTSSpeakerEncoderPatcher,
     Qwen3VLLanguageModelPatcher,
     Qwen3VLVisionEmbMergerPatcher,
-    ParaformerModelPatcher,
     QwenImage21I2ITextEncoderModelPatcher,
     QwenImage21TextEncoderModelPatcher,
     QwenImage21TransformerModelPatcher,
@@ -348,7 +348,8 @@ def init_model_configs():
     else:
         funasr.ParaformerForASR = ParaformerForASR
         TasksManager._CUSTOM_CLASSES[("pt", "paraformer", "automatic-speech-recognition")] = (
-            "funasr", "ParaformerForASR"
+            "funasr",
+            "ParaformerForASR",
         )
 
     TasksManager._CUSTOM_CLASSES[("pt", "phi4mm", "image-text-to-text")] = ("transformers", "AutoModelForCausalLM")
@@ -8176,7 +8177,9 @@ class ParaformerDummyAudioInputGenerator(DummyInputGenerator):
         if input_name == "speech":
             return self.random_float_tensor(shape=(self.batch_size, 30, 560), framework=framework, dtype=float_dtype)
         if input_name == "speech_lengths":
-            return self.random_int_tensor(shape=(self.batch_size,), max_value=30, min_value=6, framework=framework, dtype="int32")
+            return self.random_int_tensor(
+                shape=(self.batch_size,), max_value=30, min_value=6, framework=framework, dtype="int32"
+            )
         raise ValueError(f"Unsupported input name {input_name}")
 
 

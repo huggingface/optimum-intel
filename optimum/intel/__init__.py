@@ -223,7 +223,6 @@ if TYPE_CHECKING:
         OVModelForSeq2SeqLM,
         OVModelForSequenceClassification,
         OVModelForSpeechSeq2Seq,
-        OVParaformerForSpeechSeq2Seq,
         OVModelForTextToSpeechSeq2Seq,
         OVModelForTokenClassification,
         OVModelForVision2Seq,
@@ -232,6 +231,7 @@ if TYPE_CHECKING:
         OVModelOpenCLIPForZeroShotImageClassification,
         OVModelOpenCLIPText,
         OVModelOpenCLIPVisual,
+        OVParaformerForSpeechSeq2Seq,
     )
     from .pipelines import pipeline
 

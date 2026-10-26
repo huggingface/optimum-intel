@@ -938,10 +938,15 @@ class OVCLIExportTestCase(unittest.TestCase):
         with TemporaryDirectory() as output_dir:
             subprocess.run(
                 [
-                    "optimum-cli", "export", "openvino",
-                    "--model", MODEL_NAMES["paraformer"],
-                    "--task", "automatic-speech-recognition",
-                    "--framework", "pt",
+                    "optimum-cli",
+                    "export",
+                    "openvino",
+                    "--model",
+                    MODEL_NAMES["paraformer"],
+                    "--task",
+                    "automatic-speech-recognition",
+                    "--framework",
+                    "pt",
                     str(output_dir),
                 ],
                 check=True,

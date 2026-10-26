@@ -1,18 +1,21 @@
-import torch
-from torch import nn
+import copy
+import json
 import logging
-from typing import Dict, Optional, List, Tuple, Union
-from pathlib import Path
-import numpy as np
-import types
 import math
 import os
-import json
-import copy
+import types
+from pathlib import Path
+from typing import Dict, List, Optional, Union
+
+import torch
+from torch import nn
+from torch.nn import functional as F
+
 
 # Optional dependency: omegaconf is only required for loading FunASR-style configs
 try:
-    from omegaconf import OmegaConf, DictConfig, ListConfig
+    from omegaconf import DictConfig, ListConfig, OmegaConf
+
     _OMEGACONF_AVAILABLE = True
 except ImportError:
     OmegaConf = None
@@ -23,10 +26,12 @@ except ImportError:
 # Optional dependency: loralib for LoRA fine-tuning
 try:
     import loralib as lora
+
     _LORA_AVAILABLE = True
 except ImportError:
     lora = None
     _LORA_AVAILABLE = False
+
 
 # Copied from https://github.com/modelscope/FunASR/blob/main/funasr/models/transformer/utils/repeat.py#L14 (Apache 2.0)
 class MultiSequential(torch.nn.Sequential):
@@ -50,6 +55,7 @@ class MultiSequential(torch.nn.Sequential):
                 args = m(*args)
         return args
 
+
 def repeat(N, fn, layer_drop_rate=0.0):
     """Repeat module N times.
 
@@ -63,6 +69,7 @@ def repeat(N, fn, layer_drop_rate=0.0):
 
     """
     return MultiSequential(*[fn(n) for n in range(N)], layer_drop_rate=layer_drop_rate)
+
 
 # https://github.com/modelscope/FunASR/blob/main/funasr/models/transformer/positionwise_feed_forward.py#L14 (Apache 2.0)
 class PositionwiseFeedForward(torch.nn.Module):
@@ -87,12 +94,14 @@ class PositionwiseFeedForward(torch.nn.Module):
         """Forward function."""
         return self.w_2(self.dropout(self.activation(self.w_1(x))))
 
+
 # Copied from https://github.com/modelscope/FunASR/blob/main/funasr/models/transformer/embedding.py#L416 (Apache 2.0)
 class StreamSinusoidalPositionEncoder(torch.nn.Module):
     """ """
 
     def __init__(self, d_model=80, dropout_rate=0.1):
         super().__init__()
+
 
 # Copied from https://github.com/modelscope/FunASR/blob/main/funasr/models/transformer/embedding.py#L383 (Apache 2.0)
 class SinusoidalPositionEncoder(torch.nn.Module):
@@ -101,22 +110,14 @@ class SinusoidalPositionEncoder(torch.nn.Module):
     def __init__(self, d_model=80, dropout_rate=0.1):
         super().__init__()
 
-    def encode(
-        self, positions: torch.Tensor = None, depth: int = None, dtype: torch.dtype = torch.float32
-    ):
+    def encode(self, positions: torch.Tensor = None, depth: int = None, dtype: torch.dtype = torch.float32):
         batch_size = positions.size(0)
         positions = positions.type(dtype)
         device = positions.device
-        log_timescale_increment = torch.log(torch.tensor([10000], dtype=dtype, device=device)) / (
-            depth / 2 - 1
-        )
-        inv_timescales = torch.exp(
-            torch.arange(depth / 2, device=device).type(dtype) * (-log_timescale_increment)
-        )
+        log_timescale_increment = torch.log(torch.tensor([10000], dtype=dtype, device=device)) / (depth / 2 - 1)
+        inv_timescales = torch.exp(torch.arange(depth / 2, device=device).type(dtype) * (-log_timescale_increment))
         inv_timescales = torch.reshape(inv_timescales, [batch_size, -1])
-        scaled_time = torch.reshape(positions, [1, -1, 1]) * torch.reshape(
-            inv_timescales, [1, 1, -1]
-        )
+        scaled_time = torch.reshape(positions, [1, -1, 1]) * torch.reshape(inv_timescales, [1, 1, -1])
         encoding = torch.cat([torch.sin(scaled_time), torch.cos(scaled_time)], dim=2)
         return encoding.type(dtype)
 
@@ -126,6 +127,7 @@ class SinusoidalPositionEncoder(torch.nn.Module):
         position_encoding = self.encode(positions, input_dim, x.dtype).to(x.device)
 
         return x + position_encoding
+
 
 def _pre_hook(
     state_dict,
@@ -146,6 +148,7 @@ def _pre_hook(
     k = prefix + "pe"
     if k in state_dict:
         state_dict.pop(k)
+
 
 # Copied from https://github.com/modelscope/FunASR/blob/main/funasr/models/transformer/embedding.py#L36 (Apache 2.0)
 class PositionalEncoding(torch.nn.Module):
@@ -184,13 +187,13 @@ class PositionalEncoding(torch.nn.Module):
         else:
             position = torch.arange(0, x.size(1), dtype=torch.float32).unsqueeze(1)
         div_term = torch.exp(
-            torch.arange(0, self.d_model, 2, dtype=torch.float32)
-            * -(math.log(10000.0) / self.d_model)
+            torch.arange(0, self.d_model, 2, dtype=torch.float32) * -(math.log(10000.0) / self.d_model)
         )
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
         pe = pe.unsqueeze(0)
         self.pe = pe.to(device=x.device, dtype=x.dtype)
+
 
 # Copied from https://github.com/modelscope/FunASR/blob/main/funasr/models/transformer/layer_norm.py#L13 (Apache 2.0)
 class LayerNorm(torch.nn.LayerNorm):
@@ -206,6 +209,7 @@ class LayerNorm(torch.nn.LayerNorm):
         """Construct an LayerNorm object."""
         super(LayerNorm, self).__init__(nout, eps=1e-12)
         self.dim = dim
+
 
 class BaseTransformerDecoder(nn.Module):
     """Base class of Transfomer decoder module.
@@ -270,6 +274,7 @@ class BaseTransformerDecoder(nn.Module):
         # Must set by the inheritance
         self.decoders = None
 
+
 class sequence_mask(nn.Module):
     def __init__(self, max_seq_len=512, flip=True):
         super().__init__()
@@ -301,6 +306,7 @@ def preprocess_for_attn(x, mask, cache, pad_fn, kernel_size):
 #     import torch.fx
 
 #     torch.fx.wrap("preprocess_for_attn")
+
 
 # Copied from https://github.com/modelscope/FunASR/blob/main/funasr/models/sanm/attention.py#L140 (Apache 2.0)
 class MultiHeadedAttentionSANM(nn.Module):
@@ -338,8 +344,7 @@ class MultiHeadedAttentionSANM(nn.Module):
         if lora_list is not None:
             if not _LORA_AVAILABLE:
                 raise ImportError(
-                    "LoRA layers require the 'loralib' package. "
-                    "Please install it with: pip install loralib"
+                    "LoRA layers require the 'loralib' package. " "Please install it with: pip install loralib"
                 )
             if "o" in lora_list:
                 self.linear_out = lora.Linear(
@@ -362,12 +367,9 @@ class MultiHeadedAttentionSANM(nn.Module):
         else:
             self.linear_out = nn.Linear(n_feat, n_feat)
             self.linear_q_k_v = nn.Linear(in_feat, n_feat * 3)
-        attn = None
         self.dropout = nn.Dropout(p=dropout_rate)
 
-        self.fsmn_block = nn.Conv1d(
-            n_feat, n_feat, kernel_size, stride=1, padding=0, groups=n_feat, bias=False
-        )
+        self.fsmn_block = nn.Conv1d(n_feat, n_feat, kernel_size, stride=1, padding=0, groups=n_feat, bias=False)
         # padding
         left_padding = (kernel_size - 1) // 2
         if sanm_shfit > 0:
@@ -410,15 +412,9 @@ class MultiHeadedAttentionSANM(nn.Module):
         b, t, d = x.size()
         q_k_v = self.linear_q_k_v(x)
         q, k, v = torch.split(q_k_v, int(self.h * self.d_k), dim=-1)
-        q_h = torch.reshape(q, (b, t, self.h, self.d_k)).transpose(
-            1, 2
-        )  # (batch, head, time1, d_k)
-        k_h = torch.reshape(k, (b, t, self.h, self.d_k)).transpose(
-            1, 2
-        )  # (batch, head, time2, d_k)
-        v_h = torch.reshape(v, (b, t, self.h, self.d_k)).transpose(
-            1, 2
-        )  # (batch, head, time2, d_k)
+        q_h = torch.reshape(q, (b, t, self.h, self.d_k)).transpose(1, 2)  # (batch, head, time1, d_k)
+        k_h = torch.reshape(k, (b, t, self.h, self.d_k)).transpose(1, 2)  # (batch, head, time2, d_k)
+        v_h = torch.reshape(v, (b, t, self.h, self.d_k)).transpose(1, 2)  # (batch, head, time2, d_k)
 
         return q_h, k_h, v_h, v
 
@@ -442,21 +438,15 @@ class MultiHeadedAttentionSANM(nn.Module):
 
             mask = mask.unsqueeze(1).eq(0)  # (batch, 1, *, time2)
 
-            min_value = -float(
-                "inf"
-            )  # float(numpy.finfo(torch.tensor(0, dtype=scores.dtype).numpy().dtype).min)
+            min_value = -float("inf")  # float(numpy.finfo(torch.tensor(0, dtype=scores.dtype).numpy().dtype).min)
             scores = scores.masked_fill(mask, min_value)
-            attn = torch.softmax(scores, dim=-1).masked_fill(
-                mask, 0.0
-            )  # (batch, head, time1, time2)
+            attn = torch.softmax(scores, dim=-1).masked_fill(mask, 0.0)  # (batch, head, time1, time2)
         else:
             attn = torch.softmax(scores, dim=-1)  # (batch, head, time1, time2)
 
         p_attn = self.dropout(attn)
         x = torch.matmul(p_attn, value)  # (batch, head, time1, d_k)
-        x = (
-            x.transpose(1, 2).contiguous().view(n_batch, -1, self.h * self.d_k)
-        )  # (batch, time1, d_model)
+        x = x.transpose(1, 2).contiguous().view(n_batch, -1, self.h * self.d_k)  # (batch, time1, d_model)
 
         return self.linear_out(x)  # (batch, time1, d_model)
 
@@ -520,6 +510,7 @@ class MultiHeadedAttentionSANM(nn.Module):
         att_outs = self.forward_attention(v_h, scores, None)
         return att_outs + fsmn_memory, cache
 
+
 # Copied from https://github.com/modelscope/FunASR/blob/main/funasr/models/sanm/attention.py#L353 (Apache 2.0)
 class MultiHeadedAttentionSANMExport(nn.Module):
     def __init__(self, model):
@@ -579,6 +570,7 @@ class MultiHeadedAttentionSANMExport(nn.Module):
         context_layer = context_layer.view(new_context_layer_shape)
         return self.linear_out(context_layer)  # (batch, time1, d_model)
 
+
 # Copied from https://github.com/modelscope/FunASR/blob/main/funasr/models/sanm/attention.py#L471 (Apache 2.0)
 class MultiHeadedAttentionSANMDecoder(nn.Module):
     """Multi-Head Attention layer.
@@ -596,9 +588,7 @@ class MultiHeadedAttentionSANMDecoder(nn.Module):
 
         self.dropout = nn.Dropout(p=dropout_rate)
 
-        self.fsmn_block = nn.Conv1d(
-            n_feat, n_feat, kernel_size, stride=1, padding=0, groups=n_feat, bias=False
-        )
+        self.fsmn_block = nn.Conv1d(n_feat, n_feat, kernel_size, stride=1, padding=0, groups=n_feat, bias=False)
         # padding
         # padding
         left_padding = (kernel_size - 1) // 2
@@ -658,6 +648,7 @@ class MultiHeadedAttentionSANMDecoder(nn.Module):
             x = x * mask
         return x, cache
 
+
 # Copied from https://github.com/modelscope/FunASR/blob/main/funasr/models/sanm/attention.py#L550 (Apache 2.0)
 class MultiHeadedAttentionSANMDecoderExport(nn.Module):
     def __init__(self, model):
@@ -675,6 +666,7 @@ class MultiHeadedAttentionSANMDecoderExport(nn.Module):
         x = x + inputs
         x = x * mask
         return x, cache
+
 
 # Copied from https://github.com/modelscope/FunASR/blob/main/funasr/models/sanm/attention.py#L568 (Apache 2.0)
 class MultiHeadedAttentionCrossAtt(nn.Module):
@@ -713,9 +705,7 @@ class MultiHeadedAttentionCrossAtt(nn.Module):
                 self.linear_q = nn.Linear(n_feat, n_feat)
             lora_kv_list = ["k" in lora_list, "v" in lora_list]
             if lora_kv_list == [False, False]:
-                self.linear_k_v = nn.Linear(
-                    n_feat if encoder_output_size is None else encoder_output_size, n_feat * 2
-                )
+                self.linear_k_v = nn.Linear(n_feat if encoder_output_size is None else encoder_output_size, n_feat * 2)
             else:
                 self.linear_k_v = lora.MergedLinear(
                     n_feat if encoder_output_size is None else encoder_output_size,
@@ -733,9 +723,7 @@ class MultiHeadedAttentionCrossAtt(nn.Module):
                 self.linear_out = nn.Linear(n_feat, n_feat)
         else:
             self.linear_q = nn.Linear(n_feat, n_feat)
-            self.linear_k_v = nn.Linear(
-                n_feat if encoder_output_size is None else encoder_output_size, n_feat * 2
-            )
+            self.linear_k_v = nn.Linear(n_feat if encoder_output_size is None else encoder_output_size, n_feat * 2)
             self.linear_out = nn.Linear(n_feat, n_feat)
         self.attn = None
         self.dropout = nn.Dropout(p=dropout_rate)
@@ -758,18 +746,12 @@ class MultiHeadedAttentionCrossAtt(nn.Module):
         # print("in forward_qkv, x", x.size())
         b = x.size(0)
         q = self.linear_q(x)
-        q_h = torch.reshape(q, (b, -1, self.h, self.d_k)).transpose(
-            1, 2
-        )  # (batch, head, time1, d_k)
+        q_h = torch.reshape(q, (b, -1, self.h, self.d_k)).transpose(1, 2)  # (batch, head, time1, d_k)
 
         k_v = self.linear_k_v(memory)
         k, v = torch.split(k_v, int(self.h * self.d_k), dim=-1)
-        k_h = torch.reshape(k, (b, -1, self.h, self.d_k)).transpose(
-            1, 2
-        )  # (batch, head, time2, d_k)
-        v_h = torch.reshape(v, (b, -1, self.h, self.d_k)).transpose(
-            1, 2
-        )  # (batch, head, time2, d_k)
+        k_h = torch.reshape(k, (b, -1, self.h, self.d_k)).transpose(1, 2)  # (batch, head, time2, d_k)
+        v_h = torch.reshape(v, (b, -1, self.h, self.d_k)).transpose(1, 2)  # (batch, head, time2, d_k)
 
         return q_h, k_h, v_h
 
@@ -789,22 +771,16 @@ class MultiHeadedAttentionCrossAtt(nn.Module):
         n_batch = value.size(0)
         if mask is not None:
             mask = mask.unsqueeze(1).eq(0)  # (batch, 1, *, time2)
-            min_value = -float(
-                "inf"
-            )  # float(numpy.finfo(torch.tensor(0, dtype=scores.dtype).numpy().dtype).min)
+            min_value = -float("inf")  # float(numpy.finfo(torch.tensor(0, dtype=scores.dtype).numpy().dtype).min)
             # logging.info(
             #     "scores: {}, mask_size: {}".format(scores.size(), mask.size()))
             scores = scores.masked_fill(mask, min_value)
-            attn = torch.softmax(scores, dim=-1).masked_fill(
-                mask, 0.0
-            )  # (batch, head, time1, time2)
+            attn = torch.softmax(scores, dim=-1).masked_fill(mask, 0.0)  # (batch, head, time1, time2)
         else:
             attn = torch.softmax(scores, dim=-1)  # (batch, head, time1, time2)
         p_attn = self.dropout(attn)
         x = torch.matmul(p_attn, value)  # (batch, head, time1, d_k)
-        x = (
-            x.transpose(1, 2).contiguous().view(n_batch, -1, self.h * self.d_k)
-        )  # (batch, time1, d_model)
+        x = x.transpose(1, 2).contiguous().view(n_batch, -1, self.h * self.d_k)  # (batch, time1, d_model)
         if ret_attn:
             return self.linear_out(x), attn  # (batch, time1, d_model)
         return self.linear_out(x)  # (batch, time1, d_model)
@@ -859,6 +835,7 @@ class MultiHeadedAttentionCrossAtt(nn.Module):
         scores = torch.matmul(q_h, k_h.transpose(-2, -1))
         return self.forward_attention(v_h, scores, None), cache
 
+
 # Copied from https://github.com/modelscope/FunASR/blob/main/funasr/models/sanm/attention.py#L751 (Apache 2.0)
 class MultiHeadedAttentionCrossAttExport(nn.Module):
     def __init__(self, model):
@@ -903,6 +880,7 @@ class MultiHeadedAttentionCrossAttExport(nn.Module):
         if ret_attn:
             return self.linear_out(context_layer), attn
         return self.linear_out(context_layer)  # (batch, time1, d_model)
+
 
 # Copied from https://github.com/modelscope/FunASR/blob/main/funasr/models/sanm/encoder.py#L44 (MIT License)
 class EncoderLayerSANM(nn.Module):
@@ -1047,6 +1025,7 @@ class EncoderLayerSANM(nn.Module):
 
         return x, cache
 
+
 # Copied from https://github.com/modelscope/FunASR/blob/main/funasr/models/sanm/encoder.py#L188 (MIT License)
 class SANMEncoder(nn.Module):
     """
@@ -1165,6 +1144,7 @@ class SANMEncoder(nn.Module):
     def output_size(self) -> int:
         return self._output_size
 
+
 # Copied from https://github.com/modelscope/FunASR/blob/main/funasr/models/sanm/encoder.py#L487 (MIT License)
 class EncoderLayerSANMExport(nn.Module):
     def __init__(
@@ -1181,7 +1161,6 @@ class EncoderLayerSANMExport(nn.Module):
         self.size = model.size
 
     def forward(self, x, mask):
-
         residual = x
         x = self.norm1(x)
         x = self.self_attn(x, mask)
@@ -1193,6 +1172,7 @@ class EncoderLayerSANMExport(nn.Module):
         x = x + residual
 
         return x, mask
+
 
 # Copied from https://github.com/modelscope/FunASR/blob/main/funasr/models/sanm/encoder.py#L518 (MIT License)
 class SANMEncoderExport(nn.Module):
@@ -1259,11 +1239,9 @@ class SANMEncoderExport(nn.Module):
         else:
             xs_pad = self.embed(speech)
 
-        encoder_outs = self.model.encoders0(xs_pad, mask)
-        xs_pad, masks = encoder_outs[0], encoder_outs[1]
+        xs_pad, _ = self.model.encoders0(xs_pad, mask)
 
-        encoder_outs = self.model.encoders(xs_pad, mask)
-        xs_pad, masks = encoder_outs[0], encoder_outs[1]
+        xs_pad, _ = self.model.encoders(xs_pad, mask)
 
         xs_pad = self.model.after_norm(xs_pad)
 
@@ -1273,7 +1251,8 @@ class SANMEncoderExport(nn.Module):
 
         return xs_pad, speech_lengths
 
-#Copied from https://github.com/modelscope/FunASR/blob/main/funasr/models/sanm/positionwise_feed_forward.py#L12
+
+# Copied from https://github.com/modelscope/FunASR/blob/main/funasr/models/sanm/positionwise_feed_forward.py#L12
 class PositionwiseFeedForwardDecoderSANM(torch.nn.Module):
     """Positionwise feed forward layer.
 
@@ -1296,6 +1275,7 @@ class PositionwiseFeedForwardDecoderSANM(torch.nn.Module):
     def forward(self, x):
         """Forward function."""
         return self.w_2(self.norm(self.dropout(self.activation(self.w_1(x)))))
+
 
 # Copied from https://github.com/modelscope/FunASR/blob/main/funasr/models/paraformer/decoder.py#L26 (MIT License)
 class DecoderLayerSANM(torch.nn.Module):
@@ -1349,6 +1329,7 @@ class DecoderLayerSANM(torch.nn.Module):
             self.concat_linear2 = torch.nn.Linear(size + size, size)
         self.reserve_attn = False
         self.attn_mat = []
+
 
 # Copied from https://github.com/modelscope/FunASR/blob/main/funasr/models/paraformer/decoder.py#L225 (MIT License)
 class ParaformerSANMDecoder(BaseTransformerDecoder):
@@ -1457,9 +1438,9 @@ class ParaformerSANMDecoder(BaseTransformerDecoder):
         self.tf2torch_tensor_name_prefix_tf = tf2torch_tensor_name_prefix_tf
         self.chunk_multiply_factor = chunk_multiply_factor
 
+
 # Copied from https://github.com/modelscope/FunASR/blob/main/funasr/models/paraformer/decoder.py#L592 (MIT License)
 class DecoderLayerSANMExport(torch.nn.Module):
-
     def __init__(self, model):
         super().__init__()
         self.self_attn = model.self_attn
@@ -1471,7 +1452,6 @@ class DecoderLayerSANMExport(torch.nn.Module):
         self.size = model.size
 
     def forward(self, tgt, tgt_mask, memory, memory_mask=None, cache=None):
-
         residual = tgt
         tgt = self.norm1(tgt)
         tgt = self.feed_forward(tgt)
@@ -1488,6 +1468,7 @@ class DecoderLayerSANMExport(torch.nn.Module):
             x = residual + self.src_attn(x, memory, memory_mask)
 
         return x, tgt_mask, memory, memory_mask, cache
+
 
 # Copied from https://github.com/modelscope/FunASR/blob/main/funasr/models/paraformer/decoder.py#L641 (MIT License)
 class ParaformerSANMDecoderExport(torch.nn.Module):
@@ -1537,18 +1518,21 @@ class ParaformerSANMDecoderExport(torch.nn.Module):
         return_hidden: bool = False,
         return_both: bool = False,
     ):
-
         tgt = ys_in_pad
         batch_size = tgt.shape[0]
         tgt_seq_len = tgt.shape[1]
-        arange_tgt = torch.arange(tgt_seq_len, dtype=torch.int32, device=tgt.device).unsqueeze(0).expand(batch_size, -1)
+        arange_tgt = (
+            torch.arange(tgt_seq_len, dtype=torch.int32, device=tgt.device).unsqueeze(0).expand(batch_size, -1)
+        )
         tgt_mask = (arange_tgt < ys_in_lens.unsqueeze(1).to(torch.int32)).to(torch.float32)
         tgt_mask, _ = self.prepare_mask(tgt_mask)
         # tgt_mask = myutils.sequence_mask(ys_in_lens, device=tgt.device)[:, :, None]
 
         memory = hs_pad
         mem_seq_len = memory.shape[1]
-        arange_mem = torch.arange(mem_seq_len, dtype=torch.int32, device=memory.device).unsqueeze(0).expand(batch_size, -1)
+        arange_mem = (
+            torch.arange(mem_seq_len, dtype=torch.int32, device=memory.device).unsqueeze(0).expand(batch_size, -1)
+        )
         memory_mask = (arange_mem < hlens.unsqueeze(1).to(torch.int32)).to(torch.float32)
         _, memory_mask = self.prepare_mask(memory_mask)
         # memory_mask = myutils.sequence_mask(hlens, device=memory.device)[:, None, :]
@@ -1556,9 +1540,7 @@ class ParaformerSANMDecoderExport(torch.nn.Module):
         x = tgt
         x, tgt_mask, memory, memory_mask, _ = self.model.decoders(x, tgt_mask, memory, memory_mask)
         if self.model.decoders2 is not None:
-            x, tgt_mask, memory, memory_mask, _ = self.model.decoders2(
-                x, tgt_mask, memory, memory_mask
-            )
+            x, tgt_mask, memory, memory_mask, _ = self.model.decoders2(x, tgt_mask, memory, memory_mask)
         x, tgt_mask, memory, memory_mask, _ = self.model.decoders3(x, tgt_mask, memory, memory_mask)
         hidden = self.after_norm(x)
         # x = self.output_layer(x)
@@ -1570,6 +1552,7 @@ class ParaformerSANMDecoderExport(torch.nn.Module):
             x = self.output_layer(hidden)
             return x, hidden, ys_in_lens
         return hidden, ys_in_lens
+
 
 # Modified from https://github.com/modelscope/FunASR/blob/main/funasr/models/paraformer/export_meta.py#L11 (MIT License)
 def export_rebuild_model(model, **kwargs):
@@ -1632,7 +1615,7 @@ def export_dynamic_axes(self):
             0: "batch_size",
         },
         "logits": {0: "batch_size", 1: "logits_length"},
-        "token_num": {0: "batch_size"}
+        "token_num": {0: "batch_size"},
     }
 
 
@@ -1640,6 +1623,7 @@ def export_name(
     self,
 ):
     return "model"
+
 
 # Copied from https://github.com/modelscope/FunASR/blob/main/funasr/models/paraformer/cif_predictor.py#L173 (MIT License)
 class CifPredictorV2(torch.nn.Module):
@@ -1670,6 +1654,7 @@ class CifPredictorV2(torch.nn.Module):
         self.tf2torch_tensor_name_prefix_torch = tf2torch_tensor_name_prefix_torch
         self.tf2torch_tensor_name_prefix_tf = tf2torch_tensor_name_prefix_tf
         self.tail_mask = tail_mask
+
 
 # Copied from https://github.com/modelscope/FunASR/blob/main/funasr/models/paraformer/cif_predictor.py#L431 (MIT License)
 class CifPredictorV2Export(torch.nn.Module):
@@ -1796,6 +1781,7 @@ def cif_v1_export(hidden, alphas, threshold: float):
     frame_fires[frame_fires_idxs] = frames
     return frame_fires, fires
 
+
 # https://github.com/modelscope/FunASR/blob/main/funasr/models/paraformer/model.py#L30 (MIT License)
 class Paraformer(torch.nn.Module):
     """
@@ -1842,19 +1828,35 @@ class Paraformer(torch.nn.Module):
         use_1st_decoder_loss: bool = False,
         **kwargs,
     ):
-
         super().__init__()
         # Filter out streaming-specific parameters not supported by SANMEncoder
         sanm_encoder_params = {
-            'input_size', 'output_size', 'attention_heads', 'linear_units', 
-            'num_blocks', 'dropout_rate', 'positional_dropout_rate', 
-            'attention_dropout_rate', 'input_layer', 'pos_enc_class', 
-            'normalize_before', 'concat_after', 'positionwise_layer_type', 
-            'positionwise_conv_kernel_size', 'padding_idx', 'interctc_layer_idx',
-            'interctc_use_conditioning', 'kernel_size', 'sanm_shfit', 
-            'lora_list', 'lora_rank', 'lora_alpha', 'lora_dropout',
-            'selfattention_layer_type', 'tf2torch_tensor_name_prefix_torch',
-            'tf2torch_tensor_name_prefix_tf'
+            "input_size",
+            "output_size",
+            "attention_heads",
+            "linear_units",
+            "num_blocks",
+            "dropout_rate",
+            "positional_dropout_rate",
+            "attention_dropout_rate",
+            "input_layer",
+            "pos_enc_class",
+            "normalize_before",
+            "concat_after",
+            "positionwise_layer_type",
+            "positionwise_conv_kernel_size",
+            "padding_idx",
+            "interctc_layer_idx",
+            "interctc_use_conditioning",
+            "kernel_size",
+            "sanm_shfit",
+            "lora_list",
+            "lora_rank",
+            "lora_alpha",
+            "lora_dropout",
+            "selfattention_layer_type",
+            "tf2torch_tensor_name_prefix_torch",
+            "tf2torch_tensor_name_prefix_tf",
         }
         filtered_encoder_conf = {k: v for k, v in encoder_conf.items() if k in sanm_encoder_params}
         encoder = SANMEncoder(input_size=input_size, **filtered_encoder_conf)
@@ -1875,14 +1877,13 @@ class Paraformer(torch.nn.Module):
         self.predictor = predictor
 
     def export(self, **kwargs):
-
         if "max_seq_len" not in kwargs:
             kwargs["max_seq_len"] = 512
         models = export_rebuild_model(model=self, **kwargs)
         return models
 
-def add_file_root_path(model_or_path: str, file_path_metas: dict, cfg={}):
 
+def add_file_root_path(model_or_path: str, file_path_metas: dict, cfg={}):
     if isinstance(file_path_metas, dict):
         if isinstance(cfg, list):
             cfg.append({})
@@ -1923,6 +1924,7 @@ def add_file_root_path(model_or_path: str, file_path_metas: dict, cfg={}):
 
     return cfg
 
+
 def get_or_download_model_dir_hf(
     model,
     model_revision=None,
@@ -1941,6 +1943,7 @@ def get_or_download_model_dir_hf(
     model_cache_dir = snapshot_download(model)
     return model_cache_dir
 
+
 def download_from_hf(**kwargs):
     model_or_path = kwargs.get("model")
     model_revision = kwargs.get("model_revision", "master")
@@ -1951,7 +1954,7 @@ def download_from_hf(**kwargs):
                 model_revision,
                 is_training=kwargs.get("is_training"),
                 check_latest=kwargs.get("check_latest", True),
-                )
+            )
         except Exception as e:
             print(f"Download: {model_or_path} failed!: {e}")
 
@@ -1987,6 +1990,7 @@ def download_from_hf(**kwargs):
 
     return kwargs
 
+
 def deep_update(original, update):
     for key, value in update.items():
         if isinstance(value, dict) and key in original:
@@ -1995,6 +1999,7 @@ def deep_update(original, update):
             deep_update(original[key], value)
         else:
             original[key] = value
+
 
 def load_pretrained_model(
     path: str,
@@ -2053,10 +2058,7 @@ def load_pretrained_model(
                     k_src = src_prefix + k
                     if not k_src.startswith("module."):
                         logging.info(f"init param, map: {k} from {k_src} in ckpt")
-                elif (
-                    k.startswith(dst_prefix)
-                    and k.replace(dst_prefix, src_prefix, 1) in src_state.keys()
-                ):
+                elif k.startswith(dst_prefix) and k.replace(dst_prefix, src_prefix, 1) in src_state.keys():
                     k_src = k.replace(dst_prefix, src_prefix, 1)
                     if not k_src.startswith("module."):
                         logging.info(f"init param, map: {k} from {k_src} in ckpt")
@@ -2071,16 +2073,16 @@ def load_pretrained_model(
         else:
             print(f"Warning, miss key in ckpt: {k}, {path}")
 
-    flag = obj.load_state_dict(dst_state, strict=True)
+    obj.load_state_dict(dst_state, strict=True)
+
 
 def _torchscripts(model, path, device="cuda"):
     dummy_input = model.export_dummy_inputs()
     model_jit_script = torch.jit.trace(model, dummy_input)
     return model_jit_script
 
-def export_utils(
-    model, data_in=None, quantize: bool = False, opset_version: int = 14, type="onnx", **kwargs
-):
+
+def export_utils(model, data_in=None, quantize: bool = False, opset_version: int = 14, type="onnx", **kwargs):
     model_scripts = model.export(**kwargs)
     export_dir = kwargs.get("output_dir", os.path.dirname(kwargs.get("init_param")))
     os.makedirs(export_dir, exist_ok=True)
@@ -2089,15 +2091,17 @@ def export_utils(
         model_scripts = (model_scripts,)
     for m in model_scripts:
         m.eval()
-        device = "cpu"    
+        device = "cpu"
         print("Exporting torchscripts on device {}".format(device))
         model_jit_scripts = _torchscripts(m, path=export_dir, device=device)
 
     return export_dir, model_jit_scripts
 
+
 def download_model(**kwargs):
     kwargs = download_from_hf(**kwargs)
     return kwargs
+
 
 def build_model(**kwargs):
     assert "model" in kwargs
@@ -2140,6 +2144,7 @@ def build_model(**kwargs):
 
     return model, kwargs
 
+
 def export(model, kwargs, input=None, **cfg):
     del kwargs["model"]
     model.eval()
@@ -2157,6 +2162,7 @@ def export(model, kwargs, input=None, **cfg):
 
 try:
     from transformers import PretrainedConfig, PreTrainedModel
+
     _TRANSFORMERS_AVAILABLE = True
 except ImportError:
     _TRANSFORMERS_AVAILABLE = False
@@ -2167,11 +2173,12 @@ except ImportError:
 class ParaformerConfig(PretrainedConfig):
     """
     Configuration class for Paraformer ASR models.
-    
+
     This provides a transformers-compatible configuration for FunASR Paraformer models.
     """
+
     model_type = "paraformer"
-    
+
     def __init__(
         self,
         vocab_size: int = 8404,
@@ -2181,7 +2188,7 @@ class ParaformerConfig(PretrainedConfig):
         decoder_layers: int = 16,
         max_seq_len: int = 512,
         frontend_conf: Optional[Dict] = None,
-        **kwargs
+        **kwargs,
     ):
         if _TRANSFORMERS_AVAILABLE:
             super().__init__(**kwargs)
@@ -2192,14 +2199,14 @@ class ParaformerConfig(PretrainedConfig):
         self.decoder_layers = decoder_layers
         self.max_seq_len = max_seq_len
         self.frontend_conf = frontend_conf or {}
-    
+
     @classmethod
     def from_funasr_config(cls, config_path: Union[str, Path]) -> "ParaformerConfig":
         """Load configuration from FunASR config.yaml file."""
         try:
             if _OMEGACONF_AVAILABLE:
                 config = OmegaConf.load(config_path)
-                
+
                 return cls(
                     vocab_size=config.get("vocab_size", 8404),
                     encoder_dim=config.get("encoder_conf", {}).get("output_size", 512),
@@ -2217,15 +2224,16 @@ class ParaformerConfig(PretrainedConfig):
 class ParaformerForASR(PreTrainedModel):
     """
     Transformers-compatible wrapper for Paraformer ASR models.
-    
+
     This class wraps FunASR Paraformer models to make them compatible with
     the optimum-intel export pipeline.
     """
+
     if _TRANSFORMERS_AVAILABLE:
         config_class = ParaformerConfig
     base_model_prefix = "paraformer"
     main_input_name = "speech"
-    
+
     def __init__(self, config: ParaformerConfig, funasr_model=None):
         if _TRANSFORMERS_AVAILABLE:
             super().__init__(config)
@@ -2234,49 +2242,47 @@ class ParaformerForASR(PreTrainedModel):
         self._jit_model = None
         self._model_path = None
         self._model_kwargs = {}
-    
+
     @classmethod
     def from_pretrained(
-        cls,
-        model_name_or_path: Union[str, Path],
-        *model_args,
-        cache_dir: Optional[str] = None,
-        **kwargs
+        cls, model_name_or_path: Union[str, Path], *model_args, cache_dir: Optional[str] = None, **kwargs
     ) -> "ParaformerForASR":
         """
         Load a Paraformer model from a FunASR model directory or HuggingFace Hub.
         """
         from huggingface_hub import snapshot_download
-        
+
         model_path = Path(model_name_or_path)
-        
+
         # Download from HuggingFace Hub if not a local path
         if not model_path.exists():
             logging.info(f"Downloading Paraformer model from HuggingFace Hub: {model_name_or_path}")
-            model_path = Path(snapshot_download(
-                repo_id=str(model_name_or_path),
-                cache_dir=cache_dir,
-                token=kwargs.get("token"),
-                revision=kwargs.get("revision", "main"),
-            ))
-        
+            model_path = Path(
+                snapshot_download(
+                    repo_id=str(model_name_or_path),
+                    cache_dir=cache_dir,
+                    token=kwargs.get("token"),
+                    revision=kwargs.get("revision", "main"),
+                )
+            )
+
         # Load config
         config_yaml_path = model_path / "config.yaml"
         if config_yaml_path.exists():
             config = ParaformerConfig.from_funasr_config(config_yaml_path)
         else:
             config = ParaformerConfig()
-        
+
         # Load the FunASR model
         device = kwargs.get("device", "cpu")
         funasr_model, model_kwargs = build_model(model=str(model_path), device=device)
-        
+
         instance = cls(config, funasr_model=funasr_model)
         instance._model_path = model_path
         instance._model_kwargs = model_kwargs
-        
+
         return instance
-    
+
     def get_jit_model(self) -> torch.jit.ScriptModule:
         """Get or create the TorchScript model for export."""
         if self._jit_model is None:
@@ -2285,10 +2291,10 @@ class ParaformerForASR(PreTrainedModel):
                 self._model_kwargs,
                 type="torchscript",
                 quantize=False,
-                device=str(self._model_kwargs.get("device", "cpu"))
+                device=str(self._model_kwargs.get("device", "cpu")),
             )
         return self._jit_model
-    
+
     def forward(self, speech: torch.Tensor, speech_lengths: torch.Tensor):
         """Forward pass through the model."""
         if self.funasr_model is not None:

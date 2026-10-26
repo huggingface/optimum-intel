@@ -59,10 +59,10 @@ from optimum.intel import (
     OVModelForSequenceClassification,
     OVModelForSpeechSeq2Seq,
     OVModelForTextToSpeechSeq2Seq,
-    OVParaformerForSpeechSeq2Seq,
     OVModelForTokenClassification,
     OVModelForVisualCausalLM,
     OVModelForZeroShotImageClassification,
+    OVParaformerForSpeechSeq2Seq,
     OVQwenImage21Pipeline,
     OVQwenImagePipeline,
     OVSamModel,
@@ -188,7 +188,9 @@ class ExportModelTest(unittest.TestCase):
     def test_paraformer_and_funasr_task_routing(self):
         from optimum.exporters.openvino.__main__ import infer_task
 
-        with patch.object(TasksManager, "get_model_files", return_value=({"am.mvn", "config.yaml", "tokens.json"}, None)):
+        with patch.object(
+            TasksManager, "get_model_files", return_value=({"am.mvn", "config.yaml", "tokens.json"}, None)
+        ):
             self.assertEqual(infer_task("auto", "paraformer", library_name="funasr"), "automatic-speech-recognition")
         with patch.object(TasksManager, "get_model_files", return_value=({"configuration.json", "config.yaml"}, None)):
             self.assertEqual(

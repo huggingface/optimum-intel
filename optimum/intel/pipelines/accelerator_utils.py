@@ -33,11 +33,11 @@ from optimum.intel.openvino import (
     OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
     OVModelForSpeechSeq2Seq,
-    OVParaformerForSpeechSeq2Seq,
     OVModelForTextToSpeechSeq2Seq,
     OVModelForTokenClassification,
     OVModelForVisualCausalLM,
     OVModelForZeroShotImageClassification,
+    OVParaformerForSpeechSeq2Seq,
 )
 from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.intel.utils import is_transformers_version
@@ -51,7 +51,12 @@ OV_TASKS_MAPPING = {
     "audio-classification": (OVModelForAudioClassification,),
     "audio-frame-classification": (OVModelForAudioFrameClassification,),
     "audio-xvector": (OVModelForAudioXVector,),
-    "automatic-speech-recognition": (OVModelForCTC, OVModelForSpeechSeq2Seq, OVModelForMultimodalLM, OVParaformerForSpeechSeq2Seq),
+    "automatic-speech-recognition": (
+        OVModelForCTC,
+        OVModelForSpeechSeq2Seq,
+        OVModelForMultimodalLM,
+        OVParaformerForSpeechSeq2Seq,
+    ),
     "feature-extraction": (OVModelForFeatureExtraction,),
     "fill-mask": (OVModelForMaskedLM,),
     "image-classification": (OVModelForImageClassification,),

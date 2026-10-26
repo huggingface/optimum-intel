@@ -34,9 +34,10 @@ import logging
 import os
 import shutil
 from pathlib import Path
-from typing import Optional, Union
+from typing import Union
 
 import torch
+
 
 logger = logging.getLogger(__name__)
 
@@ -50,20 +51,20 @@ def export_paraformer(
 ) -> None:
     """
     Export a Paraformer ASR model to OpenVINO format.
-    
+
     This is a standalone export function that doesn't require modifications
     to the main optimum-intel export pipeline.
-    
+
     Args:
         model_name_or_path: Path to the Paraformer model directory
         output: Output directory for the exported model
         device: Device to use for export (default: "cpu")
         compress_int8: Apply INT8 symmetric weight compression (default: False)
         compress_fp16: Store FP32 constants as FP16 (default: True, recommended for GPU)
-    
+
     Returns:
         None
-        
+
     Example:
         >>> from optimum.exporters.openvino.export_paraformer import export_paraformer
         >>> export_paraformer(
@@ -73,42 +74,43 @@ def export_paraformer(
         ... )
     """
     import openvino as ov
-    
+
     # Import paraformer modeling (lazy import to avoid dependency issues)
     from optimum.exporters.openvino.modeling_paraformer import build_model, export
-    
+
     model_path = str(model_name_or_path)
     output_path = Path(output)
-    
+
     logger.info(f"Exporting Paraformer model from {model_path}")
     logger.info(f"Output directory: {output_path}")
-    
+
     # Build the model
     model, kwargs = build_model(model=model_path, device=device)
-    
+
     # Export to TorchScript
     model_dir, model_jit_scripts = export(model, kwargs, type="torchscript", quantize=False, device=device)
-    
+
     # Convert to OpenVINO
     ovm = ov.convert_model(model_jit_scripts, input=[([-1, -1, -1], torch.float32), ([-1], torch.int32)])
-    
+
     # Create output directory
     target_dir = output_path / "ov_models"
     target_dir.mkdir(parents=True, exist_ok=True)
-    
+
     output_model_path = target_dir / "openvino_model.xml"
-    
+
     # Apply INT8 weight compression if requested
     if compress_int8:
         try:
-            from nncf import compress_weights, CompressWeightsMode
+            from nncf import CompressWeightsMode, compress_weights
+
             logger.info("Applying INT8 weight compression (symmetric)...")
             # INT8_SYM: no zero-point bias ops → significantly faster on GPU
             ovm = compress_weights(ovm, mode=CompressWeightsMode.INT8_SYM)
             logger.info("Weight compression complete.")
         except ImportError:
             logger.warning("NNCF not available. Skipping INT8 compression. Install with: pip install nncf")
-    
+
     # Save the model
     if compress_fp16:
         # compress_to_fp16=True: stores remaining FP32 constants as FP16
@@ -118,19 +120,19 @@ def export_paraformer(
     else:
         ov.serialize(ovm, str(output_model_path))
         logger.info(f"Model saved to {output_model_path}")
-    
+
     # Copy model parameter files
-    PARAFORMER_PARAM_FILES = ['am.mvn', 'config.yaml', 'configuration.json', 'seg_dict', 'tokens.json']
-    
+    PARAFORMER_PARAM_FILES = ["am.mvn", "config.yaml", "configuration.json", "seg_dict", "tokens.json"]
+
     for file_name in PARAFORMER_PARAM_FILES:
         source_file = os.path.join(model_dir, file_name)
         target_file = target_dir / file_name
         if os.path.exists(source_file):
             shutil.copy2(source_file, target_file)
             logger.debug(f"Copied {file_name}")
-    
+
     logger.info(f"Export complete. Model saved to {target_dir}")
-    
+
     return model, kwargs
 
 
@@ -151,52 +153,22 @@ Examples:
       --model /path/to/paraformer \\
       --output /path/to/output \\
       --int8
-        """
+        """,
     )
-    
-    parser.add_argument(
-        "--model", "-m",
-        type=str,
-        required=True,
-        help="Path to the Paraformer model directory"
-    )
-    parser.add_argument(
-        "--output", "-o",
-        type=str,
-        required=True,
-        help="Output directory for the exported model"
-    )
-    parser.add_argument(
-        "--device",
-        type=str,
-        default="cpu",
-        help="Device to use for export (default: cpu)"
-    )
-    parser.add_argument(
-        "--int8",
-        action="store_true",
-        help="Apply INT8 symmetric weight compression"
-    )
-    parser.add_argument(
-        "--no-fp16",
-        action="store_true",
-        help="Disable FP16 compression for constants"
-    )
-    parser.add_argument(
-        "--verbose", "-v",
-        action="store_true",
-        help="Enable verbose logging"
-    )
-    
+
+    parser.add_argument("--model", "-m", type=str, required=True, help="Path to the Paraformer model directory")
+    parser.add_argument("--output", "-o", type=str, required=True, help="Output directory for the exported model")
+    parser.add_argument("--device", type=str, default="cpu", help="Device to use for export (default: cpu)")
+    parser.add_argument("--int8", action="store_true", help="Apply INT8 symmetric weight compression")
+    parser.add_argument("--no-fp16", action="store_true", help="Disable FP16 compression for constants")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Enable verbose logging")
+
     args = parser.parse_args()
-    
+
     # Setup logging
     log_level = logging.DEBUG if args.verbose else logging.INFO
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
-    
+    logging.basicConfig(level=log_level, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+
     # Run export
     export_paraformer(
         model_name_or_path=args.model,

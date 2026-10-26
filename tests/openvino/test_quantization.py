@@ -145,8 +145,10 @@ class OVQuantizerTest(unittest.TestCase):
         compressed = nncf.compress_weights(ov.Core().read_model(str(model_path)), mode=mode)
         weight_type = ov.Type.i4 if bits == 4 else ov.Type.i8
         self.assertTrue(
-            any(op.get_type_name() == "Constant" and op.get_output_element_type(0) == weight_type
-                for op in compressed.get_ops())
+            any(
+                op.get_type_name() == "Constant" and op.get_output_element_type(0) == weight_type
+                for op in compressed.get_ops()
+            )
         )
 
         compiled = ov.Core().compile_model(compressed, "CPU")
