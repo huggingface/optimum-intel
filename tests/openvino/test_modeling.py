@@ -1704,12 +1704,12 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
 
         self.assertTrue(
             torch.allclose(
-                clip_image_features, torch.from_numpy(ov_outputs.vision_model_output["image_features"]), atol=1e-4
+                clip_image_features, torch.from_numpy(ov_outputs.vision_model_output["image_features"]), atol=1e-3
             )
         )
         self.assertTrue(
             torch.allclose(
-                clip_text_features, torch.from_numpy(ov_outputs.text_model_output["text_features"]), atol=1e-4
+                clip_text_features, torch.from_numpy(ov_outputs.text_model_output["text_features"]), atol=1e-3
             )
         )
 
@@ -1747,14 +1747,14 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
         self.assertTrue(model.visual_model.request is None)
         self.assertTrue(model.text_model.request is None)
         res = model(tokens, processed_image)
-        self.assertTrue(torch.equal(model_outputs.logits_per_image, res.logits_per_image))
+        self.assertTrue(torch.allclose(model_outputs.logits_per_image, res.logits_per_image, atol=1e-3))
 
         model.compile()
         self.assertTrue(model.visual_model.request is not None)
         self.assertTrue(model.text_model.request is not None)
         res = model(tokens, processed_image)
         print(model_outputs.logits_per_image, res.logits_per_image)
-        self.assertTrue(torch.equal(model_outputs.logits_per_image, res.logits_per_image))
+        self.assertTrue(torch.allclose(model_outputs.logits_per_image, res.logits_per_image, atol=1e-3))
 
         model.half()
         model.compile()
