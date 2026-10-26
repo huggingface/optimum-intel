@@ -109,6 +109,7 @@ from optimum.exporters.openvino.input_generators import (
     LTXVaeDummyInputGenerator,
     LTXVaeEncoderDummyInputGenerator,
     MambaCacheDummyInputGenerator,
+    NemotronHDummyPastKeyValuesGenerator,
     OVFalconDummyPastKeyValuesGenerator,
     OVMiniCPM3DummyPastKeyValuesGenerator,
     PooledProjectionsDummyInputGenerator,
@@ -189,6 +190,7 @@ from optimum.exporters.openvino.model_patcher import (
     MPTModelPatcher,
     MuseGlimmerLanguageModelPatcher,
     MuseGlimmerVisionEmbeddingsModelPatcher,
+    NemotronHModelPatcher,
     OVDecoderModelPatcher,
     OVSeq2SeqModelPatcher,
     Phi3ModelPatcher,
@@ -6726,6 +6728,17 @@ class GraniteMoeHybridOpenVINOConfig(MambaOpenVINOConfig):
         else:
             common_inputs["attention_mask"] = {0: "batch_size", 1: "sequence_length"}
         return common_inputs
+
+
+@register_in_tasks_manager(
+    "nemotron_h", *["text-generation", "text-generation-with-past"], library_name="transformers"
+)
+class NemotronHOpenVINOConfig(GraniteMoeHybridOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, NemotronHDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = NemotronHDummyPastKeyValuesGenerator
+    _MODEL_PATCHER = NemotronHModelPatcher
+    # first transformers release with native NemotronH MLP layers, used by the dense Nemotron-H models
+    MIN_TRANSFORMERS_VERSION = "5.6.0"
 
 
 @register_in_tasks_manager("audio-spectrogram-transformer", *["feature-extraction", "audio-classification"])

@@ -45,7 +45,11 @@ from optimum.utils.normalized_config import NormalizedConfigManager
 
 from ...exporters.openvino import ensure_stateful_is_available, main_export, patch_stateful
 from ...exporters.openvino.stateful import model_has_state
-from ...exporters.openvino.utils import SSM_MODELS
+from ...exporters.openvino.utils import (
+    GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE,
+    GRANITEMOEHYBRID_MAMBA_LAYER_TYPE,
+    SSM_MODELS,
+)
 from ..utils.modeling_utils import MULTI_QUERY_ATTN_MODELS
 from .configuration import (
     OVConfig,
@@ -1163,6 +1167,15 @@ class OVCacheWithMambaStates(MambaCache):
             self.mamba_headdim = getattr(config, "mamba_d_head", None)
             self.num_mamba_layers = layer_types.count("mamba")
             self.num_attn_layers = layer_types.count("attention")
+        elif config.model_type == "nemotron_h":
+            self.num_key_value_heads = config.num_key_value_heads
+            self.head_dim = config.head_dim
+            self.mamba_ngroups = config.n_groups
+            self.n_mamba_heads = config.mamba_num_heads
+            self.ssm_state_size = config.ssm_state_size
+            self.mamba_headdim = config.mamba_head_dim
+            self.num_mamba_layers = config.layer_types.count(GRANITEMOEHYBRID_MAMBA_LAYER_TYPE)
+            self.num_attn_layers = config.layer_types.count(GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE)
         else:
             # Mamba 2 specific parameters
             hybrid_layer_ids = getattr(config, "hybrid_layer_ids", None)
@@ -1183,9 +1196,12 @@ class OVCacheWithMambaStates(MambaCache):
             self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
 
         self.conv_states = conv_states
-        if self.conv_states is None and config.model_type == "granitemoehybrid":
+        if self.conv_states is None and config.model_type in ["granitemoehybrid", "nemotron_h"]:
             self.conv_states = []
-            intermediate_size = int(self.mamba_expand * self.hidden_size)
+            if config.model_type == "nemotron_h":
+                intermediate_size = self.n_mamba_heads * self.mamba_headdim
+            else:
+                intermediate_size = int(self.mamba_expand * self.hidden_size)
             conv_dim = intermediate_size + 2 * self.mamba_ngroups * self.ssm_state_size
             for _ in range(self.num_mamba_layers):
                 conv_state_shape = (self.max_batch_size, conv_dim, self.conv_kernel_size)
@@ -1215,7 +1231,7 @@ class OVCacheWithMambaStates(MambaCache):
                 self.conv_states.append(conv_state)
 
         self.ssm_states = ssm_states
-        if self.ssm_states is None and config.model_type == "granitemoehybrid":
+        if self.ssm_states is None and config.model_type in ["granitemoehybrid", "nemotron_h"]:
             self.ssm_states = []
             for _ in range(self.num_mamba_layers):
                 ssm_state_shape = (
@@ -1540,11 +1556,12 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
                     "lfm2",
                     "lfm2_moe",
                     "granitemoehybrid",
+                    "nemotron_h",
                     "qwen3_next",
                     "qwen3_5_text",
                     "qwen3_5_moe_text",
                 ]:
-                    # LFM2, GraniteMoeHybrid (Granite-4.0) and Qwen3-Next require the attention mask
+                    # LFM2, GraniteMoeHybrid (Granite-4.0), NemotronH and Qwen3-Next require the attention mask
                     # to be the length of the full context, so default mask from OVModelForCausalLM needs to be used.
                     # Other models like Mamba typically do not require an attention_mask
                     # for the decoding step after the first token so use attention mask of ones.

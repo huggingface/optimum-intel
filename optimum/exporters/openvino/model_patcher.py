@@ -259,13 +259,16 @@ def batched_mm_experts_forward_patched(
 ) -> torch.Tensor:
     num_tokens = hidden_states.size(0)
     hidden_dim = hidden_states.size(-1)
-    num_experts = self.gate_up_proj.size(0)
+    # Experts without gating (e.g. NemotronH) only have `up_proj` and apply the activation alone.
+    # Older transformers versions do not set `has_gate`, and their experts are all gated.
+    has_gate = getattr(self, "has_gate", True)
+    gate_up_proj = self.gate_up_proj if has_gate else self.up_proj
+    num_experts = gate_up_proj.size(0)
 
     if not self.is_transposed:
-        gate_up_proj = self.gate_up_proj.transpose(1, 2)
+        gate_up_proj = gate_up_proj.transpose(1, 2)
         down_proj = self.down_proj.transpose(1, 2)
     else:
-        gate_up_proj = self.gate_up_proj
         down_proj = self.down_proj
 
     dense_routing_weights = torch.zeros(
@@ -285,14 +288,15 @@ def batched_mm_experts_forward_patched(
     # (S, 2 * intermediate_dim)
 
     if self.has_bias:
-        gate_up_out = gate_up_out + self.gate_up_proj_bias[..., None, :]
+        gate_up_proj_bias = self.gate_up_proj_bias if has_gate else self.up_proj_bias
+        gate_up_out = gate_up_out + gate_up_proj_bias[..., None, :]
 
     # Apply gating
     # gate, up = gate_up_out[..., ::2], gate_up_out[..., 1::2]
     # gate = gate.clamp(min=None, max=self.limit)
     # up = up.clamp(min=-self.limit, max=self.limit)
     # gated_out = gate * torch.sigmoid(gate * self.alpha)
-    gated_out = self._apply_gate(gate_up_out)
+    gated_out = self._apply_gate(gate_up_out) if has_gate else self.act_fn(gate_up_out)
 
     # --- Down projection per expert (batched) ---
     next_states = torch.bmm(gated_out, down_proj)  # (S, hidden_dim)
@@ -8277,6 +8281,8 @@ class GptOssModelPatcher(OVDecoderModelPatcher):
 # This patch replaces the chunked SSD implementation with a recurrent form that uses
 # `SelectiveSSMRecurrentCell`, which is replaced by an `ov::Loop` during
 # conversion. It runs a single unified code path for both prefill and decoding stages.
+# It is also used for `NemotronHMamba2Mixer`, which has the same projections and parameters.
+# `time_step_limit` overrides the `(min, max)` range used to clamp `dt`, `self.time_step_limit` by default.
 def granite_moe_hybrid_mamba_mixer_forward(
     self,
     hidden_states: torch.Tensor,
@@ -8284,6 +8290,7 @@ def granite_moe_hybrid_mamba_mixer_forward(
     conv_state: Optional[torch.Tensor] = None,
     recurrent_state: Optional[torch.Tensor] = None,
     attention_mask: Optional[torch.Tensor] = None,
+    time_step_limit: Optional[Tuple[float, float]] = None,
 ):
     batch_size, seq_len, _ = hidden_states.shape
 
@@ -8320,7 +8327,8 @@ def granite_moe_hybrid_mamba_mixer_forward(
     # 3. State Space Model transformation in recurrent form
     A = -torch.exp(self.A_log.float())  # (num_heads,)
     dt = torch.nn.functional.softplus(dt + self.dt_bias)  # (B, T, num_heads)
-    dt = torch.clamp(dt, self.time_step_limit[0], self.time_step_limit[1]).float()
+    time_step_limit = self.time_step_limit if time_step_limit is None else time_step_limit
+    dt = torch.clamp(dt, time_step_limit[0], time_step_limit[1]).float()
 
     x = hidden_states_ssm.reshape(batch_size, seq_len, self.num_heads, self.head_dim).float()
     B = B.reshape(batch_size, seq_len, self.n_groups, self.ssm_state_size).float()
@@ -8354,6 +8362,11 @@ def granite_moe_hybrid_mamba_mixer_forward(
 
 
 class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
+    # `(min, max)` range used to clamp `dt` in the Mamba2 mixers, `None` keeps each mixer's `time_step_limit`
+    _mamba_time_step_limit = None
+    # 2D attention mask of the traced forward, used by the Mamba2 mixers to zero the padding tokens
+    _mamba_attention_mask = None
+
     def __init__(
         self,
         config: "OpenVINOConfig",
@@ -8448,6 +8461,8 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
                     self.real_config._config, conv_states, recurrent_states, key_cache, value_cache, attention_mask
                 )
 
+            # without cache, the Mamba2 mixers take the padding mask from here
+            self._mamba_attention_mask = attention_mask
             causal_lm_output = self.model_orig_forward(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
@@ -8484,6 +8499,9 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
             ConversionExtension("SelectiveSSMRecurrentCellOp", convert_recurrent_selective_ssm_cell),
         ]
 
+    def _get_mamba_layers(self):
+        return [layer.mamba for layer in self._model.model.layers if layer.mamba is not None]
+
     def __enter__(self):
         def patch_sparse_moe(sparse_moe_layer):
             sparse_moe_layer.router._orig_forward = sparse_moe_layer.router.forward
@@ -8506,14 +8524,20 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
             def _forward(hidden_states, cache_params=None, attention_mask=None, **kwargs):
                 conv_state = None
                 recurrent_state = None
-                raw_attention_mask = None
+                raw_attention_mask = self._mamba_attention_mask
                 if cache_params is not None:
                     mamba_idx = cache_params.mamba_mapping[mamba_layer.layer_idx]
                     conv_state = cache_params.conv_states[mamba_idx]
                     recurrent_state = cache_params.recurrent_states[mamba_idx]
                     raw_attention_mask = cache_params.raw_attention_mask
                 out, new_conv_state, new_recurrent_state = granite_moe_hybrid_mamba_mixer_forward(
-                    mamba_layer, hidden_states, cache_params, conv_state, recurrent_state, raw_attention_mask
+                    mamba_layer,
+                    hidden_states,
+                    cache_params,
+                    conv_state,
+                    recurrent_state,
+                    raw_attention_mask,
+                    time_step_limit=self._mamba_time_step_limit,
                 )
                 if cache_params is not None:
                     mamba_idx = cache_params.mamba_mapping[mamba_layer.layer_idx]
@@ -8526,11 +8550,11 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
         for layer in self._model.model.layers:
             if getattr(layer, "block_sparse_moe", None) is not None and is_transformers_version("<", "5.13"):
                 patch_sparse_moe(layer.block_sparse_moe)
-            if layer.mamba is not None:
-                mamba_layer = layer.mamba
-                mamba_layer._orig_forward = mamba_layer.forward
-                mamba_layer.selective_ssm_recurrent_cell = SelectiveSSMRecurrentCell()
-                mamba_layer.forward = make_mamba_forward(mamba_layer)
+
+        for mamba_layer in self._get_mamba_layers():
+            mamba_layer._orig_forward = mamba_layer.forward
+            mamba_layer.selective_ssm_recurrent_cell = SelectiveSSMRecurrentCell()
+            mamba_layer.forward = make_mamba_forward(mamba_layer)
 
         if is_transformers_version(">=", "5.13"):
             register_ov_batched_mm(self)
@@ -8543,15 +8567,45 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
 
         super().__exit__(exc_type, exc_value, traceback)
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
+        self._mamba_attention_mask = None
 
         for layer in self._model.model.layers:
             if getattr(layer, "block_sparse_moe", None) is not None and is_transformers_version("<", "5.13"):
                 unpatch_sparse_moe(layer.block_sparse_moe)
-            if layer.mamba is not None:
-                mamba_layer = layer.mamba
-                mamba_layer.forward = mamba_layer._orig_forward
-                if hasattr(mamba_layer, "selective_ssm_recurrent_cell"):
-                    del mamba_layer.selective_ssm_recurrent_cell
+
+        for mamba_layer in self._get_mamba_layers():
+            mamba_layer.forward = mamba_layer._orig_forward
+            if hasattr(mamba_layer, "selective_ssm_recurrent_cell"):
+                del mamba_layer.selective_ssm_recurrent_cell
+
+
+class NemotronHModelPatcher(GraniteMoeHybridModelPatcher):
+    """
+    NemotronH shares the cache layout and the Mamba2 mixer of GraniteMoeHybrid. Differences:
+    - each layer has a single mixer, so the Mamba2 mixers are selected by block type;
+    - `dt` is clamped with `config.time_step_limit`, (0, inf) for the released models, as in NVIDIA's
+      implementation and mamba_ssm. The transformers PyTorch path clamps at `time_step_min` instead;
+    - the experts use `ov_batched_mm` on all supported transformers versions, not only from 5.13.
+    """
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(config, model, model_kwargs)
+        self._mamba_time_step_limit = tuple(self._model.config.time_step_limit)
+
+    def _get_mamba_layers(self):
+        return [
+            layer.mixer for layer in self._model.model.layers if layer.block_type == GRANITEMOEHYBRID_MAMBA_LAYER_TYPE
+        ]
+
+    def __enter__(self):
+        super().__enter__()
+        if is_transformers_version("<", "5.13"):
+            register_ov_batched_mm(self)
 
 
 class BigBirdPegasusModelPatcher(OVSeq2SeqModelPatcher):
