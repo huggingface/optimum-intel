@@ -7633,8 +7633,25 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM):
         pixel_values_videos=None,
         image_grid_thw=None,
         video_grid_thw=None,
+        mm_token_type_ids=None,
+        is_first_iteration=False,
+        next_sequence_length=None,
         **kwargs,
     ):
+        # reconstruct cache_position as partially removed in v5.3 and totally removed in v5.5
+        if is_transformers_version(">=", "5.3") and (
+            cache_position is None or (not is_first_iteration and cache_position[0] == 0)
+        ):
+            if next_sequence_length is not None:
+                past_len = input_ids.shape[1] - next_sequence_length
+                cache_position = torch.arange(past_len, past_len + next_sequence_length, device=input_ids.device)
+            elif not is_first_iteration and attention_mask is not None:
+                # v5.3 decode step: input_ids is already sliced to 1 token, use attention_mask length
+                past_len = attention_mask.shape[1] - 1
+                cache_position = torch.tensor([past_len], device=input_ids.device)
+            else:
+                cache_position = torch.arange(input_ids.shape[1], device=input_ids.device)
+
         # Overwritten -- in specific circumstances we don't want to forward image inputs to the model
         if past_key_values is not None:
             if inputs_embeds is not None and input_ids.shape[1] == 0:  # Exception 4
@@ -7665,6 +7682,7 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM):
                 "image_grid_thw": image_grid_thw,
                 "video_grid_thw": video_grid_thw,
                 "cache_position": cache_position,
+                "mm_token_type_ids": mm_token_type_ids,
             }
         )
         return model_inputs
@@ -7825,22 +7843,28 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM):
         if position_ids is None and input_ids is not None and (attention_mask is None or attention_mask.ndim == 2):
             # calculate RoPE index once per generation in the pre-fill stage only
             if (cache_position is not None and cache_position[0] == 0) or self.rope_deltas is None:
-                rope_kwargs = {}
-                if is_transformers_version(">=", "5.3.0"):
+                if is_transformers_version(">=", "5.3"):
                     # since transformers v5.3, get_rope_index requires mm_token_type_ids
                     mm_token_type_ids = kwargs.get("mm_token_type_ids")
                     if mm_token_type_ids is None:
                         mm_token_type_ids = torch.zeros_like(input_ids, dtype=torch.int32)
                         mm_token_type_ids[input_ids == self.config.image_token_id] = 1
                         mm_token_type_ids[input_ids == self.config.video_token_id] = 2
-                    rope_kwargs["mm_token_type_ids"] = mm_token_type_ids
-                vision_positions, rope_deltas = self.get_rope_index(
-                    input_ids,
-                    image_grid_thw=image_grid_thw,
-                    video_grid_thw=video_grid_thw,
-                    attention_mask=attention_mask,
-                    **rope_kwargs,
-                )
+                    vision_positions, rope_deltas = self.get_rope_index(
+                        input_ids,
+                        mm_token_type_ids,
+                        image_grid_thw=image_grid_thw,
+                        video_grid_thw=video_grid_thw,
+                        attention_mask=attention_mask,
+                    )
+                else:
+                    vision_positions, rope_deltas = self.get_rope_index(
+                        input_ids,
+                        image_grid_thw=image_grid_thw,
+                        video_grid_thw=video_grid_thw,
+                        attention_mask=attention_mask,
+                    )
+
                 self.rope_deltas = rope_deltas
                 # Compute text positions (simple cumsum) and concatenate as dim 0
                 # to create shape (4, batch, seq_len): [text_pos, temporal, height, width]
@@ -7977,9 +8001,8 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM):
 if is_transformers_version(">=", "5.2"):
     _OVQwen3_5ForCausalLM.get_placeholder_mask = Qwen3_5Model.get_placeholder_mask
     _OVQwen3_5ForCausalLM.get_rope_index = Qwen3_5Model.get_rope_index
-    if hasattr(Qwen3_5Model, "get_vision_position_ids"):
-        # used by get_rope_index since transformers 5.10
-        _OVQwen3_5ForCausalLM.get_vision_position_ids = Qwen3_5Model.get_vision_position_ids
+if is_transformers_version(">=", "5.15"):
+    _OVQwen3_5ForCausalLM.get_vision_position_ids = Qwen3_5Model.get_vision_position_ids
 
 
 class OVModelForVisualSequenceClassification(OVModelForVisualCausalLM):
@@ -8047,6 +8070,8 @@ class _OVQwen3_5ForSequenceClassification(OVModelForVisualSequenceClassification
         # every call is a new prompt: compute its M-RoPE positions instead of reusing the cached rope deltas
         self.rope_deltas = None
         return super().forward(*args, **kwargs)
+if is_transformers_version(">=", "5.15"):
+    _OVQwen3_5ForCausalLM.get_vision_position_ids = Qwen3_5Model.get_vision_position_ids
 
 
 class _OVMuseGlimmerForCausalLM(OVModelForVisualCausalLM):

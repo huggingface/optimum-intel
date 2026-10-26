@@ -216,6 +216,10 @@ def compare_models(model_one: Model, model_two: Model, compare_names: bool = Tru
 
 
 DOWNLOAD_ATTEMPTS = 4
+
+# Keep the failure report short: a changed IR can differ in hundreds of ops.
+MAX_DIFFS_SHOWN = 5
+MAX_DIFF_LINE_LENGTH = 200
 DOWNLOAD_BACKOFF = 5  # seconds, doubled after every failed attempt
 
 
@@ -463,9 +467,9 @@ class TestIRStability:
         if all_differences:
             diff_lines = []
             for component, diffs in all_differences.items():
-                diff_lines.append(f"\n[{component}]")
-                for diff in diffs:
-                    diff_lines.append(f"  {diff}")
+                diff_lines.append(f"\n[{component}] {len(diffs)} difference(s), showing first {MAX_DIFFS_SHOWN}:")
+                for diff in diffs[:MAX_DIFFS_SHOWN]:
+                    diff_lines.append(f"  {diff[:MAX_DIFF_LINE_LENGTH]}")
 
             diff_msg = "\n".join(diff_lines)
 
