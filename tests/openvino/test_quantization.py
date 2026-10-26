@@ -1900,6 +1900,30 @@ class OVWeightCompressionTest(unittest.TestCase):
         )
 
 
+class CalibrationDatasetLoadingTest(unittest.TestCase):
+    def test_visual_dataset_uses_streaming_metadata(self):
+        for dataset_name, dataset_id, streaming in (
+            ("textvqa", "lmms-lab/textvqa", True),
+            ("gsm8k", "openai/gsm8k", False),
+        ):
+            for num_samples in (None, 3):
+                with self.subTest(dataset=dataset_name, num_samples=num_samples):
+                    builder = OVCalibrationDatasetBuilder(unittest.mock.Mock(spec=OVModelForVisualCausalLM))
+                    config = OVWeightQuantizationConfig(
+                        bits=4,
+                        dataset=dataset_name,
+                        processor="processor",
+                        num_samples=num_samples,
+                        scale_estimation=True,
+                    )
+                    with unittest.mock.patch.object(builder, "build_from_dataset_name") as build:
+                        builder.build_from_quantization_config(config)
+
+                    self.assertEqual(build.call_args.args[1], dataset_id)
+                    self.assertEqual(build.call_args.kwargs["streaming"], streaming)
+                    self.assertEqual(build.call_args.kwargs["num_samples"], num_samples)
+
+
 class OVPipelineQuantizationTest(unittest.TestCase):
     maxDiff = None
 
