@@ -1885,7 +1885,6 @@ class _MiniCPMOCRQuantizationConfig(OVQuantizationConfigBase):
         for field in ("dataset", "num_samples", "tokenizer", "processor", "_dataset_kwargs"):
             kwargs.setdefault(field, getattr(self.first_stage, field))
         super().__init__(**kwargs)
-        self.post_init()
 
     def to_dict(self) -> Dict[str, Any]:
         result = super().to_dict()
