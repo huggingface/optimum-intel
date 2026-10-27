@@ -175,6 +175,7 @@ from optimum.exporters.openvino.model_patcher import (
     Lfm3OmniLanguageModelPatcher,
     Lfm3OmniVisionEmbeddingsPatcher,
     Lfm3VlLanguageModelPatcher,
+    Lfm3VlNestedLanguageModelPatcher,
     Lfm3VlVisionEmbeddingsPatcher,
     Llama4ImageEmbeddingsModelPatcher,
     Llama4TextModelPatcher,
@@ -7798,6 +7799,7 @@ class LFM3VlOpenVINOConfig(BaseVLMOpenVINOConfig):
             preprocessors=preprocessors,
         )
         self._orig_config = config
+        self._is_nested = getattr(config, "text_config", None) is not None
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -7818,17 +7820,19 @@ class LFM3VlOpenVINOConfig(BaseVLMOpenVINOConfig):
         if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
             behavior = VLMConfigBehavior(behavior)
 
-        # LFM3-VL keeps the language model config at the top level of the config (no text_config)
+        # the LFM3-VL partner checkpoint (lfm3-vl-1.9b-rl) keeps the language model config at the top level of the
+        # config, the released LFM3-VL (LiquidAI/LFM3-VL-2B) in a nested text_config, with the LFM3-Omni module layout
+        text_config = self._orig_config.text_config if self._is_nested else self._orig_config
         if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
-            return get_vlm_text_embeddings_config("lfm3", self._orig_config, self.int_dtype, self.float_dtype)
+            return get_vlm_text_embeddings_config("lfm3", text_config, self.int_dtype, self.float_dtype)
 
         if behavior == VLMConfigBehavior.LANGUAGE:
             return get_vlm_text_generation_config(
                 "lfm3",
-                self._orig_config,
+                text_config,
                 self.int_dtype,
                 self.float_dtype,
-                model_patcher=Lfm3VlLanguageModelPatcher,
+                model_patcher=Lfm3VlNestedLanguageModelPatcher if self._is_nested else Lfm3VlLanguageModelPatcher,
             )
 
         return super().with_behavior(behavior)
@@ -7849,6 +7853,8 @@ class LFM3VlOpenVINOConfig(BaseVLMOpenVINOConfig):
         model_kwargs = model_kwargs or {}
         if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
             return super().patch_model_for_export(model, model_kwargs)
+        if self._is_nested:
+            return Lfm3OmniVisionEmbeddingsPatcher(self, model, model_kwargs)
         return Lfm3VlVisionEmbeddingsPatcher(self, model, model_kwargs)
 
 

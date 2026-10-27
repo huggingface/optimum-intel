@@ -2147,9 +2147,17 @@ class DummyLfm3VlVisionInputGenerator(DummyInputGenerator):
     def __init__(self, task: str, normalized_config: NormalizedVisionConfig, batch_size: int = 2, **kwargs):
         self.task = task
         self.batch_size = batch_size
-        self.patch_dim = normalized_config.config.vision_patch_dim
+        config = normalized_config.config
+        vision_config = getattr(config, "vision_config", None)
+        if vision_config is not None:
+            # the released LFM3-VL keeps the vision settings in a nested vision_config
+            patch_dim = vision_config.in_channels * vision_config.temporal_patch_size * vision_config.patch_size**2
+            merge_size = config.downsample_factor
+        else:
+            patch_dim, merge_size = config.vision_patch_dim, config.vision_spatial_merge_size
+        self.patch_dim = patch_dim
         # the patch grid must be divisible by the spatial merge size
-        self.grid_size = 4 * normalized_config.config.vision_spatial_merge_size
+        self.grid_size = 4 * merge_size
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         shape = [self.batch_size, self.grid_size, self.grid_size + 2 * 2, self.patch_dim]

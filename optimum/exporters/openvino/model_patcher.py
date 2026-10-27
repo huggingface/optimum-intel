@@ -8614,7 +8614,8 @@ def lfm3_vl_vision_embeddings_forward(self, pixel_values):
 
 def lfm3_omni_vision_embeddings_forward(self, pixel_values):
     """
-    Same as `lfm3_vl_vision_embeddings_forward` for the vision tower and projector of LFM3-Omni: the remote model
+    Same as `lfm3_vl_vision_embeddings_forward` for the vision tower and projector of LFM3-Omni and of the released
+    LFM3-VL (`model.model.vision_tower`, `model.model.multi_modal_projector`): the remote model
     keeps the patches in merge-block order and converts them to raster order around its 2D convolutions, the axial
     2D RoPE and the projector merge of the raster-order computation below are equivalent.
     """
@@ -8697,11 +8698,14 @@ class Lfm3OmniVisionEmbeddingsPatcher(_Lfm3ForwardReplacingPatcher):
     _FORWARD = lfm3_omni_vision_embeddings_forward
 
 
-class Lfm3OmniLanguageModelPatcher(_Lfm3BasePatcher):
+class Lfm3VlNestedLanguageModelPatcher(_Lfm3BasePatcher):
     """
-    Patches the LFM3 language model of LFM3-Omni (`Lfm3OmniForConditionalGeneration`, remote code). Besides the
-    logits it returns the final hidden states: the depth decoder predicts the speech frames from them.
+    Patches the LFM3 language model of the models with a nested config (`text_config`), the language model at
+    `model.model.language_model` and an `lm_head`: the released LFM3-VL (LiquidAI/LFM3-VL-2B) and LFM3-Omni, both
+    remote code. It takes `inputs_embeds` with already merged multimodal features.
     """
+
+    _OUTPUT_HIDDEN_STATES = False
 
     def __init__(
         self,
@@ -8728,12 +8732,23 @@ class Lfm3OmniLanguageModelPatcher(_Lfm3BasePatcher):
                 cache_params,
                 output_hidden_states=True,
             )
-            outputs = {"logits": logits, "hidden_states": hidden_states}
+            outputs = {"logits": logits}
+            if self._OUTPUT_HIDDEN_STATES:
+                outputs["hidden_states"] = hidden_states
             if cache_params is not None:
                 outputs["present_key_values"] = present_key_values
             return outputs
 
         self._set_patched_forward(patched_forward)
+
+
+class Lfm3OmniLanguageModelPatcher(Lfm3VlNestedLanguageModelPatcher):
+    """
+    Patches the LFM3 language model of LFM3-Omni. Besides the logits it returns the final hidden states: the depth
+    decoder predicts the speech frames from them.
+    """
+
+    _OUTPUT_HIDDEN_STATES = True
 
 
 def lfm3_omni_audio_encoder_forward(self, input_features):
