@@ -604,7 +604,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
                     "scale_estimation": True,
                     "ignored_scope": {"patterns": [".*mlp\\.(gate_proj|up_proj|down_proj)/.*"]},
                 },
-                "quantization_config2": {"bits": 8, "sym": False, "weight_only": True},
+                "quantization_config2": {"bits": 8, "sym": True, "weight_only": True},
             },
             "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
             "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
@@ -1046,6 +1046,8 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
             v = d[k]
             if isinstance(v, dict):
                 OVQuantizationConfigBase._dataclasses_to_dict(v)
+            elif isinstance(v, _GPTOSSQuantizationConfig):
+                d[k] = v.to_dict()
             elif dataclasses.is_dataclass(v):
                 d[k] = dataclasses.asdict(v)
 
@@ -1797,6 +1799,10 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
         configs = quantization_configs.values()
         if default_config is not None:
             configs = tuple(configs) + (default_config,)
+        configs = [
+            config.quantization_config1 if isinstance(config, _GPTOSSQuantizationConfig) else config
+            for config in configs
+        ]
         num_samples = max((num_samples or 0, *(config.num_samples or 0 for config in configs))) or None
         dataset = reduce(or_op, (dataset, *(config.dataset for config in configs)))
         tokenizer = reduce(or_op, (tokenizer, *(config.tokenizer for config in configs)))
@@ -1827,10 +1833,11 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
     def post_init(self):
         super().post_init()
         for ov_model_config in self.quantization_configs.values():
-            ov_model_config.post_init()
+            if not isinstance(ov_model_config, _GPTOSSQuantizationConfig):
+                ov_model_config.post_init()
 
 
-class _GPTOSSQuantizationConfig(OVQuantizationConfigBase):
+class _GPTOSSQuantizationConfig(QuantizationConfigMixin):
     def __init__(
         self,
         quantization_config1: Union[Dict, OVWeightQuantizationConfig],
@@ -1852,9 +1859,6 @@ class _GPTOSSQuantizationConfig(OVQuantizationConfigBase):
             quantization_config2 = OVWeightQuantizationConfig.from_dict(quantization_config2)
         self.quantization_config2 = quantization_config2
         self.quantization_config2.post_init()
-        for field in ("dataset", "num_samples", "tokenizer", "processor", "_dataset_kwargs"):
-            kwargs.setdefault(field, getattr(quantization_config1, field))
-        super().__init__(**kwargs)
 
     def to_dict(self) -> Dict[str, Any]:
         result = super().to_dict()

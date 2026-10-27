@@ -1499,25 +1499,25 @@ class OVQuantizer(OptimumQuantizer):
             ov_model = self.model.ov_models[ov_model_name]
             nncf_dataset = calibration_dataset.get(ov_model_name, None) if calibration_dataset else None
 
-            if dataset_was_built_from_config and nncf_dataset is not None and nncf_dataset.get_length() is not None:
+            if (
+                dataset_was_built_from_config
+                and nncf_dataset is not None
+                and nncf_dataset.get_length() is not None
+                and not isinstance(config, _GPTOSSQuantizationConfig)
+            ):
                 # For datasets built from the quantization config, override num_samples per ov model
                 config = config.clone()
                 config.num_samples = nncf_dataset.get_length()
 
             if isinstance(config, _GPTOSSQuantizationConfig):
-                quantized_model = ov_model
-                for index, step in enumerate((config.quantization_config1, config.quantization_config2)):
-                    step = step.clone()
-                    if dataset_was_built_from_config and nncf_dataset is not None:
-                        step.num_samples = config.num_samples
-                    step_dataset = nncf_dataset if step.bits != 8 else None
-                    quantized_model = _weight_only_quantization(
-                        quantized_model,
-                        step,
-                        step_dataset,
-                        verify_not_optimized=index == 0,
-                        **kwargs,
-                    )
+                first_config = config.quantization_config1.clone()
+                if dataset_was_built_from_config and nncf_dataset is not None and nncf_dataset.get_length() is not None:
+                    first_config.num_samples = nncf_dataset.get_length()
+                first_dataset = nncf_dataset if first_config.bits != 8 else None
+                quantized_model = _weight_only_quantization(ov_model, first_config, first_dataset, **kwargs)
+                quantized_model = _weight_only_quantization(
+                    quantized_model, config.quantization_config2, verify_not_optimized=False, **kwargs
+                )
             elif isinstance(config, OVWeightQuantizationConfig):
                 if config.bits == 8:
                     # 8-bit weight only data-aware quantization is not supported
