@@ -78,6 +78,7 @@ from optimum.intel.openvino.modeling_text2speech import (
 from optimum.intel.openvino.modeling_visual_language import (
     MODEL_PARTS_CLS_MAPPING,
     MODEL_TYPE_TO_CLS_MAPPING,
+    _OVLfm3OmniForCausalLM,
     _OVQwen3OmniMoeForCausalLM,
 )
 from optimum.intel.pipelines import pipeline as optimum_pipeline
@@ -1355,6 +1356,52 @@ class OVModelForMultimodalLMIntegrationTest(unittest.TestCase):
         self.assertIsInstance(model._inner, _OVQwen3OmniMoeForCausalLM)
         self.assertIsNotNone(model.config)
         self.assertIsNotNone(model.language_model)
+        del model
+        gc.collect()
+
+    @pytest.mark.skipif(is_transformers_version("<", "5.12"), reason="lfm3_omni requires transformers >= 5.12")
+    def test_lfm3_omni_return_audio(self):
+        # any-to-any call as for Qwen3-Omni: text + image + audio in, (sequences, waveform) out
+        model_id = MODEL_NAMES["lfm3_omni"]
+        model = OVModelForMultimodalLM.from_pretrained(
+            model_id, export=True, trust_remote_code=True, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
+        )
+        self.assertIsInstance(model._inner, _OVLfm3OmniForCausalLM)
+        self.assertTrue(model.has_talker)
+        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+        image = Image.new("RGB", (64, 48), color=(120, 30, 200))
+        inputs = model.preprocess_inputs(
+            text="Describe the image and the sound",
+            image=image,
+            audio=self._generate_random_audio_data(),
+            processor=processor,
+        )
+        self.assertIn("input_features", inputs)
+        # speech only: the waveform decodes the sampled speech frames
+        set_seed(SEED)
+        sequences, waveform = model.generate(
+            **inputs, max_new_tokens=6, do_sample=False, return_audio=True, generation_mode="audio"
+        )
+        set_seed(SEED)
+        output = model.generate(
+            **inputs,
+            max_new_tokens=6,
+            do_sample=False,
+            generation_mode="audio",
+            audio_temperature=0.4,
+            audio_repetition_penalty=1.2,
+            return_dict_in_generate=True,
+        )
+        self.assertTrue(torch.equal(sequences, output.sequences))
+        num_frames = int(output.audio_lengths[0])
+        self.assertGreater(num_frames, 0)
+        self.assertEqual(waveform.shape[:2], (1, 1))
+        expected_waveform = model._inner.decode_audio(output.audio_codes[:, :, :num_frames])
+        self.assertTrue(torch.allclose(waveform[:, 0], expected_waveform))
+        # default: interleaved text and speech
+        sequences, waveform = model.generate(**inputs, max_new_tokens=6, do_sample=False, return_audio=True)
+        self.assertIsInstance(sequences, torch.Tensor)
+        self.assertTrue(waveform is None or waveform.shape[:2] == (1, 1))
         del model
         gc.collect()
 

@@ -5305,12 +5305,18 @@ class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
         return thinker_result, waveform.float()
 
 
+# any-to-any models (text, image, video, audio in; text and speech out) served by OVModelForMultimodalLM
+MULTIMODAL_LM_MODEL_TYPES = ("qwen3_omni_moe", "lfm3_omni")
+
+
 class OVModelForMultimodalLM(OVBaseModel, GenerationMixin):
     export_feature = "image-text-to-text"
     auto_model_class = transformers_auto_class
 
-    def __init__(self, *, _inner: _OVQwen3OmniMoeForCausalLM, **kwargs):
+    def __init__(self, *, _inner: Union["_OVQwen3OmniMoeForCausalLM", "_OVLfm3OmniForCausalLM"], **kwargs):
         object.__setattr__(self, "_inner", _inner)
+        # the inputs of the wrapped architecture, also when called on the instance without a config
+        object.__setattr__(self, "preprocess_inputs", type(_inner).preprocess_inputs)
 
         self.config = _inner.config
         self.model_save_dir = _inner.model_save_dir
@@ -5385,6 +5391,10 @@ class OVModelForMultimodalLM(OVBaseModel, GenerationMixin):
         return _OVQwen3OmniMoeForCausalLM._all_ov_model_paths.copy()
 
     @property
+    def _ov_model_paths(self) -> Dict[str, str]:
+        return self._inner._ov_model_paths
+
+    @property
     def ov_models(self) -> Dict[str, Union[openvino.Model, openvino.CompiledModel]]:
         return self._inner.ov_models
 
@@ -5454,9 +5464,9 @@ class OVModelForMultimodalLM(OVBaseModel, GenerationMixin):
         config: PretrainedConfig,
         **kwargs,
     ):
-        if getattr(config, "model_type", None) != "qwen3_omni_moe":
+        if getattr(config, "model_type", None) not in MULTIMODAL_LM_MODEL_TYPES:
             raise ValueError(
-                f"OVModelForMultimodalLM only supports qwen3_omni_moe models, "
+                f"OVModelForMultimodalLM only supports {', '.join(MULTIMODAL_LM_MODEL_TYPES)} models, "
                 f"but got config.model_type={getattr(config, 'model_type', None)!r}. "
                 f"Use OVModelForVisualCausalLM for other vision-language architectures."
             )
@@ -5470,9 +5480,9 @@ class OVModelForMultimodalLM(OVBaseModel, GenerationMixin):
         config: PretrainedConfig,
         **kwargs,
     ):
-        if getattr(config, "model_type", None) != "qwen3_omni_moe":
+        if getattr(config, "model_type", None) not in MULTIMODAL_LM_MODEL_TYPES:
             raise ValueError(
-                f"OVModelForMultimodalLM only supports qwen3_omni_moe models, "
+                f"OVModelForMultimodalLM only supports {', '.join(MULTIMODAL_LM_MODEL_TYPES)} models, "
                 f"but got config.model_type={getattr(config, 'model_type', None)!r}. "
                 f"Use OVModelForVisualCausalLM for other vision-language architectures."
             )
@@ -8497,6 +8507,11 @@ class _OVLfm3OmniForCausalLM(_OVLfm3VlForCausalLM):
         # the depth decoder needs the last hidden state of the language model at every step
         self.language_model._collecting_hidden_states = True
 
+    @property
+    def has_talker(self) -> bool:
+        # speech output, as Qwen3-Omni's talker: the depth decoder samples speech frames, the codec decodes them
+        return self.depth_decoder is not None and self.audio_decoder is not None
+
     def get_audio_features(self, input_features, feature_attention_mask=None):
         # the clips are encoded one by one without padding: the encoder is causal and masks the padding, so the
         # features of the valid frames are the same as for the padded batch of the remote model
@@ -8628,9 +8643,23 @@ class _OVLfm3OmniForCausalLM(_OVLfm3VlForCausalLM):
         speech or interleaved) follows the last prompt token or `generation_mode`. As the other OpenVINO visual
         language models it returns the sequences (prompt + generated text slots); with `return_dict_in_generate=True`
         it returns `Lfm3OmniGenerateOutput` with the speech frames too (the remote model returns it by default).
+
+        With `return_audio=True` (the any-to-any call of `OVModelForMultimodalLM`, as for Qwen3-Omni) it returns
+        `(sequences, waveform)`: the answer in text and speech, interleaved unless `generation_mode` is given
+        (`"audio"` for speech only, e.g. TTS), the 24 kHz waveform of shape `(1, 1, num_samples)` or `None` without
+        speech. Speech is then sampled as recommended by the model card unless set: `audio_temperature=0.4`,
+        `audio_repetition_penalty=1.2`.
         """
         if input_ids.ndim != 2 or input_ids.shape[0] != 1:
             raise ValueError("LFM3-Omni OpenVINO generation supports a single prompt (batch size 1)")
+        return_audio = kwargs.pop("return_audio", False)
+        if return_audio:
+            if not self.has_talker:
+                raise ValueError("return_audio=True needs the depth decoder and audio decoder models")
+            generation_mode = generation_mode if generation_mode is not None else "interleaved"
+            # greedy speech decoding degenerates
+            audio_temperature = audio_temperature if audio_temperature is not None else 0.4
+            audio_repetition_penalty = audio_repetition_penalty if audio_repetition_penalty is not None else 1.2
         return_dict = kwargs.pop("return_dict_in_generate", None)
         if return_dict is None and generation_config is not None:
             return_dict = generation_config.return_dict_in_generate
@@ -8786,6 +8815,9 @@ class _OVLfm3OmniForCausalLM(_OVLfm3VlForCausalLM):
             sequence_lengths=input_ids.new_tensor([input_ids.shape[1] + len(text_out)]),
             audio_lengths=input_ids.new_tensor([len(frames)]),
         )
+        if return_audio:
+            waveform = self.decode_audio(audio_codes)[:, None] if frames else None
+            return output.sequences, waveform
         return output.sequences if plain_sequences else output
 
     @staticmethod
