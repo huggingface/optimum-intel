@@ -2411,12 +2411,14 @@ class OVQuantizationConfigTest(unittest.TestCase):
         ),
         (
             dict(
+                config_class="minicpm_ocr",
                 first_stage=dict(bits=4, group_size=16, dataset="wikitext2"),
                 second_stage=dict(bits=8, weight_only=True),
             ),
             _MiniCPMOCRQuantizationConfig,
             None,
         ),
+        (dict(config_class="minicpm_ocr"), _MiniCPMOCRQuantizationConfig, None),
     )
 
     QUANTIZATION_CONFIGS_WITH_KWARGS = (

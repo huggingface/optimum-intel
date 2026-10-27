@@ -590,21 +590,8 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
     },
     "openbmb/MiniCPM-OCR-1.0": {
         "quantization_configs": {
-            "lm_model": {
-                "first_stage": {
-                    "bits": 4,
-                    "sym": False,
-                    "group_size": 64,
-                    "ratio": 1.0,
-                    "dataset": "textvqa",
-                    "num_samples": 32,
-                    "quant_method": OVQuantizationMethod.AWQ,
-                    "scale_estimation": True,
-                    # MLP weights are kept in original precision at the first stage and quantized to int8 at the second
-                    "ignored_scope": {"patterns": [".*mlp\\.(gate_proj|up_proj|down_proj)/.*"]},
-                },
-                "second_stage": {"bits": 8, "sym": False, "weight_only": True},
-            },
+            # Two-stage int4 + int8 compression, see `_MiniCPMOCRQuantizationConfig`
+            "lm_model": {"config_class": "minicpm_ocr"},
             "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
             "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
         },
@@ -1862,23 +1849,35 @@ class _GPTOSSQuantizationConfig(QuantizationConfigMixin):
 
 
 class _MiniCPMOCRQuantizationConfig(OVQuantizationConfigBase):
+    CONFIG_CLASS = "minicpm_ocr"
+
+    # Settings of the two compression passes for the language model of openbmb/MiniCPM-OCR-1.0
+    DEFAULT_FIRST_STAGE = {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 1.0,
+        "dataset": "textvqa",
+        "num_samples": 32,
+        "quant_method": OVQuantizationMethod.AWQ,
+        "scale_estimation": True,
+        # MLP weights are kept in original precision at the first stage and quantized to int8 at the second
+        "ignored_scope": {"patterns": [".*mlp\\.(gate_proj|up_proj|down_proj)/.*"]},
+    }
+    DEFAULT_SECOND_STAGE = {"bits": 8, "sym": False, "weight_only": True}
+
     def __init__(
         self,
-        first_stage: Union[Dict, OVWeightQuantizationConfig],
-        second_stage: Union[Dict, OVWeightQuantizationConfig],
+        first_stage: Optional[Union[Dict, OVWeightQuantizationConfig]] = None,
+        second_stage: Optional[Union[Dict, OVWeightQuantizationConfig]] = None,
         **kwargs,
     ):
-        """
-        Quantization config of the language model of openbmb/MiniCPM-OCR-1.0. Applies two weight compression passes
-        sequentially to the same model. Calibration related parameters (dataset, num_samples, etc.) are taken from the
-        first stage. The second stage is not data-aware.
-
-        It is bound to the model through `_DEFAULT_4BIT_WQ_CONFIGS`: the `first_stage`/`second_stage` keys of a config
-        dictionary are resolved to this class in `_quantization_config_from_dict`.
-
-        :param first_stage: Config of the first compression pass.
-        :param second_stage: Config of the second compression pass, applied to the result of the first one.
-        """
+        """Two-pass weight compression config for the language model of openbmb/MiniCPM-OCR-1.0."""
+        kwargs.pop("config_class", None)
+        if first_stage is None:
+            first_stage = copy.deepcopy(self.DEFAULT_FIRST_STAGE)
+        if second_stage is None:
+            second_stage = copy.deepcopy(self.DEFAULT_SECOND_STAGE)
         if isinstance(first_stage, dict):
             first_stage = OVWeightQuantizationConfig.from_dict(first_stage)
         if isinstance(second_stage, dict):
@@ -1897,9 +1896,16 @@ class _MiniCPMOCRQuantizationConfig(OVQuantizationConfigBase):
 
     def to_dict(self) -> Dict[str, Any]:
         result = super().to_dict()
+        result["config_class"] = self.CONFIG_CLASS
         result["first_stage"] = self.first_stage.to_dict()
         result["second_stage"] = self.second_stage.to_dict()
         return result
+
+
+# Model specific quantization config classes, resolved by the `config_class` key of a config dictionary
+_MODEL_SPECIFIC_QUANTIZATION_CONFIGS = {
+    config_cls.CONFIG_CLASS: config_cls for config_cls in (_MiniCPMOCRQuantizationConfig,)
+}
 
 
 def _quantization_config_from_dict(config_dict: Dict[str, Any]) -> OVQuantizationConfigBase:
@@ -1915,8 +1921,14 @@ def _quantization_config_from_dict(config_dict: Dict[str, Any]) -> OVQuantizatio
     if "quantization_configs" in config_dict:
         return OVPipelineQuantizationConfig.from_dict(config_dict)
 
-    if "first_stage" in config_dict and "second_stage" in config_dict:
-        return _MiniCPMOCRQuantizationConfig.from_dict(config_dict)
+    if "config_class" in config_dict:
+        config_class = config_dict["config_class"]
+        if config_class not in _MODEL_SPECIFIC_QUANTIZATION_CONFIGS:
+            raise ValueError(
+                f"Unknown quantization config class `{config_class}`. "
+                f"Supported: {list(_MODEL_SPECIFIC_QUANTIZATION_CONFIGS)}."
+            )
+        return _MODEL_SPECIFIC_QUANTIZATION_CONFIGS[config_class].from_dict(config_dict)
 
     # Check for GPT-OSS quantization config
     if "quantization_config1" in config_dict and "quantization_config2" in config_dict:
