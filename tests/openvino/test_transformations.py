@@ -162,7 +162,8 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
         ],
     },
     # NemotronH experts have no gate (up -> relu2 -> down), which `ConvertTiledMoeBlockToGatherMatmuls` does not
-    # match yet, so its MoE blocks keep the tiled form
+    # match yet, so its MoE blocks keep the tiled form. The Mamba2 fusions (FuseSSMLoop, SelectiveSSMFusion) are only
+    # registered in SDPA -> PagedAttention, so they are checked in test_cb_compatible.py
     "nemotron_h": {
         "model_class": "OVModelForCausalLM",
         "convert": [

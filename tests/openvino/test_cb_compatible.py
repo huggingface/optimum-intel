@@ -49,6 +49,14 @@ ARCH_TO_CB_COMPATIBLE_SUBMODELS = {
         "task": "image-text-to-text",
         "submodels": ("language_model",),
     },
+    # hybrid Mamba2 + attention language model: the Mamba2 layers become PagedSelectiveSSM / PagedCausalConv1D. The
+    # Mamba2 fusions (FuseSSMLoop, SelectiveSSMFusion) only run in this transformation, not on the stateful model
+    "nemotron_h": {
+        "task": "text-generation-with-past",
+        "submodels": ("model",),
+        # one of each per Mamba2 layer of the tiny model
+        "paged_ops": {"PagedSelectiveSSM": 2, "PagedCausalConv1D": 2},
+    },
 }
 
 # Architectures exported through an out-of-tree library are not part of the transformers set, so
@@ -86,9 +94,11 @@ class OVContinuousBatchingCompatibilityTest(unittest.TestCase):
             for submodel in expected["submodels"]:
                 with self.subTest(submodel=submodel):
                     model = core.read_model(Path(tmpdir) / f"openvino_{submodel}.xml")
-                    self._assert_paged_attention_applicable(core, model, f"{model_arch}/{submodel}")
+                    self._assert_paged_attention_applicable(
+                        core, model, f"{model_arch}/{submodel}", expected.get("paged_ops", {})
+                    )
 
-    def _assert_paged_attention_applicable(self, core, model, label):
+    def _assert_paged_attention_applicable(self, core, model, label, paged_ops):
         num_sdpa = Counter(op.get_type_name() for op in model.get_ops())["ScaledDotProductAttention"]
         self.assertGreater(num_sdpa, 0, f"{label}: no ScaledDotProductAttention to convert")
 
@@ -102,6 +112,8 @@ class OVContinuousBatchingCompatibilityTest(unittest.TestCase):
         self.assertEqual(
             ops["PagedAttentionExtension"], num_sdpa, f"{label}: not every SDPA became a PagedAttention block"
         )
+        for op_type, count in paged_ops.items():
+            self.assertEqual(ops[op_type], count, f"{label}: expected {count} {op_type} blocks, got {ops[op_type]}")
         # The paged cache replaces the stateful one entirely. The state operations are what is checked:
         # the transformation removes them but leaves their variables registered on the model.
         self.assertEqual(ops["ReadValue"] + ops["Assign"], 0, f"{label}: key/value cache state left in the graph")
