@@ -50,6 +50,11 @@ ARCH_TO_CB_COMPATIBLE_SUBMODELS = {
         "task": "image-text-to-text",
         "submodels": ("language_model",),
     },
+    # dense hybrid Gated DeltaNet + full attention language model
+    "minicpm_ocr": {
+        "task": "image-text-to-text",
+        "submodels": ("language_model",),
+    },
     # hybrid short conv + full / sliding window attention: besides SDPA -> PagedAttention (with the sliding window
     # extracted from the attention mask), the conv layers become PagedCausalConv1D
     "lfm3": {

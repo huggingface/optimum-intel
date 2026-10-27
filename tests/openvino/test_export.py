@@ -158,6 +158,7 @@ class ExportModelTest(unittest.TestCase):
         "muse_glimmer": OVModelForVisualCausalLM,
         "deepseek_ocr2": OVModelForVisualCausalLM,
         "minicpmv4_7": OVModelForVisualCausalLM,
+        "minicpm_ocr": OVModelForVisualCausalLM,
     }
 
     if is_diffusers_version(">=", "0.41.0.dev0"):
@@ -560,7 +561,7 @@ class LTXVideoExportContractTest(unittest.TestCase):
             decoder_config = LTXVaeDecoderOpenVINOConfig(config)
             decoder_inputs = decoder_config.generate_dummy_inputs(framework="pt")
             self.assertEqual(tuple(encoder_inputs["sample"].shape[2:]), (encoder_frames, 64, 64))
-            self.assertEqual(tuple(decoder_inputs["latent_sample"].shape[2:]), (2, 64, 64))
+            self.assertEqual(tuple(decoder_inputs["latent_sample"].shape[2:]), (2, 8, 8))
             self.assertEqual("timestep" in decoder_inputs, config.timestep_conditioning)
             if config.timestep_conditioning:
                 self.assertEqual(tuple(decoder_inputs["timestep"].shape), (2,))

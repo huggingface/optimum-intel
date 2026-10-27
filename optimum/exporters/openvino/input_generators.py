@@ -17,7 +17,11 @@ from typing import Optional, Tuple
 
 import torch
 
-from optimum.exporters.openvino.utils import is_ltx2_3_transformer_config
+from optimum.exporters.openvino.utils import (
+    GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE,
+    GRANITEMOEHYBRID_MAMBA_LAYER_TYPE,
+    is_ltx2_3_transformer_config,
+)
 from optimum.intel.utils.import_utils import is_diffusers_version
 from optimum.utils import (
     DEFAULT_DUMMY_SHAPES,
@@ -384,6 +388,20 @@ class AquilaDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         ]
 
 
+def _get_config_attr_for_layer_type(config, layer_types, layer_type, attr_name, default=None):
+    # some attributes (num_key_value_heads, head_dim) can differ between layer types
+    # (sliding vs full attention)
+    if hasattr(config, "per_layer_config") and layer_type in layer_types:
+        return getattr(config.per_layer_config[layer_types.index(layer_type)], attr_name, default)
+    # heterogeneous config raise a non-AttributeError when accessing a per-layer attribute
+    # on the global config that getattr default does not catch
+    # https://github.com/huggingface/transformers/blob/a73a2ba70af1d0c4998555ac4e9a79a6210f1ccf/src/transformers/integrations/heterogeneity/configuration_utils.py#L298
+    try:
+        return getattr(config, attr_name, default)
+    except Exception:
+        return default
+
+
 class Gemma4DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     def __init__(
         self,
@@ -403,17 +421,28 @@ class Gemma4DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
             random_batch_size_range=random_batch_size_range,
             random_sequence_length_range=random_sequence_length_range,
         )
-        self.num_key_value_heads = normalized_config.num_key_value_heads
-        self.head_dim = normalized_config.head_dim
-        self.global_head_dim = getattr(normalized_config.config, "global_head_dim", self.head_dim)
-        self.layer_types = normalized_config.config.layer_types
-        self.num_kv_shared_layers = normalized_config.config.num_kv_shared_layers
-        self.sliding_window = normalized_config.config.sliding_window
-        # Full-attention layers use fewer KV heads than sliding-attention layers (e.g. 2 vs 8 for 26B-A4B)
-        self.num_global_key_value_heads = (
-            getattr(normalized_config.config, "num_global_key_value_heads", None) or self.num_key_value_heads
+        config = normalized_config.config
+        self.layer_types = config.layer_types
+        self.num_key_value_heads = _get_config_attr_for_layer_type(
+            config, self.layer_types, "sliding_attention", "num_key_value_heads"
         )
-        self.model_type = normalized_config.config.model_type
+        if self.num_key_value_heads is None:
+            self.num_key_value_heads = normalized_config.num_key_value_heads
+        self.head_dim = _get_config_attr_for_layer_type(config, self.layer_types, "sliding_attention", "head_dim")
+        if self.head_dim is None:
+            self.head_dim = normalized_config.head_dim
+        self.global_head_dim = _get_config_attr_for_layer_type(
+            config, self.layer_types, "full_attention", "global_head_dim"
+        ) or _get_config_attr_for_layer_type(config, self.layer_types, "full_attention", "head_dim", self.head_dim)
+        self.num_kv_shared_layers = config.num_kv_shared_layers
+        self.sliding_window = config.sliding_window
+        # Full-attention layers use fewer KV heads than sliding-attention layers (e.g. 2 vs 8 for 26B-A4B)
+        self.num_global_key_value_heads = _get_config_attr_for_layer_type(
+            config, self.layer_types, "full_attention", "num_global_key_value_heads", None
+        ) or _get_config_attr_for_layer_type(
+            config, self.layer_types, "full_attention", "num_key_value_heads", self.num_key_value_heads
+        )
+        self.model_type = config.model_type
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         # some layers do not produce their own KV-cache, they use the shared KV-cache
@@ -898,6 +927,22 @@ class LTXVaeDummyInputGenerator(DummyVisionInputGenerator):
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
+class LTXVaeEncoderDummyInputGenerator(LTXVaeDummyInputGenerator):
+    # Encoder's causal temporal downsamplers need temporal_compression_ratio + 1 frames (1 + 8k for
+    # LTX-Video 0.9.5), otherwise unflatten over the frame dim fails while tracing
+    def __init__(self, task, normalized_config, *args, num_frames: Optional[int] = None, **kwargs):
+        if num_frames is None:
+            num_frames = (getattr(normalized_config.config, "temporal_compression_ratio", None) or 1) + 1
+        super().__init__(task, normalized_config, *args, num_frames=num_frames, **kwargs)
+
+
+class LTXVaeDecoderDummyInputGenerator(LTXVaeDummyInputGenerator):
+    # Downsize default height/width to avoid running out of memory as decoder upsamples the latent 32x spatially and 8x temporally,
+    # 64x64 latent result in 2048x2048. height/width are dynamic axes.
+    def __init__(self, *args, width: int = 8, height: int = 8, **kwargs):
+        super().__init__(*args, width=width, height=height, **kwargs)
+
+
 class QwenImage21VaeDummyInputGenerator(LTXVaeDummyInputGenerator):
     # QwenImage21's image VAE is run on a single temporal frame; its `_encode`/`_decode` streaming path
     # assumes num_frames == 1 (the temporal upsampling breaks for num_frames > 1).
@@ -1253,6 +1298,7 @@ class DummyMiniCPMV4_7VisionInputGenerator(DummyVisionInputGenerator):
     """
     Dummy inputs for the per-crop MiniCPM-V 4.7 vision graph: the NaViT-packed patches of one crop plus the host-side
     index tensors (position embedding ids, 2x2 window order for the ViT merger and 2x2 order for the final merger).
+    Without the ViT merger ("4x" downsample mode) there is no window order and the final merger regroups the full grid.
     """
 
     SUPPORTED_INPUT_NAMES = ("pixel_values", "position_ids", "window_index", "merge_index")
@@ -1265,12 +1311,14 @@ class DummyMiniCPMV4_7VisionInputGenerator(DummyVisionInputGenerator):
         num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
         width: int = DEFAULT_DUMMY_SHAPES["width"],
         height: int = DEFAULT_DUMMY_SHAPES["height"],
+        use_vit_merger: bool = True,
         **kwargs,
     ):
         super().__init__(task, normalized_config, batch_size, num_channels, width, height)
         config = normalized_config.config
         self.patch_size = config.patch_size
         self.num_positions = (config.image_size // config.patch_size) ** 2
+        self.use_vit_merger = use_vit_merger
         # crop grid in patches, both sides divisible by 4 (2x2 window merge followed by 2x2 merge)
         self.grid_height = max(4, self.height // self.patch_size // 4 * 4)
         self.grid_width = max(4, self.width // self.patch_size // 4 * 4)
@@ -1295,6 +1343,8 @@ class DummyMiniCPMV4_7VisionInputGenerator(DummyVisionInputGenerator):
         if input_name == "window_index":
             return self._block_order(self.grid_height, self.grid_width)
         if input_name == "merge_index":
+            if not self.use_vit_merger:
+                return self._block_order(self.grid_height, self.grid_width)
             return self._block_order(self.grid_height // 2, self.grid_width // 2)
 
 
@@ -1531,6 +1581,25 @@ class DummyQwen3_5LMInputGenerator(DummyTextInputGenerator):
         if input_name == "position_ids":
             return generated_input.unsqueeze(0).expand(4, -1, -1)
         return generated_input
+
+
+class DummyQwen3_5SequenceClassificationLMInputGenerator(DummyQwen3_5LMInputGenerator):
+    """
+    (4, batch, seq) `position_ids` ([text, T, H, W]) and an `attention_mask` that covers the past and the current tokens,
+    the past length being the dummy cache length (`sequence_length`): the transformers `DynamicCache` used for the export
+    checks the mask against the cache length.
+    """
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "attention_mask":
+            return self.random_int_tensor(
+                shape=[self.batch_size, 2 * self.sequence_length],
+                min_value=1,
+                max_value=2,
+                framework=framework,
+                dtype=int_dtype,
+            )
+        return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
 class DummyQwen2VLVisionEmbedInputGenerator(DummyVisionInputGenerator):
@@ -1936,8 +2005,8 @@ class Zamba2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
             self.mamba_ngroups = config.mamba_n_groups
             self.mamba_headdim = config.mamba_d_head
             self.head_dim = getattr(config, "head_dim", config.hidden_size // config.num_attention_heads)
-            self.num_attention_layers = config.layer_types.count("attention")
-            self.num_mamba_layers = config.layer_types.count("mamba")
+            self.num_attention_layers = config.layer_types.count(GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE)
+            self.num_mamba_layers = config.layer_types.count(GRANITEMOEHYBRID_MAMBA_LAYER_TYPE)
             self.num_attention_heads = config.num_key_value_heads
             self.sequence_length = 0
 

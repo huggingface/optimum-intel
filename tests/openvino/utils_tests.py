@@ -270,6 +270,7 @@ HUB_MODEL_NAMES = {
     "minicpm3": "optimum-intel-internal-testing/tiny-random-minicpm3",
     "minicpmv": "optimum-intel-internal-testing/tiny-random-minicpmv-2_6",
     "minicpmv4_7": "optimum-intel-internal-testing/tiny-random-minicpmv47",
+    "minicpm_ocr": "optimum-intel-internal-testing/tiny-random-minicpm-ocr",
     "minicpmo": "optimum-intel-internal-testing/tiny-random-MiniCPM-o-2_6",
     "minicpm_v4_5": "optimum-intel-internal-testing/tiny-random-minicpm-v-4_5",
     "mistral": "optimum-intel-internal-testing/tiny-random-mistral",
@@ -319,6 +320,7 @@ HUB_MODEL_NAMES = {
     "qwen3_5": "optimum-intel-internal-testing/tiny-random-qwen3.5",
     "qwen3_5_compressed_tensors": "optimum-intel-internal-testing/tiny-random-qwen3.5-compressed-tensors",
     "qwen3_5_mtp": "optimum-intel-internal-testing/tiny-random-qwen3.5-mtp",
+    "qwen3_5_seq_cls": "optimum-intel-internal-testing/tiny-random-qwen3.5-seq-cls",
     "qwen3_5_dflash": "optimum-intel-internal-testing/tiny-random-qwen3.5-dflash",
     "qwen3_5_moe": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe",
     "qwen3_5_moe_mtp": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe-mtp",
@@ -444,9 +446,10 @@ DFLASH_VLM_MODELS = {
 
 # VLM-based Eagle3 draft models (AngelSlim Eagle3LlamaForCausalLM architecture).
 # These use Qwen3-VL MRoPE and target VLM models for speculative decoding.
-EAGLE3_VLM_MODELS = {
-    "qwen3_vl_eagle3": ("qwen3_vl_eagle3", "qwen3_vl_eagle3_target"),
-}
+EAGLE3_VLM_MODELS = {}
+# VLM Eagle3 export is only supported up to transformers 4.57.6
+if is_transformers_version("<=", "4.57.6"):
+    EAGLE3_VLM_MODELS["qwen3_vl_eagle3"] = ("qwen3_vl_eagle3", "qwen3_vl_eagle3_target")
 
 # MTP (Multi-Token Prediction) VLM models: the MTP head is exported inside the model itself
 # (openvino_mtp_model.xml), so the draft and target are the same model directory.
@@ -465,7 +468,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "blenderbot": {"model": 70 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 72},
     "cohere2": {"model": 32},
     "gpt2": {"model": 44},
-    "granitemoehybrid": {"model": 118},
+    "granitemoehybrid": {"model": 70 if is_transformers_version(">=", "5.13") else 118},
     "wav2vec2": {"model": 34},
     "distilbert": {"model": 66},
     "t5": {
@@ -544,6 +547,11 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "lm_model": 110,
         "text_embeddings_model": 1,
         "vision_embeddings_model": 28,
+    },
+    "minicpm_ocr": {
+        "lm_model": 70,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 22,
     },
     "llava_next": {
         "lm_model": 30,
@@ -866,6 +874,7 @@ ARCH_TO_MODEL_CLASS = {
     "gemma4_unified": "OVModelForVisualCausalLM",
     "muse_glimmer": "OVModelForVisualCausalLM",
     "minicpmv4_7": "OVModelForVisualCausalLM",
+    "minicpm_ocr": "OVModelForVisualCausalLM",
     "qwen3_omni_moe": "OVModelForMultimodalLM",
     "stable-diffusion": "OVDiffusionPipeline",
     "whisper": "OVModelForSpeechSeq2Seq",
@@ -1165,6 +1174,7 @@ TEST_NAME_TO_MODEL_TYPE = {
     "qwen3_5_moe_dflash": "qwen3",
     "qwen3_5_compressed_tensors": "qwen3_5",
     "qwen3_5_mtp": "qwen3_5",
+    "qwen3_5_seq_cls": "qwen3_5",
     "qwen3_5_moe_mtp": "qwen3_5_moe",
     "qwen3_5_moe_mtp_legacy_weights": "qwen3_5_moe",
     "qwen3_dflash": "qwen3",
@@ -1188,16 +1198,17 @@ TEST_NAME_TO_MODEL_TYPE = {
 }
 
 
-def get_transformers_versions(model_type, library_name="transformers"):
-    supported_model_type = TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES[library_name]
-    export_config = next(iter(supported_model_type[model_type]["openvino"].values()))
+def get_transformers_versions(model_type, library_name="transformers", task=None):
+    # the export config of `task`, or of the first registered task: tasks of one model type can support different versions
+    export_configs = TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES[library_name][model_type]["openvino"]
+    export_config = export_configs[task] if task is not None else next(iter(export_configs.values()))
     min_transformers = getattr(export_config.func, "MIN_TRANSFORMERS_VERSION", None) or "0"
     max_transformers = getattr(export_config.func, "MAX_TRANSFORMERS_VERSION", None) or "999"
     return str(min_transformers), str(max_transformers)
 
 
-def is_model_type_transformers_compatible(model_type, library_name="transformers"):
-    min_transformers, max_transformers = get_transformers_versions(model_type, library_name)
+def is_model_type_transformers_compatible(model_type, library_name="transformers", task=None):
+    min_transformers, max_transformers = get_transformers_versions(model_type, library_name, task)
     return is_transformers_version(">=", min_transformers) and is_transformers_version("<=", max_transformers)
 
 
