@@ -55,6 +55,7 @@ from .configuration import (
     OVQuantizationConfigBase,
     OVQuantizationMethod,
     OVWeightQuantizationConfig,
+    _GPTOSSQuantizationConfig,
     _merge_ignored_scopes,
 )
 from .modeling import OVModelForFeatureExtraction, OVModelForMaskedLM, OVModelForZeroShotImageClassification
@@ -1503,7 +1504,21 @@ class OVQuantizer(OptimumQuantizer):
                 config = config.clone()
                 config.num_samples = nncf_dataset.get_length()
 
-            if isinstance(config, OVWeightQuantizationConfig):
+            if isinstance(config, _GPTOSSQuantizationConfig):
+                quantized_model = ov_model
+                for index, step in enumerate((config.quantization_config1, config.quantization_config2)):
+                    step = step.clone()
+                    if dataset_was_built_from_config and nncf_dataset is not None:
+                        step.num_samples = config.num_samples
+                    step_dataset = nncf_dataset if step.bits != 8 else None
+                    quantized_model = _weight_only_quantization(
+                        quantized_model,
+                        step,
+                        step_dataset,
+                        verify_not_optimized=index == 0,
+                        **kwargs,
+                    )
+            elif isinstance(config, OVWeightQuantizationConfig):
                 if config.bits == 8:
                     # 8-bit weight only data-aware quantization is not supported
                     nncf_dataset = None

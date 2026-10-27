@@ -588,17 +588,27 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
             "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
         },
     },
-    # wwb visual-text similarity on GPU (24 images, answers without thinking) against the fp32 model: 0.822 vs 0.746 with
-    # the generic int4 config (group size 128, ratio 1.0); int8 reaches 0.930.
+    # CPU WWB thinking-off similarity against the fp32 OV export (256 VQAv2 examples):
+    # TextVQA calibration with 32 / 128 / 256 samples gives 0.841 / 0.826 / 0.833 with MLP INT8.
     "openbmb/MiniCPM-OCR-1.0": {
-        "bits": 4,
-        "sym": False,
-        "group_size": 64,
-        "ratio": 0.8,
-        "dataset": "textvqa",
-        "num_samples": 32,
-        "quant_method": OVQuantizationMethod.AWQ,
-        "scale_estimation": True,
+        "quantization_configs": {
+            "lm_model": {
+                "quantization_config1": {
+                    "bits": 4,
+                    "sym": False,
+                    "group_size": 64,
+                    "ratio": 1.0,
+                    "dataset": "textvqa",
+                    "num_samples": 32,
+                    "quant_method": OVQuantizationMethod.AWQ,
+                    "scale_estimation": True,
+                    "ignored_scope": {"patterns": [".*mlp\\.(gate_proj|up_proj|down_proj)/.*"]},
+                },
+                "quantization_config2": {"bits": 8, "sym": False, "weight_only": True},
+            },
+            "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
+            "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
+        },
     },
     "openbmb/MiniCPM5-2B": {
         "bits": 4,
@@ -1820,7 +1830,7 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
             ov_model_config.post_init()
 
 
-class _GPTOSSQuantizationConfig(QuantizationConfigMixin):
+class _GPTOSSQuantizationConfig(OVQuantizationConfigBase):
     def __init__(
         self,
         quantization_config1: Union[Dict, OVWeightQuantizationConfig],
@@ -1842,6 +1852,9 @@ class _GPTOSSQuantizationConfig(QuantizationConfigMixin):
             quantization_config2 = OVWeightQuantizationConfig.from_dict(quantization_config2)
         self.quantization_config2 = quantization_config2
         self.quantization_config2.post_init()
+        for field in ("dataset", "num_samples", "tokenizer", "processor", "_dataset_kwargs"):
+            kwargs.setdefault(field, getattr(quantization_config1, field))
+        super().__init__(**kwargs)
 
     def to_dict(self) -> Dict[str, Any]:
         result = super().to_dict()
