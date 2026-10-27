@@ -8001,8 +8001,6 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM):
 if is_transformers_version(">=", "5.2"):
     _OVQwen3_5ForCausalLM.get_placeholder_mask = Qwen3_5Model.get_placeholder_mask
     _OVQwen3_5ForCausalLM.get_rope_index = Qwen3_5Model.get_rope_index
-if is_transformers_version(">=", "5.15"):
-    _OVQwen3_5ForCausalLM.get_vision_position_ids = Qwen3_5Model.get_vision_position_ids
 
 
 class OVModelForVisualSequenceClassification(OVModelForVisualCausalLM):
@@ -8070,6 +8068,8 @@ class _OVQwen3_5ForSequenceClassification(OVModelForVisualSequenceClassification
         # every call is a new prompt: compute its M-RoPE positions instead of reusing the cached rope deltas
         self.rope_deltas = None
         return super().forward(*args, **kwargs)
+
+
 if is_transformers_version(">=", "5.15"):
     _OVQwen3_5ForCausalLM.get_vision_position_ids = Qwen3_5Model.get_vision_position_ids
 
