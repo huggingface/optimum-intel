@@ -3801,7 +3801,7 @@ class MiniCPMOcrOpenVINOConfig(MiniCPMV4_7OpenVINOConfig):
     MiniCPM-V 4.7 ones; the checkpoints use the "4x" downsample mode, which leaves the ViT window merger out.
     """
 
-    MIN_TRANSFORMERS_VERSION = "5.19.0.dev0"
+    MIN_TRANSFORMERS_VERSION = "5.21.0"
 
 
 class Phi3VisionConfigBehavior(str, enum.Enum):
