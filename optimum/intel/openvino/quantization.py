@@ -55,8 +55,8 @@ from .configuration import (
     OVQuantizationConfigBase,
     OVQuantizationMethod,
     OVWeightQuantizationConfig,
-    _GPTOSSQuantizationConfig,
     _merge_ignored_scopes,
+    _TwoStageWeightQuantizationConfig,
 )
 from .modeling import OVModelForFeatureExtraction, OVModelForMaskedLM, OVModelForZeroShotImageClassification
 from .modeling_base import OVBaseModel
@@ -1499,24 +1499,17 @@ class OVQuantizer(OptimumQuantizer):
             ov_model = self.model.ov_models[ov_model_name]
             nncf_dataset = calibration_dataset.get(ov_model_name, None) if calibration_dataset else None
 
-            if (
-                dataset_was_built_from_config
-                and nncf_dataset is not None
-                and nncf_dataset.get_length() is not None
-                and not isinstance(config, _GPTOSSQuantizationConfig)
-            ):
+            if dataset_was_built_from_config and nncf_dataset is not None and nncf_dataset.get_length() is not None:
                 # For datasets built from the quantization config, override num_samples per ov model
                 config = config.clone()
                 config.num_samples = nncf_dataset.get_length()
 
-            if isinstance(config, _GPTOSSQuantizationConfig):
-                first_config = config.quantization_config1.clone()
-                if dataset_was_built_from_config and nncf_dataset is not None and nncf_dataset.get_length() is not None:
-                    first_config.num_samples = nncf_dataset.get_length()
-                first_dataset = nncf_dataset if first_config.bits != 8 else None
-                quantized_model = _weight_only_quantization(ov_model, first_config, first_dataset, **kwargs)
+            if isinstance(config, _TwoStageWeightQuantizationConfig):
+                first_stage = config.first_stage.clone()
+                first_stage.num_samples = config.num_samples
+                quantized_model = _weight_only_quantization(ov_model, first_stage, nncf_dataset, **kwargs)
                 quantized_model = _weight_only_quantization(
-                    quantized_model, config.quantization_config2, verify_not_optimized=False, **kwargs
+                    quantized_model, config.second_stage, verify_not_optimized=False, **kwargs
                 )
             elif isinstance(config, OVWeightQuantizationConfig):
                 if config.bits == 8:

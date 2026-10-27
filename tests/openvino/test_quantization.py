@@ -78,6 +78,7 @@ from optimum.intel.openvino.configuration import (
     _DEFAULT_8BIT_WQ_CONFIGS,
     _quantization_config_from_dict,
     _GPTOSSQuantizationConfig,
+    _TwoStageWeightQuantizationConfig,
 )
 from optimum.intel.openvino.modeling_visual_language import _OVNanoLlavaForCausalLM
 from optimum.intel.openvino.utils import TemporaryDirectory
@@ -2300,6 +2301,12 @@ class OVQuantizationConfigTest(unittest.TestCase):
                 quantization_config2=OVWeightQuantizationConfig(bits=8),
             ),
         ),
+        (
+            _TwoStageWeightQuantizationConfig(
+                first_stage=OVWeightQuantizationConfig(bits=4, group_size=16, dataset="wikitext2", num_samples=2),
+                second_stage=OVWeightQuantizationConfig(bits=8, weight_only=True),
+            ),
+        ),
     )
 
     QUANTIZATION_CONFIG_DICTS = (
@@ -2400,6 +2407,14 @@ class OVQuantizationConfigTest(unittest.TestCase):
                 quantization_config2=dict(bits=8, weight_only=True),
             ),
             _GPTOSSQuantizationConfig,
+            None,
+        ),
+        (
+            dict(
+                first_stage=dict(bits=4, group_size=16, dataset="wikitext2"),
+                second_stage=dict(bits=8, weight_only=True),
+            ),
+            _TwoStageWeightQuantizationConfig,
             None,
         ),
     )

@@ -588,10 +588,12 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
             "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
         },
     },
+    # wwb visual-text similarity on GPU (24 images, answers without thinking) against the fp32 model: 0.822 vs 0.746 with
+    # the generic int4 config (group size 128, ratio 1.0); int8 reaches 0.930.
     "openbmb/MiniCPM-OCR-1.0": {
         "quantization_configs": {
             "lm_model": {
-                "quantization_config1": {
+                "first_stage": {
                     "bits": 4,
                     "sym": False,
                     "group_size": 64,
@@ -600,9 +602,10 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
                     "num_samples": 32,
                     "quant_method": OVQuantizationMethod.AWQ,
                     "scale_estimation": True,
+                    # MLP weights are kept in original precision at the first stage and quantized to int8 at the second
                     "ignored_scope": {"patterns": [".*mlp\\.(gate_proj|up_proj|down_proj)/.*"]},
                 },
-                "quantization_config2": {"bits": 8, "sym": False, "weight_only": True},
+                "second_stage": {"bits": 8, "sym": False, "weight_only": True},
             },
             "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
             "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
@@ -1044,8 +1047,6 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
             v = d[k]
             if isinstance(v, dict):
                 OVQuantizationConfigBase._dataclasses_to_dict(v)
-            elif isinstance(v, _GPTOSSQuantizationConfig):
-                d[k] = v.to_dict()
             elif dataclasses.is_dataclass(v):
                 d[k] = dataclasses.asdict(v)
 
@@ -1621,6 +1622,8 @@ class OVConfig(BaseConfig):
             dtype = "_".join(dtypes)
         elif isinstance(quantization_config, _GPTOSSQuantizationConfig):
             dtype = "int4"
+        elif isinstance(quantization_config, _TwoStageWeightQuantizationConfig):
+            dtype = quantization_config.first_stage.dtype
         else:
             raise ValueError(f"Unsupported type of quantization config: {type(quantization_config)}")
         return dtype
@@ -1797,10 +1800,6 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
         configs = quantization_configs.values()
         if default_config is not None:
             configs = tuple(configs) + (default_config,)
-        configs = [
-            config.quantization_config1 if isinstance(config, _GPTOSSQuantizationConfig) else config
-            for config in configs
-        ]
         num_samples = max((num_samples or 0, *(config.num_samples or 0 for config in configs))) or None
         dataset = reduce(or_op, (dataset, *(config.dataset for config in configs)))
         tokenizer = reduce(or_op, (tokenizer, *(config.tokenizer for config in configs)))
@@ -1831,8 +1830,7 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
     def post_init(self):
         super().post_init()
         for ov_model_config in self.quantization_configs.values():
-            if not isinstance(ov_model_config, _GPTOSSQuantizationConfig):
-                ov_model_config.post_init()
+            ov_model_config.post_init()
 
 
 class _GPTOSSQuantizationConfig(QuantizationConfigMixin):
@@ -1865,6 +1863,43 @@ class _GPTOSSQuantizationConfig(QuantizationConfigMixin):
         return result
 
 
+class _TwoStageWeightQuantizationConfig(OVQuantizationConfigBase):
+    def __init__(
+        self,
+        first_stage: Union[Dict, OVWeightQuantizationConfig],
+        second_stage: Union[Dict, OVWeightQuantizationConfig],
+        **kwargs,
+    ):
+        """
+        Applies two weight compression passes sequentially to the same model. Calibration related parameters
+        (dataset, num_samples, etc.) are taken from the first stage. The second stage is not data-aware.
+
+        :param first_stage: Config of the first compression pass.
+        :param second_stage: Config of the second compression pass, applied to the result of the first one.
+        """
+        if isinstance(first_stage, dict):
+            first_stage = OVWeightQuantizationConfig.from_dict(first_stage)
+        if isinstance(second_stage, dict):
+            second_stage = OVWeightQuantizationConfig.from_dict(second_stage)
+        self.first_stage = first_stage
+        self.second_stage = second_stage
+        for field in ("dataset", "num_samples", "tokenizer", "processor", "_dataset_kwargs"):
+            kwargs.setdefault(field, getattr(first_stage, field))
+        super().__init__(**kwargs)
+        self.post_init()
+
+    def post_init(self):
+        super().post_init()
+        self.first_stage.post_init()
+        self.second_stage.post_init()
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = super().to_dict()
+        result["first_stage"] = self.first_stage.to_dict()
+        result["second_stage"] = self.second_stage.to_dict()
+        return result
+
+
 def _quantization_config_from_dict(config_dict: Dict[str, Any]) -> OVQuantizationConfigBase:
     """
     Helper function to create a quantization config from a dictionary.
@@ -1877,6 +1912,9 @@ def _quantization_config_from_dict(config_dict: Dict[str, Any]) -> OVQuantizatio
     # Check for OVPipelineQuantizationConfig
     if "quantization_configs" in config_dict:
         return OVPipelineQuantizationConfig.from_dict(config_dict)
+
+    if "first_stage" in config_dict and "second_stage" in config_dict:
+        return _TwoStageWeightQuantizationConfig.from_dict(config_dict)
 
     # Check for GPT-OSS quantization config
     if "quantization_config1" in config_dict and "quantization_config2" in config_dict:
