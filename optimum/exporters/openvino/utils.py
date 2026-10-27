@@ -538,6 +538,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "qwen3_asr",
     "muse_glimmer",
     "lfm3_vl",
+    "lfm3_omni",
 ]
 
 

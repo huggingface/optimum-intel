@@ -64,6 +64,13 @@ ARCH_TO_CB_COMPATIBLE_SUBMODELS = {
         "paged_causal_conv1d": True,
         "sliding_window": True,
     },
+    # the language model of LFM3-Omni is the LFM3 one with an extra hidden_states output (for the depth decoder)
+    "lfm3_omni": {
+        "task": "image-text-to-text",
+        "submodels": ("language_model",),
+        "paged_causal_conv1d": True,
+        "sliding_window": True,
+    },
 }
 
 # Architectures exported through an out-of-tree library are not part of the transformers set, so
@@ -99,6 +106,8 @@ class OVContinuousBatchingCompatibilityTest(unittest.TestCase):
                 trust_remote_code=model_arch in REMOTE_CODE_MODELS,
             )
             config = AutoConfig.from_pretrained(tmpdir, trust_remote_code=model_arch in REMOTE_CODE_MODELS)
+            # the layer types of the language model (LFM3-Omni nests it in text_config)
+            config = config.get_text_config()
             for submodel in expected["submodels"]:
                 with self.subTest(submodel=submodel):
                     model = core.read_model(Path(tmpdir) / f"openvino_{submodel}.xml")

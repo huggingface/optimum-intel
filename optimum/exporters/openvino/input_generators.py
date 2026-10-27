@@ -2087,6 +2087,54 @@ class DummyLfm3VlVisionInputGenerator(DummyInputGenerator):
         return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
 
 
+class DummyLfm3OmniInputGenerator(DummyInputGenerator):
+    """
+    Generates the inputs of the LFM3-Omni submodels other than the language model: the vision encoder
+    (`pixel_values`, as for LFM3-VL), the speech encoder (`input_features`), the speech frame embeddings and the depth
+    decoder (`codes`, `hidden_states`, `masked`) and the codec decoder (`audio_codes`).
+    """
+
+    SUPPORTED_INPUT_NAMES = ("pixel_values", "input_features", "codes", "hidden_states", "masked", "audio_codes")
+
+    def __init__(self, task: str, normalized_config: NormalizedVisionConfig, batch_size: int = 2, **kwargs):
+        config = normalized_config.config
+        self.task = task
+        self.batch_size = batch_size
+        vision_config = config.vision_config
+        self.patch_dim = vision_config.in_channels * vision_config.temporal_patch_size * vision_config.patch_size**2
+        # the patch grid must be divisible by the projector downsample factor
+        self.grid_size = 4 * config.downsample_factor
+        self.num_mel_bins = config.audio_encoder_config.num_mel_bins
+        self.hidden_size = config.text_config.hidden_size
+        self.num_codebooks = config.num_codebooks
+        # the last code of every codebook is the end-of-speech code, the codec decodes only the others
+        self.codebook_size = config.codebook_size
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "pixel_values":
+            shape = [self.batch_size, self.grid_size, self.grid_size + 2 * 2, self.patch_dim]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "input_features":
+            # the clip length is not a multiple of the stride 8 of the downsampler
+            shape = [1, self.num_mel_bins, 8 * 7 + 3]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "codes":
+            shape = [self.batch_size + 1, self.num_codebooks]
+            return self.random_int_tensor(shape, max_value=self.codebook_size, framework=framework, dtype=int_dtype)
+        if input_name == "hidden_states":
+            shape = [self.batch_size + 1, self.hidden_size]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "masked":
+            shape = [self.batch_size + 1, self.num_codebooks]
+            return self.random_int_tensor(shape, max_value=2, framework=framework, dtype="int64").bool()
+        if input_name == "audio_codes":
+            shape = [1, self.num_codebooks, 5]
+            return self.random_int_tensor(
+                shape, max_value=self.codebook_size - 1, framework=framework, dtype=int_dtype
+            )
+        raise ValueError(f"Unsupported input {input_name} for {self.__class__.__name__}")
+
+
 class DummyVideoChatFlashQwenInputGenerator(DummyVisionInputGenerator):
     SUPPORTED_INPUT_NAMES = ("hidden_states", "rotary_pos_emb")
 

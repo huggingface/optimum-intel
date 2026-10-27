@@ -135,6 +135,7 @@ class ExportModelTest(unittest.TestCase):
         "lfm2_moe": OVModelForCausalLM,
         "lfm3": OVModelForCausalLM,
         "lfm3_vl": OVModelForVisualCausalLM,
+        "lfm3_omni": OVModelForVisualCausalLM,
         "qwen3_asr": OVModelForSpeechSeq2Seq,
         "fun_asr": OVModelForSpeechSeq2Seq,
         "sense_voice": OVModelForSpeechSeq2Seq,

@@ -613,6 +613,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "deepseek_ocr2",
         "minicpmv4_7",
         "lfm3_vl",
+        "lfm3_omni",
     ]
     if is_openvino_version(">=", "2026.3") and is_compressed_tensors_available():
         SUPPORTED_ARCHITECTURES.append("qwen3_5_compressed_tensors")
@@ -629,8 +630,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "gemma4_unified-it",
         "minicpmv4_7",
         "lfm3_vl",
+        "lfm3_omni",
     ]
-    SUPPORT_AUDIO = ["gemma4", "gemma4_unified-it", "qwen3_omni_moe"]
+    SUPPORT_AUDIO = ["gemma4", "gemma4_unified-it", "qwen3_omni_moe", "lfm3_omni"]
     # "llama" is registered for image-text-to-text
     # to support VLM Eagle3 draft models (tested separately in test_genai.py).
     UNSUPPORTED_ARCHITECTURES = {"phi4_multimodal", "llama"}
@@ -688,6 +690,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "muse_glimmer",
             "minicpmv4_7",
             "lfm3_vl",
+            "lfm3_omni",
         ]:
             from transformers import AutoModelForImageTextToText
 
@@ -749,6 +752,9 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         if model_arch == "qwen3_omni_moe":
             # Qwen3OmniMoeForConditionalGeneration has a custom generate() interface incompatible with this flow
             self.skipTest("qwen3_omni_moe comparison tested via dedicated test methods")
+        if model_arch == "lfm3_omni":
+            # the remote generate() is a text / speech state machine that refuses min_new_tokens
+            self.skipTest("lfm3_omni comparison tested in test_lfm3_omni_compare_to_transformers")
 
         if model_arch == "gemma4" and is_openvino_version("<", "2026.5"):
             self.skipTest("gemma4 is causing segfault CVS-193103")
@@ -1151,6 +1157,71 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         # generate pure sine wave at 220 Hz
         audio_data = 0.5 * np.sin(2 * np.pi * 220 * t)
         return (audio_data, sampling_rate)
+
+    def test_lfm3_omni_compare_to_transformers(self):
+        model_arch = "lfm3_omni"
+        if model_arch not in self.SUPPORTED_ARCHITECTURES:
+            self.skipTest("lfm3_omni is not supported by the installed transformers version")
+        model_id = MODEL_NAMES[model_arch]
+        transformers_model = AutoModelForImageTextToText.from_pretrained(
+            model_id, trust_remote_code=True, dtype=torch.float32
+        ).eval()
+        ov_model = self.OVMODEL_CLASS.from_pretrained(
+            model_id, export=True, trust_remote_code=True, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
+        )
+        self._check_openvino_model_attributes(ov_model, use_cache=True, stateful=True)
+        preprocessors = self.get_preprocessors(model_arch)
+        image = self.IMAGE.resize((600, 600))
+        audio = self._generate_random_audio_data()
+
+        # text generation from image, audio and both
+        gen_kwargs = {"max_new_tokens": 20, "do_sample": False, "return_dict_in_generate": True}
+        for media in ({"image": image}, {"audio": audio}, {"image": image, "audio": audio}):
+            inputs = ov_model.preprocess_inputs(**preprocessors, text="Describe the inputs", **media)
+            ov_logits = ov_model(**inputs).logits
+            with torch.no_grad():
+                transformers_logits = transformers_model(**copy.deepcopy(inputs)).logits
+            self.assertTrue(
+                torch.allclose(ov_logits, transformers_logits, atol=4e-3),
+                f"Max abs diff {(ov_logits - transformers_logits).abs().max()}",
+            )
+            ov_outputs = ov_model.generate(**inputs, **gen_kwargs)
+            with torch.no_grad():
+                transformers_outputs = transformers_model.generate(**copy.deepcopy(inputs), **gen_kwargs)
+            self.assertTrue(torch.equal(ov_outputs.sequences, transformers_outputs.sequences))
+            # the default return value is the sequences, as for the other visual language models
+            self.assertTrue(torch.equal(ov_model.generate(**inputs, max_new_tokens=20), ov_outputs.sequences))
+
+        # speech output: sampled speech frames from the depth decoder, decoded by the codec
+        inputs = ov_model.preprocess_inputs(**preprocessors, text="Say hello")
+        speech_kwargs = {
+            "max_new_tokens": 8,
+            "generation_mode": "audio",
+            "audio_temperature": 0.4,
+            "audio_repetition_penalty": 1.2,
+            "return_dict_in_generate": True,
+        }
+        set_seed(SEED)
+        ov_outputs = ov_model.generate(**inputs, **speech_kwargs)
+        set_seed(SEED)
+        with torch.no_grad():
+            transformers_outputs = transformers_model.generate(**copy.deepcopy(inputs), **speech_kwargs)
+        self.assertTrue(torch.equal(ov_outputs.sequences, transformers_outputs.sequences))
+        self.assertTrue(torch.equal(ov_outputs.audio_codes, transformers_outputs.audio_codes))
+        num_frames = int(ov_outputs.audio_lengths[0])
+        self.assertGreater(num_frames, 0)
+        codes = ov_outputs.audio_codes[:, :, :num_frames]
+        with torch.no_grad():
+            transformers_audio = preprocessors["processor"].audio_tokenizer.float().decode(codes).audio_values
+        ov_audio = ov_model.decode_audio(codes)
+        self.assertEqual(ov_audio.shape, transformers_audio.shape)
+        self.assertTrue(
+            torch.allclose(ov_audio, transformers_audio, atol=1e-4),
+            f"Max abs diff {(ov_audio - transformers_audio).abs().max()}",
+        )
+        del transformers_model
+        del ov_model
+        gc.collect()
 
     @pytest.mark.skipif(is_transformers_version("<", "5.0"), reason="qwen3_omni_moe requires transformers >= 5.0")
     def test_qwen3_omni_moe_video_not_supported(self):

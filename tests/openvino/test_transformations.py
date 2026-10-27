@@ -214,6 +214,35 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "Tokenization",
         ],
     },
+    # the LFM3-VL language model and vision encoder, plus the speech encoder, depth decoder and codec decoder
+    "lfm3_omni": {
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+            "TransposeMatMul",
+            "CommonFusions",
+            "DecompressionHandling",
+        ],
+        "compile": [
+            "RMSFusion",
+            "RoPEFusion",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "CausalMaskPreprocessFusion",
+            "BroadcastMatMulFusion",
+            "MultiplyFusions",
+            "FullyConnectedBiasFusion",
+            "ConvertBroadcast3",
+            "ConvertMatMulToFC",
+            "ConvertToCPUSpecificOpset",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+            "Snippets",
+            "Tokenization",
+        ],
+    },
     "qwen3_5_moe": {
         "convert": [
             "SDPAFusion",

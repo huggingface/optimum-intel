@@ -247,6 +247,7 @@ HUB_MODEL_NAMES = {
     "lfm2_moe": "optimum-intel-internal-testing/tiny-random-lfm2-moe",
     "lfm3": "optimum-intel-internal-testing/tiny-random-lfm3",
     "lfm3_vl": "optimum-intel-internal-testing/tiny-random-lfm3-vl",
+    "lfm3_omni": "optimum-intel-internal-testing/tiny-random-lfm3-omni",
     "longt5": "optimum-intel-internal-testing/tiny-random-longt5",
     "llama": "optimum-intel-internal-testing/tiny-random-LlamaForCausalLM",
     "llama_awq": "optimum-intel-internal-testing/tiny-random-LlamaForCausalLM",
@@ -739,6 +740,15 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_embeddings_model": 1,
         "vision_embeddings_model": 25,
     },
+    "lfm3_omni": {
+        "lm_model": 98,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 29,
+        "audio_encoder_model": 34,
+        "audio_out_embeddings_model": 1,
+        "depth_decoder_model": 29,
+        "audio_decoder_model": 59,
+    },
     "hunyuan_v1_dense": {"model": 32},
     "qwen3_eagle3": {"model": 20},
     "qwen3_dflash": {"model": 30},
@@ -826,9 +836,10 @@ REMOTE_CODE_MODELS = (
     "maira2",
     "phi4mm",
     "gemma3n",
-    # LFM3 / LFM3-VL are available as remote code only
+    # LFM3 / LFM3-VL / LFM3-Omni are available as remote code only
     "lfm3",
     "lfm3_vl",
+    "lfm3_omni",
 )
 
 if is_transformers_version("<", "5"):
@@ -846,6 +857,7 @@ ARCH_TO_MODEL_CLASS = {
     "lfm2_moe": "OVModelForCausalLM",
     "lfm3": "OVModelForCausalLM",
     "lfm3_vl": "OVModelForVisualCausalLM",
+    "lfm3_omni": "OVModelForVisualCausalLM",
     "qwen3_moe": "OVModelForCausalLM",
     "llama4": "OVModelForCausalLM",
     "llava": "OVModelForVisualCausalLM",
