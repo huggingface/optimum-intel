@@ -49,6 +49,11 @@ ARCH_TO_CB_COMPATIBLE_SUBMODELS = {
         "task": "image-text-to-text",
         "submodels": ("language_model",),
     },
+    # dense hybrid Gated DeltaNet + full attention language model
+    "minicpm_ocr": {
+        "task": "image-text-to-text",
+        "submodels": ("language_model",),
+    },
     # hybrid Mamba2 + attention language model: the Mamba2 layers become PagedSelectiveSSM / PagedCausalConv1D. The
     # Mamba2 fusions (FuseSSMLoop, SelectiveSSMFusion) only run in this transformation, not on the stateful model
     "nemotron_h": {

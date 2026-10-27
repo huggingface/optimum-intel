@@ -1125,6 +1125,11 @@ def _get_multi_modal_submodels_and_export_configs(
         model.config.sub_GN = model.model.embed_tokens_extend.image_embed.sub_img_feature_extensor.tolist()
         model.config.num_img_tokens = model.model.embed_tokens_extend.image_embed.num_img_tokens
 
+    if task == "text-classification":
+        # the checkpoint config can name the generative class (e.g. ms-swift seq_cls checkpoints of Qwen3.5), while the
+        # exported language model ends in the classification head
+        model.config.architectures = [model.__class__.__name__]
+
     if hasattr(model, "image_newline"):
         model.config.image_newline = model.image_newline.tolist()
     if hasattr(model, "model") and hasattr(model.model, "image_newline"):

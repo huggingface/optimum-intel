@@ -12908,6 +12908,9 @@ class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
     Exports the Qwen3.5 / Qwen3.5-MoE (hybrid Gated DeltaNet + full attention) language model of MiniCPM-V 4.7.
     """
 
+    # the head applied to the last hidden states to produce the `logits` output
+    _output_head_name = "lm_head"
+
     def __init__(
         self,
         config: "OpenVINOConfig",
@@ -12950,7 +12953,7 @@ class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
                 past_key_values=cache,
                 use_cache=True,
             )
-            logits = self._model.lm_head(outputs.last_hidden_state)
+            logits = getattr(self._model, self._output_head_name)(outputs.last_hidden_state)
 
             linear_attn_outputs, full_attn_outputs = [], []
             for layer in outputs.past_key_values.layers:
@@ -13013,6 +13016,16 @@ class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
                 restore_minicpmv4_7_moe_weights(experts)
 
 
+class Qwen3_5ForSequenceClassificationLanguageModelPatcher(MiniCPMV4_7LanguageModelPatcher):
+    """
+    Exports the language model of Qwen3_5ForSequenceClassification: the same hybrid Gated DeltaNet + full attention
+    decoder as MiniCPM-V 4.7 (transformers `DynamicCache`), ending in the `score` classification head instead of
+    `lm_head`. The `logits` output holds the class logits of every token; the runtime picks the last non-pad token.
+    """
+
+    _output_head_name = "score"
+
+
 # Patches MiniCPMV4_7VisionAttention.forward:
 # https://github.com/huggingface/transformers/blob/6da3313a6f89fb3fe0d51c02fe06e3664cd436b0/src/transformers/models/minicpmv4_7/modeling_minicpmv4_7.py#L114
 # Why: the export encodes one crop (or a batch of equal windows), so the data-dependent `cu_seqlens` split is dropped
@@ -13066,7 +13079,8 @@ class MiniCPMV4_7VisionEmbeddingsPatcher(ModelPatcher):
     """
     Exports the MiniCPM-V 4.7 vision tower, ViT window merger and MLP merger as one graph encoding one crop.
     Crops never interact, so the host runs it per crop and passes the grid-dependent indices: `position_ids`,
-    `window_index` and `merge_index`.
+    `window_index` and `merge_index`. The "4x" downsample mode (MiniCPM-OCR) leaves the ViT window merger and
+    `window_index` out.
     """
 
     def __init__(
@@ -13087,7 +13101,9 @@ class MiniCPMV4_7VisionEmbeddingsPatcher(ModelPatcher):
         # https://github.com/huggingface/transformers/blob/6da3313a6f89fb3fe0d51c02fe06e3664cd436b0/src/transformers/models/minicpmv4_7/modeling_minicpmv4_7.py#L531
         # Why: position ids, `cu_seqlens` and the per-crop merge loop are computed from `target_sizes` in Python; the
         # host passes `position_ids` / `merge_index` instead, so the graph is not tied to the example grid size.
-        def vision_embed_forward(self, pixel_values, position_ids, window_index, merge_index):
+        use_vit_merger = config.use_vit_merger
+
+        def vision_embed_forward(self, pixel_values, position_ids, window_index=None, merge_index=None):
             vision_tower = self.vision_tower
             embeddings = vision_tower.embeddings
             patch_embeds = embeddings.patch_embedding(pixel_values.to(embeddings.patch_embedding.weight.dtype))
@@ -13096,7 +13112,7 @@ class MiniCPMV4_7VisionEmbeddingsPatcher(ModelPatcher):
 
             for layer_idx, encoder_layer in enumerate(vision_tower.encoder.layers):
                 hidden_states = encoder_layer(hidden_states, attention_mask=None)
-                if layer_idx == vision_config.insert_layer_id:
+                if use_vit_merger and layer_idx == vision_config.insert_layer_id:
                     hidden_states = vision_tower.vit_merger(hidden_states, window_index)
             hidden_states = vision_tower.post_layernorm(hidden_states)
 

@@ -63,6 +63,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyQwen2VLLMInputGenerator,
     DummyQwen2VLVisionEmbedInputGenerator,
     DummyQwen3_5LMInputGenerator,
+    DummyQwen3_5SequenceClassificationLMInputGenerator,
     DummyQwen3OmniMoeAudioInputGenerator,
     DummyQwen3OmniMoeCode2WavInputGenerator,
     DummyQwen3OmniMoeLMInputGenerator,
@@ -204,6 +205,7 @@ from optimum.exporters.openvino.model_patcher import (
     Qwen2MoEPatcher,
     Qwen2VLLanguageModelPatcher,
     Qwen2VLVisionEmbMergerPatcher,
+    Qwen3_5ForSequenceClassificationLanguageModelPatcher,
     Qwen3_5ModelPatcher,
     Qwen3_5MoeModelPatcher,
     Qwen3_5MoeMTPModelPatcher,
@@ -3695,15 +3697,25 @@ class MiniCPMV4_7OpenVINOConfig(BaseVLMOpenVINOConfig):
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
 
     @property
+    def use_vit_merger(self) -> bool:
+        # the "4x" downsample mode skips the ViT window merger, see MiniCPMV4_6Model.get_image_features
+        return self._orig_config.downsample_mode != "4x"
+
+    @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         if self._behavior == MiniCPMV4_7ConfigBehavior.VISION_EMBEDDINGS:
-            return {
+            inputs = {
                 "pixel_values": {3: "patches_width"},
                 "position_ids": {0: "num_patches"},
-                "window_index": {0: "num_patches"},
-                "merge_index": {0: "num_merged_patches"},
             }
+            if self.use_vit_merger:
+                inputs["window_index"] = {0: "num_patches"}
+            inputs["merge_index"] = {0: "num_merged_patches"}
+            return inputs
         return {}
+
+    def _create_dummy_input_generator_classes(self, **kwargs):
+        return super()._create_dummy_input_generator_classes(use_vit_merger=self.use_vit_merger, **kwargs)
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
@@ -3781,6 +3793,17 @@ class MiniCPMV4_7OpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior == MiniCPMV4_7ConfigBehavior.VISION_EMBEDDINGS:
             return MiniCPMV4_7VisionEmbeddingsPatcher(self, model, model_kwargs)
         return super().patch_model_for_export(model, model_kwargs)
+
+
+@register_in_tasks_manager("minicpm_ocr", *["image-text-to-text"], library_name="transformers")
+class MiniCPMOcrOpenVINOConfig(MiniCPMV4_7OpenVINOConfig):
+    """
+    MiniCPM-OCR keeps the MiniCPM-V 4.6 architecture: the vision tower, ViT window merger and MLP merger of MiniCPM-V
+    4.7 on top of a dense Qwen3.5 language model with plain 1D RoPE instead of canvas M-RoPE. The graphs are the
+    MiniCPM-V 4.7 ones; the checkpoints use the "4x" downsample mode, which leaves the ViT window merger out.
+    """
+
+    MIN_TRANSFORMERS_VERSION = "5.21.0"
 
 
 class Phi3VisionConfigBehavior(str, enum.Enum):
@@ -7898,6 +7921,57 @@ class Qwen3_5OpenVINOConfig(Qwen3VLOpenVINOConfig):
                 "qwen3_5_text", self._orig_config.text_config, self.int_dtype, self.float_dtype
             ).outputs
         raise Exception("Unknown Qwen3.5 behavior type.")
+
+
+@register_in_tasks_manager("qwen3_5", *["text-classification"], library_name="transformers")
+class Qwen3_5ForSequenceClassificationOpenVINOConfig(Qwen3_5OpenVINOConfig):
+    """
+    Qwen3_5ForSequenceClassification (e.g. reward models on the Qwen3.5 VLM): the Qwen3.5 vision and text embeddings
+    graphs, and a language model graph that ends in the `score` head instead of `lm_head`, giving the class logits of
+    every token (see `Qwen3_5ForSequenceClassificationLanguageModelPatcher`). The runtime reads them at the last non-pad
+    token, see `OVModelForVisualSequenceClassification`.
+    """
+
+    # the language model is exported with the transformers `DynamicCache`, whose linear attention layers keep their
+    # states by index since 5.14 (the layout `qwen3_5_gated_delta_net_forward` reads)
+    MIN_TRANSFORMERS_VERSION = "5.14.0"
+    MAX_TRANSFORMERS_VERSION = None
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # the MTP head drafts tokens for generation, a classifier has no use for it
+        self.SUPPORTED_BEHAVIORS = [
+            behavior for behavior in self.SUPPORTED_BEHAVIORS if behavior != QwenVLConfigBehavior.MTP.value
+        ]
+
+    def with_behavior(self, behavior: Union[str, QwenVLConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, QwenVLConfigBehavior):
+            behavior = QwenVLConfigBehavior(behavior)
+
+        if behavior == QwenVLConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config(
+                "qwen3_5_text",
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
+                max_transformers_version=self.MAX_TRANSFORMERS_VERSION,
+            )
+
+        if behavior == QwenVLConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                "qwen3_5_text",
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=Qwen3_5ForSequenceClassificationLanguageModelPatcher,
+                dummy_input_generator=DummyQwen3_5SequenceClassificationLMInputGenerator,
+                inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
+                max_transformers_version=self.MAX_TRANSFORMERS_VERSION,
+            )
+
+        return super().with_behavior(behavior)
 
 
 class Qwen3_5MTPOpenVINOConfig(OpenVINOConfigWithPast):
