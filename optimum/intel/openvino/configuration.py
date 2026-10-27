@@ -588,8 +588,6 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
             "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
         },
     },
-    # CPU WWB thinking-off similarity against the fp32 OV export (256 VQAv2 examples):
-    # TextVQA calibration with 32 / 128 / 256 samples gives 0.841 / 0.826 / 0.833 with MLP INT8.
     "openbmb/MiniCPM-OCR-1.0": {
         "quantization_configs": {
             "lm_model": {
