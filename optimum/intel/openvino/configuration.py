@@ -602,7 +602,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
                     "scale_estimation": True,
                     "ignored_scope": {"patterns": [".*mlp\\.(gate_proj|up_proj|down_proj)/.*"]},
                 },
-                "quantization_config2": {"bits": 8, "sym": True, "weight_only": True},
+                "quantization_config2": {"bits": 8, "sym": False, "weight_only": True},
             },
             "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
             "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
