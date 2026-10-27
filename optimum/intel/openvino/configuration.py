@@ -588,8 +588,6 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
             "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
         },
     },
-    # wwb visual-text similarity on GPU (24 images, answers without thinking) against the fp32 model: 0.822 vs 0.746 with
-    # the generic int4 config (group size 128, ratio 1.0); int8 reaches 0.930.
     "openbmb/MiniCPM-OCR-1.0": {
         "quantization_configs": {
             "lm_model": {
@@ -1622,7 +1620,7 @@ class OVConfig(BaseConfig):
             dtype = "_".join(dtypes)
         elif isinstance(quantization_config, _GPTOSSQuantizationConfig):
             dtype = "int4"
-        elif isinstance(quantization_config, _TwoStageWeightQuantizationConfig):
+        elif isinstance(quantization_config, _MiniCPMOCRQuantizationConfig):
             dtype = quantization_config.first_stage.dtype
         else:
             raise ValueError(f"Unsupported type of quantization config: {type(quantization_config)}")
@@ -1863,7 +1861,7 @@ class _GPTOSSQuantizationConfig(QuantizationConfigMixin):
         return result
 
 
-class _TwoStageWeightQuantizationConfig(OVQuantizationConfigBase):
+class _MiniCPMOCRQuantizationConfig(OVQuantizationConfigBase):
     def __init__(
         self,
         first_stage: Union[Dict, OVWeightQuantizationConfig],
@@ -1871,8 +1869,12 @@ class _TwoStageWeightQuantizationConfig(OVQuantizationConfigBase):
         **kwargs,
     ):
         """
-        Applies two weight compression passes sequentially to the same model. Calibration related parameters
-        (dataset, num_samples, etc.) are taken from the first stage. The second stage is not data-aware.
+        Quantization config of the language model of openbmb/MiniCPM-OCR-1.0. Applies two weight compression passes
+        sequentially to the same model. Calibration related parameters (dataset, num_samples, etc.) are taken from the
+        first stage. The second stage is not data-aware.
+
+        It is bound to the model through `_DEFAULT_4BIT_WQ_CONFIGS`: the `first_stage`/`second_stage` keys of a config
+        dictionary are resolved to this class in `_quantization_config_from_dict`.
 
         :param first_stage: Config of the first compression pass.
         :param second_stage: Config of the second compression pass, applied to the result of the first one.
@@ -1914,7 +1916,7 @@ def _quantization_config_from_dict(config_dict: Dict[str, Any]) -> OVQuantizatio
         return OVPipelineQuantizationConfig.from_dict(config_dict)
 
     if "first_stage" in config_dict and "second_stage" in config_dict:
-        return _TwoStageWeightQuantizationConfig.from_dict(config_dict)
+        return _MiniCPMOCRQuantizationConfig.from_dict(config_dict)
 
     # Check for GPT-OSS quantization config
     if "quantization_config1" in config_dict and "quantization_config2" in config_dict:
