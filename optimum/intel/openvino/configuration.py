@@ -559,14 +559,22 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
     # wwb visual-text similarity on GPU (24 images, answers without thinking) against the fp32 model: 0.822 vs 0.746 with
     # the generic int4 config (group size 128, ratio 1.0); int8 reaches 0.930.
     "openbmb/MiniCPM-OCR-1.0": {
-        "bits": 4,
-        "sym": False,
-        "group_size": 64,
-        "ratio": 0.8,
-        "dataset": "textvqa",
-        "num_samples": 32,
-        "quant_method": OVQuantizationMethod.AWQ,
-        "scale_estimation": True,
+        "quantization_configs": {
+            "lm_model": {
+                "bits": 4,
+                "sym": False,
+                "group_size": 64,
+                "ratio": 1.0,
+                "dataset": "textvqa",
+                "num_samples": 32,
+                "quant_method": OVQuantizationMethod.AWQ,
+                "scale_estimation": True,
+                # MLP weights are compressed to int8
+                "scoped_configs": [{"patterns": [".*mlp\\.(gate_proj|up_proj|down_proj).*"], "bits": 8, "sym": False}],
+            },
+            "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
+            "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
+        },
     },
     "openbmb/MiniCPM5-2B": {
         "bits": 4,
@@ -915,13 +923,8 @@ def _get_scoped_config_instances(scoped_configs: Optional[List[dict]]) -> Option
     for scoped_config in scoped_configs:
         scoped_config = dict(scoped_config)
         bits = scoped_config.pop("bits", 8)
-        if bits not in [2, 3, 4, 8]:
-            raise ValueError(f"Only support quantization to [2,3,4,8] bits but found {bits}")
         sym = scoped_config.pop("sym", False)
         mode = _get_compression_mode(sym, bits=bits)
-        group_size = scoped_config.get("group_size")
-        if group_size is not None and group_size != -1 and group_size <= 0:
-            raise ValueError(f"`group_size` must be greater than 0 or equal to -1, but found {group_size}")
         instances.append(nncf.ScopedConfig(**scoped_config, mode=mode))
     return instances
 
@@ -936,6 +939,13 @@ def _validate_scoped_configs(scoped_configs: Optional[List[dict]]):
         )
     if not isinstance(scoped_configs, list) or not all(isinstance(config, dict) for config in scoped_configs):
         raise ValueError(f"`scoped_configs` is expected to be a list of dicts, but found: {scoped_configs}")
+    for scoped_config in scoped_configs:
+        bits = scoped_config.get("bits", 8)
+        if bits not in [2, 3, 4, 8]:
+            raise ValueError(f"Only support quantization to [2,3,4,8] bits but found {bits}")
+        group_size = scoped_config.get("group_size")
+        if group_size is not None and group_size != -1 and group_size <= 0:
+            raise ValueError(f"`group_size` must be greater than 0 or equal to -1, but found {group_size}")
     try:
         _get_scoped_config_instances(scoped_configs)
     except Exception as e:
