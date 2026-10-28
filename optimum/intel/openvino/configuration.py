@@ -556,6 +556,18 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
             "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
         },
     },
+    # wwb visual-text similarity on GPU (24 images, answers without thinking) against the fp32 model: 0.822 vs 0.746 with
+    # the generic int4 config (group size 128, ratio 1.0); int8 reaches 0.930.
+    "openbmb/MiniCPM-OCR-1.0": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 0.8,
+        "dataset": "textvqa",
+        "num_samples": 32,
+        "quant_method": OVQuantizationMethod.AWQ,
+        "scale_estimation": True,
+    },
     "openbmb/MiniCPM5-2B": {
         "bits": 4,
         "sym": False,

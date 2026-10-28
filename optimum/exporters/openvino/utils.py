@@ -515,6 +515,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "maira2",
     "minicpmv",
     "minicpmv4_7",
+    "minicpm_ocr",
     "phi3_v",
     "qwen2_vl",
     "qwen2_5_vl",
@@ -551,6 +552,15 @@ SSM_MODELS = [
     "qwen3_5_text",
     "qwen3_5_moe_text",
 ]
+
+# GraniteMoeHybrid's `config.layer_types` used "mamba"/"attention" for transformers < 5.13 and later
+# renamed to "linear_attention"/"full_attention" in v5.13 https://github.com/huggingface/transformers/pull/46738
+if is_transformers_version(">=", "5.13"):
+    GRANITEMOEHYBRID_MAMBA_LAYER_TYPE = "linear_attention"
+    GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE = "full_attention"
+else:
+    GRANITEMOEHYBRID_MAMBA_LAYER_TYPE = "mamba"
+    GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE = "attention"
 
 # All transformers, diffusers, timm and sentence transformers models that were supported via optimum-onnx OnnxConfigs for which support is now removed
 ONNX_SUPPORTED_ARCHITECTURES = {

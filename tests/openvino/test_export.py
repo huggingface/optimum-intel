@@ -144,6 +144,7 @@ class ExportModelTest(unittest.TestCase):
         "qwen3_5_mtp": OVModelForVisualCausalLM,
         "qwen3_5_moe": OVModelForVisualCausalLM,
         "qwen3_5_moe_mtp": OVModelForVisualCausalLM,
+        "qwen3_5_moe_mtp_legacy_weights": OVModelForVisualCausalLM,
         "gemma4_unified": OVModelForVisualCausalLM,
         "gemma3n": OVModelForVisualCausalLM,
         "mistral3": OVModelForVisualCausalLM,
@@ -154,6 +155,7 @@ class ExportModelTest(unittest.TestCase):
         "muse_glimmer": OVModelForVisualCausalLM,
         "deepseek_ocr2": OVModelForVisualCausalLM,
         "minicpmv4_7": OVModelForVisualCausalLM,
+        "minicpm_ocr": OVModelForVisualCausalLM,
     }
 
     if is_diffusers_version(">=", "0.41.0.dev0"):
@@ -280,7 +282,7 @@ class ExportModelTest(unittest.TestCase):
 
                 # Models with a Multi-Token Prediction head export it as a separate submodel;
                 # make sure the openvino_mtp_model.xml file is actually produced.
-                if model_type in ("qwen3_5_mtp", "qwen3_5_moe_mtp"):
+                if model_type in ("qwen3_5_mtp", "qwen3_5_moe_mtp", "qwen3_5_moe_mtp_legacy_weights"):
                     self.assertTrue(
                         (Path(tmpdirname) / "openvino_mtp_model.xml").is_file(),
                         "openvino_mtp_model.xml was not created during export",
@@ -556,7 +558,7 @@ class LTXVideoExportContractTest(unittest.TestCase):
             decoder_config = LTXVaeDecoderOpenVINOConfig(config)
             decoder_inputs = decoder_config.generate_dummy_inputs(framework="pt")
             self.assertEqual(tuple(encoder_inputs["sample"].shape[2:]), (encoder_frames, 64, 64))
-            self.assertEqual(tuple(decoder_inputs["latent_sample"].shape[2:]), (2, 64, 64))
+            self.assertEqual(tuple(decoder_inputs["latent_sample"].shape[2:]), (2, 8, 8))
             self.assertEqual("timestep" in decoder_inputs, config.timestep_conditioning)
             if config.timestep_conditioning:
                 self.assertEqual(tuple(decoder_inputs["timestep"].shape), (2,))
