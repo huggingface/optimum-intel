@@ -1734,3 +1734,19 @@ class OVCLIExportTestCase(unittest.TestCase):
             model = eval(_HEAD_TO_AUTOMODELS["stable-diffusion"]).from_pretrained(tmpdir, compile=False)
             for component in ["text_encoder", "tokenizer", "unet", "vae_encoder", "vae_decoder"]:
                 self.assertIsNotNone(getattr(model, component))
+
+    @parameterized.expand(
+        [("qwen3_dflash", "dflash_mode"), ("qwen3_deepspec_dflash", "dflash_mode"), ("qwen3_eagle3", "eagle3_mode")]
+    )
+    def test_exporters_cli_draft_model_without_trust_remote_code(self, model_type, rt_info_key):
+        # draft models are implemented in optimum, so exporting them must not require --trust-remote-code
+        import openvino as ov
+
+        with TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task text-generation-with-past {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            model = ov.Core().read_model(Path(tmpdir) / "openvino_model.xml")
+            self.assertTrue(model.has_rt_info([rt_info_key]))

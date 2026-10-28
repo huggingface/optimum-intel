@@ -394,6 +394,7 @@ def main_export(
     do_quant_patching = False
     patch_16bit = False
     loading_kwargs = model_loading_kwargs or {}
+    draft_model_class_name = None
     if variant is not None:
         loading_kwargs["variant"] = variant
     dtype = loading_kwargs.get("torch_dtype", None)
@@ -420,6 +421,7 @@ def main_export(
             draft_classes = _CUSTOM_DRAFT_MODEL_MAP.get(archs[0])
             if draft_classes is not None:
                 loading_kwargs["config"] = update_config_for_custom_draft_model(config, *draft_classes)
+                draft_model_class_name = draft_classes[1]
 
         # mxfp4 quantized model will be dequantized to bf16
         if quant_method == "mxfp4" and is_transformers_version(">=", "4.55"):
@@ -668,6 +670,22 @@ def main_export(
                 cache_dir=cache_dir,
                 token=token,
                 revision=revision,
+                local_files_only=local_files_only,
+                force_download=force_download,
+                **loading_kwargs,
+            )
+        elif draft_model_class_name is not None:
+            # Load the draft class from model_patcher directly: transformers only follows `config.auto_map` with
+            # `trust_remote_code=True` (otherwise the checkpoint silently loads as its base architecture), and the
+            # remote-code path makes transformers require every package imported in model_patcher.py.
+            from optimum.exporters.openvino import model_patcher
+
+            model = getattr(model_patcher, draft_model_class_name).from_pretrained(
+                model_name_or_path,
+                subfolder=subfolder,
+                revision=revision,
+                cache_dir=cache_dir,
+                token=token,
                 local_files_only=local_files_only,
                 force_download=force_download,
                 **loading_kwargs,
