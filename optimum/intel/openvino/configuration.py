@@ -572,8 +572,6 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
                 # MLP weights are compressed to int8
                 "scoped_configs": [{"patterns": [".*mlp\\.(gate_proj|up_proj|down_proj).*"], "bits": 8, "sym": False}],
             },
-            "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
-            "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
         },
     },
     "openbmb/MiniCPM5-2B": {
