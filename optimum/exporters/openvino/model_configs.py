@@ -8045,15 +8045,16 @@ class Qwen4ExpTextOpenVINOConfig(Qwen3_5TextOpenVINOConfig):
             inputs_or_outputs[f"{cache_name_prefix}.key.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
             inputs_or_outputs[f"{cache_name_prefix}.value.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
         for i in range(num_qsa_layers):
-            # raw (not normalized, not rotated) QSA index keys of all tokens
-            inputs_or_outputs[f"{cache_name_prefix}.index_key.{i}"] = {0: "batch_size", 1: decoder_sequence_name}
+            # raw (not normalized, not rotated) QSA index keys of the tokens of the incomplete block, fixed size
+            inputs_or_outputs[f"{cache_name_prefix}.incomplete_index_key.{i}"] = {0: "batch_size"}
         for i in range(num_qsa_layers):
             # block index keys of all complete blocks, computed once per block by QSAPrepare
             inputs_or_outputs[f"{cache_name_prefix}.block_index_key.{i}"] = {0: "batch_size", 1: decoder_blocks_name}
+        for i in range(num_qsa_layers):
+            # cos / sin of the first token of the incomplete block, fixed size
+            inputs_or_outputs[f"{cache_name_prefix}.incomplete_index_rope.{i}"] = {0: "batch_size"}
         for i in range(num_ple_layers):
             inputs_or_outputs[f"{cache_name_prefix}.ple_conv.{i}"] = {0: "batch_size"}
-        # M-RoPE (T, H, W) positions of all tokens
-        inputs_or_outputs[f"{cache_name_prefix}.rope_positions"] = {0: "batch_size", 1: decoder_sequence_name}
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -8109,10 +8110,11 @@ class Qwen4ExpMTPOpenVINOConfig(OpenVINOConfigWithPast):
             inputs_or_outputs[f"{prefix}.key.{i}"] = {0: "batch_size", 2: sequence_name}
             inputs_or_outputs[f"{prefix}.value.{i}"] = {0: "batch_size", 2: sequence_name}
         for i in range(num_layers):
-            inputs_or_outputs[f"{prefix}.index_key.{i}"] = {0: "batch_size", 1: sequence_name}
+            inputs_or_outputs[f"{prefix}.incomplete_index_key.{i}"] = {0: "batch_size"}
         for i in range(num_layers):
             inputs_or_outputs[f"{prefix}.block_index_key.{i}"] = {0: "batch_size", 1: blocks_name}
-        inputs_or_outputs[f"{prefix}.rope_positions"] = {0: "batch_size", 1: sequence_name}
+        for i in range(num_layers):
+            inputs_or_outputs[f"{prefix}.incomplete_index_rope.{i}"] = {0: "batch_size"}
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:

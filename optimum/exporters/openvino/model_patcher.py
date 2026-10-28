@@ -13326,22 +13326,25 @@ def _qwen4_exp_qsa_attention_forward(
     position_embeddings: Tuple[torch.Tensor, torch.Tensor],
     key_cache: torch.Tensor,
     value_cache: torch.Tensor,
-    index_key_cache: torch.Tensor,
+    incomplete_index_key_cache: torch.Tensor,
     block_index_key_cache: torch.Tensor,
+    incomplete_index_rope_cache: torch.Tensor,
     key_length: torch.Tensor,
 ):
     """
     Qwen Sparse Attention with QSAPrepare -> SparseAttentionIndexer -> SparseAttention.
-    `position_embeddings` are the cos / sin of all key tokens (past and current), [N, S, Dr].
-    `key_length` [N] is the number of valid (non-padding) key tokens of every sequence, the sequences are aligned to
-    the right (left padding).
-    `block_index_key_cache` holds the block index keys of the past complete blocks: QSAPrepare computes only the
-    blocks completed by the current tokens.
+    `position_embeddings` are the cos / sin of the current tokens, [N, L, Dr].
+    `key_length` [N] is the number of valid (non-padding) key tokens of every sequence, past and current; the
+    sequences are aligned to the right (left padding).
+    `block_index_key_cache` holds the block index keys of the past complete blocks, `incomplete_index_key_cache`
+    [N, key_block_size - 1, Di] the raw index keys of the past tokens of the incomplete block and
+    `incomplete_index_rope_cache` [N, 2 * Dr] the cos / sin of its first token: QSAPrepare computes only the blocks
+    completed by the current tokens and no index state grows with the past tokens except the block keys.
     """
     indexer = self.indexer
     batch_size, seq_len, _ = hidden_states.shape
-    cos, sin = position_embeddings
-    current_cos, current_sin = cos[:, -seq_len:], sin[:, -seq_len:]
+    current_cos, current_sin = position_embeddings
+    rotary_dim = int(self.head_dim * self.config.rope_parameters.get("partial_rotary_factor", 1.0))
 
     # index query: RMS + RoPE by regular graph operations; raw index keys: appended to the state
     qk = indexer.index_qk_proj(hidden_states)
@@ -13350,17 +13353,31 @@ def _qwen4_exp_qsa_attention_forward(
         [indexer.index_n_heads * indexer.index_head_dim, indexer.index_kv_heads * indexer.index_head_dim],
         dim=-1,
     )
+    # RMS on [N, L, Hi, Di], then the RoPE on [N, Hi, L, Di]: the transpose is absorbed into the fused RoPE, which
+    # feeds SparseAttentionIndexer directly, as the CPU plugin fuses RMS + RoPE + QSAPrepare + SparseAttentionIndexer
     index_query = indexer.q_layernorm(index_query.view(batch_size, seq_len, -1, indexer.index_head_dim))
-    index_query = apply_rotary_pos_emb_qwen4_exp(index_query, current_cos, current_sin, unsqueeze_dim=2)
-    index_query = index_query.transpose(1, 2)  # [N, Hi, L, Di]
-    raw_index_keys = torch.cat([index_key_cache, raw_index_keys.view(batch_size, seq_len, -1)], dim=1)  # [N, S, Di]
+    index_query = apply_rotary_pos_emb_qwen4_exp(
+        index_query.transpose(1, 2), current_cos, current_sin, rotary_dim, indexer.index_head_dim
+    )
+    raw_index_keys = raw_index_keys.view(batch_size, seq_len, -1)  # [N, L, Di]
 
     # k_layernorm scales by (1 + w)
-    block_index_keys = self.qsa_prepare(
-        raw_index_keys, block_index_key_cache, key_length, cos, sin, 1.0 + indexer.k_layernorm.weight
+    block_index_keys, incomplete_index_keys, incomplete_index_rope = self.qsa_prepare.unpack(
+        self.qsa_prepare(
+            raw_index_keys,
+            block_index_key_cache,
+            key_length,
+            current_cos,
+            current_sin,
+            1.0 + indexer.k_layernorm.weight,
+            incomplete_index_key_cache,
+            incomplete_index_rope_cache,
+        ),
+        raw_index_keys,
+        current_cos,
     )
     block_indices, block_count = self.sparse_attention_indexer.unpack(
-        self.sparse_attention_indexer(index_query, block_index_keys, key_length)
+        self.sparse_attention_indexer(index_query, block_index_keys, key_length), index_query
     )
 
     input_shape = hidden_states.shape[:-1]
@@ -13370,15 +13387,15 @@ def _qwen4_exp_qsa_attention_forward(
     query_states = self.q_norm(query_states.view(hidden_shape)).transpose(1, 2)
     key_states = self.k_norm(self.k_proj(hidden_states).view(hidden_shape)).transpose(1, 2)
     value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
-    query_states = apply_rotary_pos_emb_qwen4_exp(query_states, current_cos, current_sin)
-    key_states = apply_rotary_pos_emb_qwen4_exp(key_states, current_cos, current_sin)
+    query_states = apply_rotary_pos_emb_qwen4_exp(query_states, current_cos, current_sin, rotary_dim, self.head_dim)
+    key_states = apply_rotary_pos_emb_qwen4_exp(key_states, current_cos, current_sin, rotary_dim, self.head_dim)
     key_states = torch.cat([key_cache, key_states], dim=2)
     value_states = torch.cat([value_cache, value_states], dim=2)
 
     attn_output = self.sparse_attention(query_states, key_states, value_states, block_indices, block_count, key_length)
     attn_output = attn_output.transpose(1, 2).reshape(*input_shape, -1)
     attn_output = self.o_proj(attn_output * torch.sigmoid(gate))
-    return attn_output, key_states, value_states, raw_index_keys, block_index_keys
+    return attn_output, key_states, value_states, incomplete_index_keys, block_index_keys, incomplete_index_rope
 
 
 def _qwen4_exp_rotary_embeddings(rotary_emb, positions: torch.Tensor):
@@ -13397,14 +13414,16 @@ def _qwen4_exp_rotary_embeddings(rotary_emb, positions: torch.Tensor):
     return emb.cos() * rotary_emb.attention_scaling, emb.sin() * rotary_emb.attention_scaling
 
 
-def apply_rotary_pos_emb_qwen4_exp(x, cos, sin, unsqueeze_dim=1):
-    # rotate-half RoPE on the first `cos.shape[-1]` dimensions (partial rotary)
+def apply_rotary_pos_emb_qwen4_exp(x, cos, sin, rotary_dim: int, head_dim: int, unsqueeze_dim=1):
+    # rotate-half RoPE on the first `rotary_dim` of `head_dim` dimensions (partial rotary); both are static ints, as
+    # under tracing the shapes are tensors
     cos, sin = cos.unsqueeze(unsqueeze_dim), sin.unsqueeze(unsqueeze_dim)
-    rotary_dim = cos.shape[-1]
-    x_rope, x_pass = x[..., :rotary_dim], x[..., rotary_dim:]
+    # no slicing for a full rotation: a full-width slice stays between the RoPE and its input and breaks the fusions
+    full_rotation = rotary_dim == head_dim
+    x_rope, x_pass = (x, None) if full_rotation else (x[..., :rotary_dim], x[..., rotary_dim:])
     x1, x2 = x_rope[..., : rotary_dim // 2], x_rope[..., rotary_dim // 2 :]
     x_rope = x_rope * cos + torch.cat((-x2, x1), dim=-1) * sin
-    return torch.cat([x_rope, x_pass], dim=-1)
+    return x_rope if full_rotation else torch.cat([x_rope, x_pass], dim=-1)
 
 
 def _qwen4_exp_ple_forward(
@@ -13490,8 +13509,8 @@ class Qwen4ExpLanguageModelPatcher(OVDecoderModelPatcher):
         )
 
         # `cache_params` layout (see Qwen4ExpTextOpenVINOConfig.add_past_key_values):
-        # [conv, ssm] per linear layer, [key, value] per QSA layer, index_key per QSA layer, block_index_key per QSA
-        # layer, ple_conv per PLE layer, rope_positions
+        # [conv, ssm] per linear layer, [key, value] per QSA layer, incomplete_index_key per QSA layer, block_index_key
+        # per QSA layer, incomplete_index_rope per QSA layer, ple_conv per PLE layer
         def patched_forward(
             inputs_embeds,
             attention_mask=None,
@@ -13507,29 +13526,28 @@ class Qwen4ExpLanguageModelPatcher(OVDecoderModelPatcher):
             key_caches = [cache_params[offset + 2 * i] for i in range(num_qsa)]
             value_caches = [cache_params[offset + 2 * i + 1] for i in range(num_qsa)]
             offset += 2 * num_qsa
-            index_key_caches = cache_params[offset : offset + num_qsa]
+            incomplete_index_key_caches = cache_params[offset : offset + num_qsa]
             offset += num_qsa
             block_index_key_caches = cache_params[offset : offset + num_qsa]
             offset += num_qsa
+            incomplete_index_rope_caches = cache_params[offset : offset + num_qsa]
+            offset += num_qsa
             ple_conv_states = cache_params[offset : offset + num_ple]
-            past_rope_positions = cache_params[offset + num_ple]  # [N, past_len, 3], f32
 
             seq_len = inputs_embeds.shape[1]
             linear_cache = _Qwen4ExpLinearAttentionCache(linear_attn_mapping, conv_states, recurrent_states)
 
-            # M-RoPE cos / sin of all key tokens: past positions from the state + the current positions (T, H, W rows)
-            # (the positions state is f32: exact below 2^24, and i64 states are not supported by all plugins)
+            # M-RoPE cos / sin of the current tokens (T, H, W rows of the positions); QSAPrepare keeps the cos / sin of
+            # the first token of the incomplete block of every QSA layer as a state, so no past position is needed
             mrope_positions = position_ids[1:] if position_ids.shape[0] == 4 else position_ids
-            mrope_positions = mrope_positions.permute(1, 2, 0).to(past_rope_positions.dtype)
-            rope_positions = torch.cat([past_rope_positions, mrope_positions], dim=1)  # [N, S, 3]
-            position_embeddings = _qwen4_exp_rotary_embeddings(text_model.rotary_emb, rope_positions)
+            position_embeddings = _qwen4_exp_rotary_embeddings(text_model.rotary_emb, mrope_positions.permute(1, 2, 0))
             conv_mask = attention_mask[:, -seq_len:]
             # valid key tokens of every sequence for QSA: the sequences are aligned to the right (left padding)
             key_length = attention_mask.sum(dim=-1)
 
             hidden_states = inputs_embeds.repeat(1, 1, text_config.hc_count)
             present_keys, present_values, present_index_keys, present_block_index_keys = [], [], [], []
-            present_ple_conv = []
+            present_index_rope, present_ple_conv = [], []
             for layer_idx, decoder_layer in enumerate(text_model.layers):
                 if decoder_layer.ple is not None:
                     ple_idx = len(present_ple_conv)
@@ -13556,13 +13574,19 @@ class Qwen4ExpLanguageModelPatcher(OVDecoderModelPatcher):
                         position_embeddings,
                         key_caches[qsa_idx],
                         value_caches[qsa_idx],
-                        index_key_caches[qsa_idx],
+                        incomplete_index_key_caches[qsa_idx],
                         block_index_key_caches[qsa_idx],
+                        incomplete_index_rope_caches[qsa_idx],
                         key_length,
                     )
-                    for present, cache in zip(
-                        (present_keys, present_values, present_index_keys, present_block_index_keys), qsa_caches
-                    ):
+                    presents = (
+                        present_keys,
+                        present_values,
+                        present_index_keys,
+                        present_block_index_keys,
+                        present_index_rope,
+                    )
+                    for present, cache in zip(presents, qsa_caches):
                         present.append(cache)
                 injection = hidden_states.unsqueeze(-2) * injection_weights.unsqueeze(-1)
                 hidden_states = hyper_input + injection.flatten(-2)
@@ -13580,8 +13604,7 @@ class Qwen4ExpLanguageModelPatcher(OVDecoderModelPatcher):
                 present_key_values += [linear_cache.conv_states[idx], linear_cache.recurrent_states[idx]]
             for key_cache, value_cache in zip(present_keys, present_values):
                 present_key_values += [key_cache, value_cache]
-            present_key_values += present_index_keys + present_block_index_keys + present_ple_conv
-            present_key_values.append(rope_positions)
+            present_key_values += present_index_keys + present_block_index_keys + present_index_rope + present_ple_conv
             return {"logits": logits, "present_key_values": present_key_values}
 
         self.patched_forward = patched_forward
@@ -13725,27 +13748,25 @@ class Qwen4ExpMTPModule(nn.Module):
         return mtp_module
 
     def forward(self, hidden_states, inputs_embeds, attention_mask=None, position_ids=None, cache_params=None):
-        # `cache_params` layout (see Qwen4ExpMTPOpenVINOConfig): [key, value] per layer, index_key per layer,
-        # block_index_key per layer, rope_positions
+        # `cache_params` layout (see Qwen4ExpMTPOpenVINOConfig): [key, value] per layer, incomplete_index_key per
+        # layer, block_index_key per layer, incomplete_index_rope per layer
         num_layers = len(self.layers)
         key_caches = [cache_params[2 * i] for i in range(num_layers)]
         value_caches = [cache_params[2 * i + 1] for i in range(num_layers)]
-        index_key_caches = cache_params[2 * num_layers : 3 * num_layers]
+        incomplete_index_key_caches = cache_params[2 * num_layers : 3 * num_layers]
         block_index_key_caches = cache_params[3 * num_layers : 4 * num_layers]
-        past_rope_positions = cache_params[4 * num_layers]  # [N, past_len, 3], f32
+        incomplete_index_rope_caches = cache_params[4 * num_layers : 5 * num_layers]
 
         embeds = self.fc_embedding(self.pre_fc_norm_embedding(inputs_embeds))
         streams = self.pre_fc_norm_hidden(hidden_states).unflatten(-1, (self.hc_count, self.hidden_size))
         hidden_states = (self.fc_hidden(streams) + embeds.unsqueeze(-2)).flatten(-2)
 
-        # M-RoPE cos / sin of all key tokens, as in the language model
+        # M-RoPE cos / sin of the current tokens, as in the language model
         mrope_positions = position_ids[1:] if position_ids.shape[0] == 4 else position_ids
-        mrope_positions = mrope_positions.permute(1, 2, 0).to(past_rope_positions.dtype)
-        rope_positions = torch.cat([past_rope_positions, mrope_positions], dim=1)  # [N, S, 3]
-        position_embeddings = _qwen4_exp_rotary_embeddings(self.rotary_emb, rope_positions)
+        position_embeddings = _qwen4_exp_rotary_embeddings(self.rotary_emb, mrope_positions.permute(1, 2, 0))
         key_length = attention_mask.sum(dim=-1)
 
-        present = [[] for _ in range(4)]
+        present = [[] for _ in range(5)]
         for idx, decoder_layer in enumerate(self.layers):
             hidden_states, hyper_input, injection_weights = decoder_layer.attn_hyper_connection(hidden_states)
             hidden_states, *qsa_caches = _qwen4_exp_qsa_attention_forward(
@@ -13754,8 +13775,9 @@ class Qwen4ExpMTPModule(nn.Module):
                 position_embeddings,
                 key_caches[idx],
                 value_caches[idx],
-                index_key_caches[idx],
+                incomplete_index_key_caches[idx],
                 block_index_key_caches[idx],
+                incomplete_index_rope_caches[idx],
                 key_length,
             )
             for cache_list, cache in zip(present, qsa_caches):
@@ -13767,11 +13789,11 @@ class Qwen4ExpMTPModule(nn.Module):
             injection = hidden_states.unsqueeze(-2) * injection_weights.unsqueeze(-1)
             hidden_states = hyper_input + injection.flatten(-2)
 
-        present_keys, present_values, present_index_keys, present_block_index_keys = present
+        present_keys, present_values, present_index_keys, present_block_index_keys, present_index_rope = present
         present_key_values = []
         for key_cache, value_cache in zip(present_keys, present_values):
             present_key_values += [key_cache, value_cache]
-        present_key_values += present_index_keys + present_block_index_keys + [rope_positions]
+        present_key_values += present_index_keys + present_block_index_keys + present_index_rope
         return {
             "last_hidden_state": self.hyper_connection_mixer(hidden_states),
             "next_hidden_states": hidden_states,

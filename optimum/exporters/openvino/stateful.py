@@ -300,14 +300,14 @@ def patch_stateful_hybrid_ssm(ov_model: ov.Model, empty_growing_states: bool = F
         return kv_names, ssm_names, other_tensors
 
     # besides KV-cache, conv and SSM states, hybrid models may keep other per-layer states:
-    # QSA raw and block index keys, PLE short conv states and M-RoPE positions of past tokens (qwen4_exp)
+    # QSA block index keys and incomplete-block raw index keys and RoPE, PLE short conv states (qwen4_exp)
     ssm_prefix_input_names = [
         "cache_params.past.ssm",
         "cache_params.past.conv",
-        "cache_params.past.index_key",
+        "cache_params.past.incomplete_index_key",
         "cache_params.past.block_index_key",
+        "cache_params.past.incomplete_index_rope",
         "cache_params.past.ple_conv",
-        "cache_params.past.rope_positions",
     ]
     kv_prefix_input_names = ["cache_params.past.key", "cache_params.past.value"]
     kv_input_names, ssm_input_names, not_cache_inputs = get_kv_ssm_tensor_names(
@@ -318,10 +318,10 @@ def patch_stateful_hybrid_ssm(ov_model: ov.Model, empty_growing_states: bool = F
     ssm_prefix_output_names = [
         "cache_params.present.ssm",
         "cache_params.present.conv",
-        "cache_params.present.index_key",
+        "cache_params.present.incomplete_index_key",
         "cache_params.present.block_index_key",
+        "cache_params.present.incomplete_index_rope",
         "cache_params.present.ple_conv",
-        "cache_params.present.rope_positions",
     ]
     kv_prefix_output_names = ["cache_params.present.key", "cache_params.present.value"]
     kv_output_names, ssm_output_names, _ = get_kv_ssm_tensor_names(

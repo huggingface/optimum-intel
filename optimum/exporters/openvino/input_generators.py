@@ -3015,6 +3015,13 @@ class DummyQwen4ExpNGramInputGenerator(DummyTextInputGenerator):
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
+def _qwen4_exp_rotary_dim(config, head_dim: int) -> int:
+    # number of rotated dimensions of the (M-)RoPE of qwen4_exp: `partial_rotary_factor` of the head
+    rope_parameters = getattr(config, "rope_parameters", None) or {}
+    factor = getattr(config, "partial_rotary_factor", None) or rope_parameters.get("partial_rotary_factor", 1.0)
+    return int(head_dim * factor)
+
+
 class Qwen4ExpDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     """
     Dummy `cache_params` of the Qwen3.8-Flash-Next language model, in the order of
@@ -3071,18 +3078,19 @@ class Qwen4ExpDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         for _ in range(num_qsa):
             kv_shape = (self.batch_size, config.num_key_value_heads, self.sequence_length, head_dim)
             cache_params += [random_float(kv_shape), random_float(kv_shape)]
+        ratio = config.indexer_compress_ratio
         for _ in range(num_qsa):
-            cache_params.append(random_float((self.batch_size, self.sequence_length, config.indexer_head_dim)))
-        num_blocks = self.sequence_length // config.indexer_compress_ratio
+            cache_params.append(random_float((self.batch_size, ratio - 1, config.indexer_head_dim)))
+        num_blocks = self.sequence_length // ratio
         for _ in range(num_qsa):
             cache_params.append(random_float((self.batch_size, num_blocks, config.indexer_head_dim)))
+        for _ in range(num_qsa):
+            cache_params.append(random_float((self.batch_size, 2 * _qwen4_exp_rotary_dim(config, head_dim))))
         ple_conv_state_len = (config.ple_conv_kernel_size - 1) * config.ngram_size
         for _ in range(num_ple):
             cache_params.append(
                 random_float((self.batch_size, config.hc_count * config.hidden_size, ple_conv_state_len))
             )
-        rope_positions = torch.arange(self.sequence_length, dtype=DTYPE_MAPPER.pt(float_dtype))
-        cache_params.append(rope_positions.view(1, -1, 1).expand(self.batch_size, -1, 3).contiguous())
         return cache_params
 
 
@@ -3091,7 +3099,8 @@ class Qwen4ExpMTPDummyInputGenerator(DummyInputGenerator):
     Dummy inputs of the Qwen3.8-Flash-Next MTP head: the hyper-connection streams of the main model `hidden_states`
     [batch, sequence, hc_count * hidden], `inputs_embeds`, `attention_mask` over the past and the current tokens,
     4D `position_ids` and `cache_params` in the order of `Qwen4ExpMTPOpenVINOConfig.add_past_key_values`:
-    [key, value] per layer, the raw index keys per layer, the block index keys per layer, the M-RoPE positions.
+    [key, value] per layer, the raw index keys of the incomplete block per layer, the block index keys per layer,
+    the cos / sin of the first token of the incomplete block per layer.
     """
 
     SUPPORTED_INPUT_NAMES = ("hidden_states", "inputs_embeds", "attention_mask", "position_ids", "cache_params")
@@ -3136,10 +3145,11 @@ class Qwen4ExpMTPDummyInputGenerator(DummyInputGenerator):
         for _ in range(num_layers):
             kv_shape = (batch, config.num_key_value_heads, past, head_dim)
             cache_params += [random_float(kv_shape), random_float(kv_shape)]
+        ratio = config.indexer_compress_ratio
         for _ in range(num_layers):
-            cache_params.append(random_float((batch, past, config.indexer_head_dim)))
+            cache_params.append(random_float((batch, ratio - 1, config.indexer_head_dim)))
         for _ in range(num_layers):
-            cache_params.append(random_float((batch, past // config.indexer_compress_ratio, config.indexer_head_dim)))
-        rope_positions = torch.arange(past, dtype=DTYPE_MAPPER.pt(float_dtype))
-        cache_params.append(rope_positions.view(1, -1, 1).expand(batch, -1, 3).contiguous())
+            cache_params.append(random_float((batch, past // ratio, config.indexer_head_dim)))
+        for _ in range(num_layers):
+            cache_params.append(random_float((batch, 2 * _qwen4_exp_rotary_dim(config, head_dim))))
         return cache_params

@@ -276,17 +276,21 @@ def convert_recurrent_selective_ssm_cell(context):
 # ----------------------------------------------------------------------------------------------------------------------
 # Qwen Sparse Attention (QSA) and n-gram hashing operations.
 #
-# The torch.nn.Module classes below are analogues of the internal OpenVINO operations QSAPrepare, SparseAttentionIndexer,
-# SparseAttention and NGramHashFunction (see docs/articles_en/documentation/openvino-ir-format/operation-sets/
-# operation-specs/internal in the OpenVINO repository). Each module:
+# The torch.nn.Module classes below are analogues of the OpenVINO operations QSAPrepare-17, SparseAttentionIndexer-17 and
+# SparseAttention-17 (docs/articles_en/documentation/openvino-ir-format/operation-sets/operation-specs/sequence in the
+# OpenVINO repository), and of the n-gram hash NGramHashFunction, which has no OpenVINO operation. Each module:
 #   * keeps the operation attributes as Python attributes,
 #   * implements the reference semantics of the operation in `forward` (used while the model is traced),
 #   * provides `openvino_extensions()` that returns the `ModuleExtension` replacing the module by a single operation
 #     in the traced graph and the `ConversionExtension` that converts this operation with the attributes of the
-#     module instance.
+#     module instance: into the public operation of `openvino.opset17` if the installed OpenVINO has it, otherwise
+#     into its decomposition into regular operations.
 #
-# The OpenVINO PyTorch frontend supports a single output per ModuleExtension, so the operations with two outputs
-# (SparseAttentionIndexer, NGramHashFunction) return them packed into one tensor; `unpack()` restores the outputs of the spec.
+# The OpenVINO PyTorch frontend supports a single output per ModuleExtension, so the operations with several outputs
+# (QSAPrepare, SparseAttentionIndexer) return them packed into one tensor; `unpack()` restores the outputs of the spec
+# through `PackedOutput` modules, whose conversion returns the outputs of the operation itself: the packing does not
+# appear in the converted graph, and the public operations stay directly connected. NGramHashFunction is always
+# decomposed and unpacked by slicing.
 # ----------------------------------------------------------------------------------------------------------------------
 
 
@@ -307,6 +311,35 @@ def _vec(*values):
     return ops.concat(
         [ops.unsqueeze(v if isinstance(v, ov.Node) else _const_i64(v), _const_i64(0)) for v in values], 0
     )
+
+
+def _public_op(name: str):
+    """`openvino.opset17.<name>` if the installed OpenVINO has this public operation, None otherwise."""
+    try:
+        import openvino.opset17 as opset17
+    except ImportError:
+        return None
+    return getattr(opset17, name, None)
+
+
+# outputs of the operations packed by `_pack_outputs`, by the id kept in the rt_info of the packing Concat
+_PACKED_OUTPUTS = {}
+_PACKED_OUTPUTS_KEY = "optimum_packed_outputs"
+_packed_outputs_ids = itertools.count()
+
+
+def _pack_outputs(outputs, like):
+    """
+    Packs the outputs of an operation into one 1D tensor of the type of `like`, the single output of a ModuleExtension,
+    and remembers them: the conversion of `PackedOutput` returns them directly, so the packing Concat is left without
+    consumers and is not a part of the converted model.
+    """
+    flat = _const_i64([-1])
+    pack = ops.concat([ops.reshape(ops.convert_like(output, like), flat, False) for output in outputs], 0)
+    key = next(_packed_outputs_ids)
+    pack.get_rt_info()[_PACKED_OUTPUTS_KEY] = key
+    _PACKED_OUTPUTS[key] = [output.output(0) if isinstance(output, ov.Node) else output for output in outputs]
+    return pack.output(0)
 
 
 class _OVOperationModule(torch.nn.Module):
@@ -333,6 +366,40 @@ class _OVOperationModule(torch.nn.Module):
         return ModuleExtension(self, self._op_name), ConversionExtension(self._op_name, convert_fn)
 
 
+class PackedOutput(_OVOperationModule):
+    """
+    Output `index` of an operation module whose outputs are packed into one tensor (see `_pack_outputs`). While traced,
+    it is the slice of the packed tensor given by `references`, tensors with the shapes of all the packed outputs in
+    the order of the packing (only tensors: ints derived from traced shapes cannot be passed to a ModuleExtension);
+    its conversion returns the output of the operation itself, so the references end up unused.
+    """
+
+    _OP_TYPE = "PackedOutput"
+
+    def __init__(self, index: int):
+        super().__init__()
+        self.index = index
+
+    def forward(self, packed, *references):
+        start = sum(reference.numel() for reference in references[: self.index])
+        reference = references[self.index]
+        return packed[start : start + reference.numel()].reshape(reference.shape)
+
+    def _conversion_attributes(self):
+        return {"index": self.index}
+
+    @staticmethod
+    def _convert(context, index):
+        pack = context.get_input(0).get_node()
+        key = pack.get_rt_info()[_PACKED_OUTPUTS_KEY].astype(int)
+        return [_PACKED_OUTPUTS[key][index]]
+
+
+def _unpack_outputs(selectors, packed, references):
+    """The outputs packed in this order into `packed`, shaped like the tensors `references`."""
+    return [selector(packed, *references) for selector in selectors]
+
+
 def _rotate_half_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
     rotary_dim = cos.shape[-1]
     x_rope, x_pass = x[..., :rotary_dim], x[..., rotary_dim:]
@@ -351,57 +418,126 @@ class QSAPrepare(_OVOperationModule):
     """
     Analogue of the QSAPrepare operation: one block index key per complete block of `key_block_size` raw index keys,
     obtained by mean-pooling (f32), RMS normalization with `k_norm_weight` and rotate-half RoPE at the first token
-    of the block. The keys of the blocks computed by the previous calls are taken from `past_block_index_keys`, only
-    the blocks completed since then are computed.
+    of the block. It takes the raw index keys and the RoPE of the new tokens only: the keys of the blocks computed by
+    the previous calls come from `past_block_index_keys`, and the raw keys and the RoPE row of the past tokens of the
+    incomplete block from `past_incomplete_raw_keys` / `past_incomplete_rope`; only the blocks completed by the new
+    tokens are computed.
 
-    Batches with padding: sequence `n` has `key_length[n]` valid key tokens, the last ones of the `S` key positions
-    (left padding). Its blocks start at its first valid token; the rows after its last complete block are zero.
+    Batches with padding: sequence `n` has `key_length[n]` valid key tokens, past and current, the last ones of its
+    positions (left padding); `max(0, key_length[n] - L)` of them come from the previous calls. Its blocks start at its
+    first valid token; the rows after its last complete block are zero.
 
-    Inputs: raw_index_keys [N, S, Di], past_block_index_keys [N, Bp, Di], key_length [N],
-            rope_cos [N, S, Dr], rope_sin [N, S, Dr], k_norm_weight [Di].
-    Output: block_index_keys [N, S // key_block_size, Di].
-    An empty `k_norm_weight` disables the normalization, empty `rope_cos` / `rope_sin` disable the rotation.
+    Inputs: raw_index_keys [N, L, Di], past_block_index_keys [N, Bp, Di], key_length [N], rope_cos [N, L, Dr],
+            rope_sin [N, L, Dr], k_norm_weight [Di], past_incomplete_raw_keys [N, key_block_size - 1, Di],
+            past_incomplete_rope [N, 2 * Dr].
+    Outputs: block_index_keys [N, B, Di] (B = max(key_length // key_block_size)), incomplete_raw_keys
+             [N, key_block_size - 1, Di], incomplete_rope [N, 2 * Dr], returned packed, see `unpack()`.
+    An empty `k_norm_weight` disables the normalization, empty `rope_cos` / `rope_sin` / `past_incomplete_rope`
+    disable the rotation.
     """
 
     _OP_TYPE = "QSAPrepare"
 
     def __init__(self, key_block_size: int, epsilon: float = 1e-6):
         super().__init__()
+        if key_block_size < 2:
+            raise ValueError("QSAPrepare needs key_block_size >= 2: with single-token blocks no block key is pooled")
         self.key_block_size = key_block_size
         self.epsilon = epsilon
+        # packed order: incomplete_raw_keys, incomplete_rope, block_index_keys
+        self.packed_outputs = torch.nn.ModuleList([PackedOutput(index) for index in range(3)])
 
-    def forward(self, raw_index_keys, past_block_index_keys, key_length, rope_cos, rope_sin, k_norm_weight):
-        batch_size, num_positions, head_dim = raw_index_keys.shape
-        ratio = self.key_block_size
-        num_blocks_max, num_past_blocks = num_positions // ratio, past_block_index_keys.shape[1]
+    def unpack(self, packed: torch.Tensor, raw_index_keys: torch.Tensor, rope_cos: torch.Tensor):
+        batch_size, _, head_dim = raw_index_keys.shape
+        rope_size = 2 * rope_cos.shape[-1] if rope_cos.numel() > 0 else 0
+        num_keys, num_rope = batch_size * (self.key_block_size - 1) * head_dim, batch_size * rope_size
+        num_blocks = (packed.shape[0] - num_keys - num_rope) // (batch_size * head_dim)
+        references = [
+            raw_index_keys.new_zeros(batch_size, self.key_block_size - 1, head_dim),
+            raw_index_keys.new_zeros(batch_size, rope_size),
+            raw_index_keys.new_zeros(batch_size, num_blocks, head_dim),
+        ]
+        incomplete_raw_keys, incomplete_rope, block_index_keys = _unpack_outputs(
+            self.packed_outputs, packed, references
+        )
+        return block_index_keys, incomplete_raw_keys, incomplete_rope
+
+    def forward(
+        self,
+        raw_index_keys,
+        past_block_index_keys,
+        key_length,
+        rope_cos,
+        rope_sin,
+        k_norm_weight,
+        past_incomplete_raw_keys,
+        past_incomplete_rope,
+    ):
+        batch_size, seq_len, head_dim = raw_index_keys.shape
+        r = self.key_block_size
         key_length = key_length.reshape(-1).long().expand(batch_size)
-        padding = num_positions - key_length
-        num_blocks = key_length // ratio
-        # the previous call had at least Bp * r key positions: so many blocks of every sequence are cached
-        num_cached = torch.clamp(torch.div(num_past_blocks * ratio - padding, ratio, rounding_mode="floor"), min=0)
-        # every sequence completed at most this many blocks since then
-        num_steps = max(1, -(-(num_positions - num_past_blocks * ratio) // ratio))
+        past = (key_length - seq_len).clamp(min=0)  # valid tokens of the previous calls
+        current = key_length - past  # valid new tokens, the last rows
+        num_cached = torch.div(past, r, rounding_mode="floor")
+        pending_past = past - num_cached * r  # past tokens of the incomplete block
+        pending = pending_past + current  # tokens not yet in a block key
+        num_new = torch.div(pending, r, rounding_mode="floor")
+        rest = pending - num_new * r
+        num_blocks = int(torch.div(key_length, r, rounding_mode="floor").max())
+        num_tokens = r - 1 + seq_len
+        num_steps = -(-num_tokens // r)
+        offset = (r - 1 + seq_len - current)[:, None]
 
-        blocks = num_cached[:, None] + torch.arange(num_steps)  # [N, J]
-        first = padding[:, None] + blocks * ratio  # key position of the first token of every block
-        tokens = (first[..., None] + torch.arange(ratio)).clamp(0, num_positions - 1).reshape(batch_size, -1)
-        keys = torch.gather(raw_index_keys, 1, tokens[..., None].expand(-1, -1, head_dim))
-        keys = keys.reshape(batch_size, num_steps, ratio, head_dim).float().mean(dim=2)
+        # the pending tokens: the incomplete block of the previous calls, then the valid new tokens
+        t = torch.arange(num_steps * r)[None]
+        src = torch.where(t < pending_past[:, None], t, offset + t - pending_past[:, None]).clamp(0, num_tokens - 1)
+        tokens = torch.cat([past_incomplete_raw_keys.to(raw_index_keys.dtype), raw_index_keys], dim=1)
+        gathered = torch.gather(tokens, 1, src[..., None].expand(-1, -1, head_dim))  # [N, J * r, Di]
+        keys = gathered.reshape(batch_size, num_steps, r, head_dim).float().mean(dim=2)
         if k_norm_weight.numel() > 0:
             keys = keys * torch.rsqrt(keys.pow(2).mean(-1, keepdim=True) + self.epsilon) * k_norm_weight.float()
-        if rope_cos.numel() > 0:
-            rows = first.clamp(0, num_positions - 1)[..., None].expand(-1, -1, rope_cos.shape[-1])
-            cos = torch.gather(rope_cos.expand(batch_size, -1, -1).float(), 1, rows)
-            sin = torch.gather(rope_sin.expand(batch_size, -1, -1).float(), 1, rows)
+
+        use_rope = rope_cos.numel() > 0
+        if use_rope:
+            rotary_dim = rope_cos.shape[-1]
+            cos_table = torch.cat([past_incomplete_rope[:, None, :rotary_dim], rope_cos.expand(batch_size, -1, -1)], 1)
+            sin_table = torch.cat([past_incomplete_rope[:, None, rotary_dim:], rope_sin.expand(batch_size, -1, -1)], 1)
+
+            def rope_rows(token):  # pending token index [N, K] -> row of the [N, 1 + L, Dr] tables
+                rows = torch.where(
+                    token < pending_past[:, None], 0, 1 + offset - (r - 1) + token - pending_past[:, None]
+                )
+                rows = rows.clamp(0, seq_len)[..., None].expand(-1, -1, rotary_dim)
+                return torch.gather(cos_table.float(), 1, rows), torch.gather(sin_table.float(), 1, rows)
+
+            cos, sin = rope_rows(torch.arange(num_steps)[None] * r)
             keys = _rotate_half_rope(keys, cos, sin)
 
         # the cached blocks of every sequence, then the computed ones; one extra column absorbs invalid blocks
-        output = torch.zeros(batch_size, num_blocks_max + 1, head_dim, dtype=past_block_index_keys.dtype)
-        output[:, :num_past_blocks] = past_block_index_keys
-        output = output * (torch.arange(num_blocks_max + 1) < num_cached[:, None])[..., None]
-        targets = torch.where(blocks < num_blocks[:, None], blocks, num_blocks_max)
-        output = output.scatter(1, targets[..., None].expand(-1, -1, head_dim), keys.to(output.dtype))
-        return output[:, :num_blocks_max]
+        # (Bp <= B for the states of the previous call; the cut keeps inconsistent dummy inputs traceable)
+        filler = max(num_blocks + 1 - past_block_index_keys.shape[1], 1)
+        output = torch.cat([past_block_index_keys, past_block_index_keys.new_zeros(batch_size, filler, head_dim)], 1)
+        output = output[:, : num_blocks + 1]
+        output = output * (torch.arange(num_blocks + 1) < num_cached[:, None])[..., None]
+        steps = torch.arange(num_steps)[None]
+        targets = torch.where(steps < num_new[:, None], num_cached[:, None] + steps, num_blocks)
+        output = output.scatter(1, targets[..., None].expand(-1, -1, head_dim), keys.to(output.dtype))[:, :num_blocks]
+
+        # the incomplete block after this call
+        slots = torch.arange(r - 1)[None]
+        valid = slots < rest[:, None]
+        idx = (num_new[:, None] * r + slots).clamp(0, num_steps * r - 1)
+        incomplete_raw_keys = torch.gather(gathered, 1, idx[..., None].expand(-1, -1, head_dim))
+        incomplete_raw_keys = incomplete_raw_keys * valid[..., None]
+        if use_rope:
+            cos, sin = rope_rows(num_new[:, None] * r)
+            incomplete_rope = torch.cat([cos, sin], -1)[:, 0] * (rest > 0)[:, None]
+        else:
+            incomplete_rope = raw_index_keys.new_zeros(batch_size, 0)
+        dtype = raw_index_keys.dtype
+        return torch.cat(
+            [incomplete_raw_keys.flatten().to(dtype), incomplete_rope.flatten().to(dtype), output.flatten().to(dtype)]
+        )
 
     def _conversion_attributes(self):
         return {"key_block_size": self.key_block_size, "epsilon": self.epsilon}
@@ -409,91 +545,135 @@ class QSAPrepare(_OVOperationModule):
     @staticmethod
     def _convert(context, key_block_size, epsilon):
         raw_index_keys = context.get_input(0)
+        qsa_prepare = _public_op("qsa_prepare")
+        if qsa_prepare is not None:
+            node = qsa_prepare(
+                *[context.get_input(i) for i in range(8)], key_block_size=key_block_size, epsilon=epsilon
+            )
+            return [_pack_outputs([node.output(1), node.output(2), node.output(0)], raw_index_keys)]
+        return [_pack_outputs(QSAPrepare._decompose(context, key_block_size, epsilon), raw_index_keys)]
+
+    @staticmethod
+    def _decompose(context, key_block_size, epsilon):
+        raw_index_keys = context.get_input(0)
         past_block_index_keys = context.get_input(1)
         rope_cos = context.get_input(3)
         rope_sin = context.get_input(4)
         k_norm_weight = context.get_input(5)
+        past_incomplete_raw_keys = context.get_input(6)
+        past_incomplete_rope = context.get_input(7)
 
-        ratio = _const_i64(key_block_size)
-        zero, one = _const_i64(0), _const_i64(1)
+        r = key_block_size
+        ratio = _const_i64(r)
+        zero, one, last_axis, slice_axis = _const_i64(0), _const_i64(1), _const_i64(-1), _const_i64([-1])
         raw_shape = ops.shape_of(raw_index_keys, "i64")
-        batch_size, num_positions, head_dim = _dim(raw_shape, 0), _dim(raw_shape, 1), _dim(raw_shape, 2)
+        batch_size, seq_len, head_dim = _dim(raw_shape, 0), _dim(raw_shape, 1), _dim(raw_shape, 2)
         key_length = _sequence_key_length(context.get_input(2), batch_size)
-        num_blocks_max = ops.divide(num_positions, ratio)
         num_past_blocks = _dim(ops.shape_of(past_block_index_keys, "i64"), 1)
-        padding = ops.subtract(num_positions, key_length)  # [N]
-        num_blocks = ops.divide(key_length, ratio)  # [N]
 
-        # The previous call had at least Bp * r key positions, so at least this many blocks of every sequence are
-        # cached; every sequence completed at most J blocks since then (J >= 1 keeps the tensors non-empty).
-        past_positions = ops.multiply(num_past_blocks, ratio)
-        # (a negative numerator gives 0 with floor and truncating division alike)
-        num_cached = ops.maximum(ops.divide(ops.subtract(past_positions, padding), ratio), zero)  # [N]
-        num_steps = ops.divide(
-            ops.add(ops.subtract(num_positions, past_positions), _const_i64(key_block_size - 1)), ratio
-        )
-        num_steps = ops.maximum(num_steps, one)
-        blocks = ops.add(ops.unsqueeze(num_cached, one), ops.range(zero, num_steps, one, "i64"))  # [N, J]
-        first = ops.add(ops.unsqueeze(padding, one), ops.multiply(blocks, ratio))  # [N, J]
-        last_position = ops.subtract(num_positions, one)
+        # all values are below 2^24 and non-negative, so the integer divisions are exact on every device
+        past = ops.maximum(ops.subtract(key_length, seq_len), zero)  # [N] valid tokens of the previous calls
+        current = ops.subtract(key_length, past)  # [N] valid new tokens, the last rows
+        num_cached = ops.divide(past, ratio)
+        pending_past = ops.subtract(past, ops.multiply(num_cached, ratio))  # past tokens of the incomplete block
+        pending = ops.add(pending_past, current)
+        num_new = ops.divide(pending, ratio)
+        rest = ops.subtract(pending, ops.multiply(num_new, ratio))
+        num_blocks = ops.reduce_max(ops.divide(key_length, ratio), zero, False)  # B
+        num_tokens = ops.add(seq_len, _const_i64(r - 1))  # M
+        num_steps = ops.divide(ops.add(num_tokens, _const_i64(r - 1)), ratio)  # J >= 1
+        offset = ops.unsqueeze(ops.subtract(num_tokens, current), one)  # [N, 1]: row of the first valid new token
+        pending_past_col = ops.unsqueeze(pending_past, one)
 
-        # 1. mean-pool the raw index keys of every computed block
-        tokens = ops.add(ops.unsqueeze(first, _const_i64(-1)), ops.range(zero, ratio, one, "i64"))  # [N, J, r]
-        tokens = ops.minimum(ops.maximum(tokens, zero), last_position)
-        tokens = ops.reshape(tokens, _vec(batch_size, -1), False)
-        keys = ops.gather(raw_index_keys, tokens, one, 1)  # [N, J * r, Di]
-        keys = ops.reshape(keys, _vec(batch_size, num_steps, key_block_size, head_dim), False)
+        def source_rows(token, base, last):
+            # pending token index -> row of a table holding the past entries at `0 ..` and the new ones from `base`
+            rows = ops.select(
+                ops.less(token, pending_past_col), token, ops.add(ops.subtract(token, pending_past_col), base)
+            )
+            return ops.minimum(ops.maximum(rows, zero), last)
+
+        # 1. gather the pending tokens: the incomplete block of the previous calls, then the valid new tokens
+        tokens = ops.concat([ops.convert_like(past_incomplete_raw_keys, raw_index_keys), raw_index_keys], 1)
+        t = ops.unsqueeze(ops.range(zero, ops.multiply(num_steps, ratio), one, "i64"), zero)  # [1, J * r]
+        src = source_rows(t, offset, ops.subtract(num_tokens, one))
+        gathered = ops.gather(tokens, src, one, 1)  # [N, J * r, Di]
+
+        # 2. mean-pool and RMS-normalize every block that can be completed
+        keys = ops.reshape(gathered, _vec(batch_size, num_steps, r, head_dim), False)
         keys = ops.reduce_mean(ops.convert(keys, "f32"), _const_i64(2), False)  # [N, J, Di]
-
-        # 2. RMS-normalize every computed block key
         if k_norm_weight.get_partial_shape().is_dynamic or k_norm_weight.get_partial_shape().to_shape()[0] > 0:
-            mean_square = ops.reduce_mean(ops.multiply(keys, keys), _const_i64(-1), True)
+            mean_square = ops.reduce_mean(ops.multiply(keys, keys), last_axis, True)
             inv_rms = ops.divide(
                 ops.constant(np.float32(1.0)), ops.sqrt(ops.add(mean_square, ops.constant(np.float32(epsilon))))
             )
             keys = ops.multiply(ops.multiply(keys, inv_rms), ops.convert(k_norm_weight, "f32"))
 
-        # 3. rotate-half RoPE on the first Dr dimensions at the first token of every computed block
-        if rope_cos.get_partial_shape().is_dynamic or 0 not in rope_cos.get_partial_shape().to_shape():
-            rope_shape = ops.shape_of(rope_cos, "i64")
-            rotary_dim = _dim(rope_shape, 2)
-            rows = ops.minimum(ops.maximum(first, zero), last_position)
-
-            def block_start_rows(table):
-                table = ops.broadcast(table, _vec(batch_size, num_positions, rotary_dim))
-                return ops.convert(ops.gather(table, rows, one, 1), "f32")  # [N, J, Dr]
-
-            cos, sin = block_start_rows(rope_cos), block_start_rows(rope_sin)
-            half = ops.divide(rotary_dim, _const_i64(2))
+        # 3. rotate-half RoPE at the first token of every block: a past one from past_incomplete_rope
+        use_rope = rope_cos.get_partial_shape().is_dynamic or 0 not in rope_cos.get_partial_shape().to_shape()
+        if use_rope:
+            rotary_dim = _dim(ops.shape_of(rope_cos, "i64"), 2)
             rotary_dim_1d = ops.unsqueeze(rotary_dim, zero)
-            half_1d = ops.unsqueeze(half, zero)
-            last_axis = _const_i64([-1])
-            x_rope = ops.slice(keys, _const_i64([0]), rotary_dim_1d, _const_i64([1]), last_axis)
-            x_pass = ops.slice(keys, rotary_dim_1d, _const_i64([_I64_MAX]), _const_i64([1]), last_axis)
-            x1 = ops.slice(x_rope, _const_i64([0]), half_1d, _const_i64([1]), last_axis)
-            x2 = ops.slice(x_rope, half_1d, _const_i64([_I64_MAX]), _const_i64([1]), last_axis)
+            past_rope = ops.unsqueeze(ops.convert(past_incomplete_rope, "f32"), one)  # [N, 1, 2 * Dr]
+            past_cos = ops.slice(past_rope, _const_i64([0]), rotary_dim_1d, _const_i64([1]), slice_axis)
+            past_sin = ops.slice(past_rope, rotary_dim_1d, _const_i64([_I64_MAX]), _const_i64([1]), slice_axis)
+
+            def table(past_rows, current_rows):  # [N, 1 + L, Dr]
+                current_rows = ops.broadcast(ops.convert(current_rows, "f32"), _vec(batch_size, seq_len, rotary_dim))
+                return ops.concat([past_rows, current_rows], 1)
+
+            cos_table, sin_table = table(past_cos, rope_cos), table(past_sin, rope_sin)
+            rope_offset = ops.subtract(offset, _const_i64(r - 2))  # 1 + row of the first valid new token
+
+            def rope_at(token):
+                rows = source_rows(token, rope_offset, seq_len)
+                return ops.gather(cos_table, rows, one, 1), ops.gather(sin_table, rows, one, 1)
+
+            first = ops.unsqueeze(ops.multiply(ops.range(zero, num_steps, one, "i64"), ratio), zero)  # [1, J]
+            cos, sin = rope_at(first)
+            half_1d = ops.unsqueeze(ops.divide(rotary_dim, _const_i64(2)), zero)
+            x_rope = ops.slice(keys, _const_i64([0]), rotary_dim_1d, _const_i64([1]), slice_axis)
+            x_pass = ops.slice(keys, rotary_dim_1d, _const_i64([_I64_MAX]), _const_i64([1]), slice_axis)
+            x1 = ops.slice(x_rope, _const_i64([0]), half_1d, _const_i64([1]), slice_axis)
+            x2 = ops.slice(x_rope, half_1d, _const_i64([_I64_MAX]), _const_i64([1]), slice_axis)
             rotated = ops.concat([ops.negative(x2), x1], -1)
-            x_rope = ops.add(ops.multiply(x_rope, cos), ops.multiply(rotated, sin))
-            keys = ops.concat([x_rope, x_pass], -1)
+            keys = ops.concat([ops.add(ops.multiply(x_rope, cos), ops.multiply(rotated, sin)), x_pass], -1)
 
         # 4. the cached blocks of every sequence, then the computed ones; the extra column B absorbs the invalid ones
-        filler = ops.subtract(ops.add(num_blocks_max, one), num_past_blocks)
-        zeros = ops.broadcast(
-            ops.convert_like(ops.constant(np.float32(0.0)), past_block_index_keys), _vec(batch_size, filler, head_dim)
-        )
-        output = ops.concat([past_block_index_keys, zeros], 1)  # [N, B + 1, Di]
-        columns = ops.range(zero, ops.add(num_blocks_max, one), one, "i64")
-        cached = ops.less(ops.unsqueeze(columns, zero), ops.unsqueeze(num_cached, one))  # [N, B + 1]
-        output = ops.select(
-            ops.unsqueeze(cached, _const_i64(-1)), output, ops.convert_like(ops.constant(np.float32(0.0)), output)
-        )
-        targets = ops.select(ops.less(blocks, ops.unsqueeze(num_blocks, one)), blocks, num_blocks_max)  # [N, J]
-        targets = ops.broadcast(ops.unsqueeze(targets, _const_i64(-1)), _vec(batch_size, num_steps, head_dim))
-        output = ops.scatter_elements_update(output, targets, ops.convert_like(keys, output), 1)
+        # (Bp <= B for the states of the previous call; the cut keeps any input consistent)
+        zero_value = ops.convert_like(ops.constant(np.float32(0.0)), past_block_index_keys)
+        filler = ops.maximum(ops.subtract(ops.add(num_blocks, one), num_past_blocks), one)
+        output = ops.concat([past_block_index_keys, ops.broadcast(zero_value, _vec(batch_size, filler, head_dim))], 1)
         output = ops.slice(
-            output, _const_i64([0]), ops.unsqueeze(num_blocks_max, zero), _const_i64([1]), _const_i64([1])
+            output, _const_i64([0]), ops.unsqueeze(ops.add(num_blocks, one), zero), _const_i64([1]), _const_i64([1])
         )
-        return [output.output(0)]
+        columns = ops.unsqueeze(ops.range(zero, ops.add(num_blocks, one), one, "i64"), zero)
+        cached = ops.less(columns, ops.unsqueeze(num_cached, one))  # [N, B + 1]
+        output = ops.select(ops.unsqueeze(cached, last_axis), output, zero_value)
+        steps = ops.unsqueeze(ops.range(zero, num_steps, one, "i64"), zero)  # [1, J]
+        targets = ops.select(
+            ops.less(steps, ops.unsqueeze(num_new, one)), ops.add(ops.unsqueeze(num_cached, one), steps), num_blocks
+        )
+        targets = ops.broadcast(ops.unsqueeze(targets, last_axis), _vec(batch_size, num_steps, head_dim))
+        output = ops.scatter_elements_update(output, targets, ops.convert_like(keys, output), 1)
+        output = ops.slice(output, _const_i64([0]), ops.unsqueeze(num_blocks, zero), _const_i64([1]), _const_i64([1]))
+
+        # 5. the incomplete block after this call
+        slots = ops.unsqueeze(ops.range(zero, _const_i64(r - 1), one, "i64"), zero)  # [1, r - 1]
+        valid = ops.less(slots, ops.unsqueeze(rest, one))  # [N, r - 1]
+        idx = ops.add(ops.unsqueeze(ops.multiply(num_new, ratio), one), slots)
+        idx = ops.minimum(idx, ops.subtract(ops.multiply(num_steps, ratio), one))
+        incomplete_raw_keys = ops.gather(gathered, idx, one, 1)  # [N, r - 1, Di]
+        incomplete_raw_keys = ops.select(
+            ops.unsqueeze(valid, last_axis), incomplete_raw_keys, ops.convert_like(zero_value, raw_index_keys)
+        )
+        if use_rope:
+            cos, sin = rope_at(ops.unsqueeze(ops.multiply(num_new, ratio), one))  # [N, 1, Dr]
+            incomplete_rope = ops.squeeze(ops.concat([cos, sin], -1), one)  # [N, 2 * Dr]
+            has_rest = ops.unsqueeze(ops.greater(rest, zero), one)
+            incomplete_rope = ops.select(has_rest, incomplete_rope, ops.constant(np.float32(0.0)))
+        else:
+            incomplete_rope = ops.broadcast(ops.constant(np.float32(0.0)), _vec(batch_size, 0))
+        return [incomplete_raw_keys, incomplete_rope, output]
 
 
 class SparseAttentionIndexer(_OVOperationModule):
@@ -506,8 +686,8 @@ class SparseAttentionIndexer(_OVOperationModule):
 
     Inputs: index_query [N, Hi, L, Di], block_index_keys [N, B, Di], key_length [N] (or [1]),
             index_weights [N, L, Hi] (optional).
-    Output: packed [N, Hs, L, KB + 1] of int32: block_indices [N, Hs, L, KB] (padded with -1)
-            and block_count [N, Hs, L] in the last column, see `unpack()`.
+    Outputs: block_indices [N, Hs, L, KB] of int32 (padded with -1) and block_count [N, Hs, L] of int32, returned
+             packed, see `unpack()`.
     """
 
     _OP_TYPE = "SparseAttentionIndexer"
@@ -522,14 +702,19 @@ class SparseAttentionIndexer(_OVOperationModule):
         self.key_block_size = key_block_size
         self.token_budget = token_budget
         self.num_selection_heads = num_selection_heads
+        # packed order: block_indices, block_count
+        self.packed_outputs = torch.nn.ModuleList([PackedOutput(index) for index in range(2)])
 
     @property
     def block_topk(self):
         return self.token_budget // self.key_block_size
 
-    @staticmethod
-    def unpack(packed: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        return packed[..., :-1], packed[..., -1]
+    def unpack(self, packed: torch.Tensor, index_query: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        batch_size, _, query_length, _ = index_query.shape
+        shape = (batch_size, self.num_selection_heads, query_length)
+        references = [packed.new_zeros(*shape, self.block_topk), packed.new_zeros(*shape)]
+        block_indices, block_count = _unpack_outputs(self.packed_outputs, packed, references)
+        return block_indices, block_count
 
     def forward(self, index_query, block_index_keys, key_length, index_weights=None):
         batch_size, num_index_heads, query_length, _ = index_query.shape
@@ -555,8 +740,8 @@ class SparseAttentionIndexer(_OVOperationModule):
         block_count = torch.clamp(num_visible_blocks, max=block_topk)  # [N, L]
         invalid = torch.arange(block_topk) >= block_count[..., None]  # [N, L, KB]
         block_indices = block_indices.masked_fill(invalid[:, None], -1)
-        block_count = block_count[:, None, :, None].expand(-1, num_selection_heads, -1, 1)
-        return torch.cat([block_indices, block_count], dim=-1).to(torch.int32)
+        block_count = block_count[:, None, :].expand(-1, num_selection_heads, -1)
+        return torch.cat([block_indices.flatten(), block_count.flatten()]).to(torch.int32)
 
     def _conversion_attributes(self):
         return {
@@ -567,6 +752,23 @@ class SparseAttentionIndexer(_OVOperationModule):
 
     @staticmethod
     def _convert(context, key_block_size, token_budget, num_selection_heads):
+        sparse_attention_indexer = _public_op("sparse_attention_indexer")
+        if sparse_attention_indexer is not None:
+            inputs = [context.get_input(i) for i in range(context.get_input_size())]
+            node = sparse_attention_indexer(
+                *inputs,
+                key_block_size=key_block_size,
+                token_budget=token_budget,
+                num_selection_heads=num_selection_heads,
+            )
+            return [_pack_outputs([node.output(0), node.output(1)], node.output(0))]
+        block_indices, block_count = SparseAttentionIndexer._decompose(
+            context, key_block_size, token_budget, num_selection_heads
+        )
+        return [_pack_outputs([block_indices, block_count], block_indices)]
+
+    @staticmethod
+    def _decompose(context, key_block_size, token_budget, num_selection_heads):
         index_query = context.get_input(0)
         block_index_keys = context.get_input(1)
         index_weights = context.get_input(3) if context.get_input_size() > 3 else None
@@ -622,10 +824,9 @@ class SparseAttentionIndexer(_OVOperationModule):
         valid = ops.less(slots, ops.unsqueeze(block_count, _const_i64(-1)))  # [N, L, KB]
         block_indices = ops.select(ops.unsqueeze(valid, one), block_indices, minus_one)
         block_count = ops.broadcast(
-            ops.convert(ops.unsqueeze(ops.unsqueeze(block_count, one), _const_i64(-1)), "i32"),
-            _vec(batch_size, num_selection_heads, query_length, 1),
+            ops.convert(ops.unsqueeze(block_count, one), "i32"), _vec(batch_size, num_selection_heads, query_length)
         )
-        return [ops.concat([block_indices, block_count], -1).output(0)]
+        return block_indices, block_count
 
 
 class SparseAttention(_OVOperationModule):
@@ -703,6 +904,13 @@ class SparseAttention(_OVOperationModule):
 
     @staticmethod
     def _convert(context, key_block_size, query_block_size, causal):
+        sparse_attention = _public_op("sparse_attention")
+        if sparse_attention is not None:
+            inputs = [context.get_input(i) for i in range(context.get_input_size())]
+            node = sparse_attention(
+                *inputs, key_block_size=key_block_size, query_block_size=query_block_size, causal=causal
+            )
+            return [node.output(0)]
         query = context.get_input(0)
         key = context.get_input(1)
         value = context.get_input(2)
@@ -975,7 +1183,10 @@ def get_openvino_extensions(modules: Sequence[_OVOperationModule]):
     """Returns `module_extensions` and `conversion_extensions` of a patcher for the given operation modules."""
     module_extensions, conversion_extensions = {}, []
     for module in modules:
-        module_extension, conversion_extension = module.openvino_extensions()
-        module_extensions[module] = module_extension
-        conversion_extensions.append(conversion_extension)
+        # the operation modules and their PackedOutput modules
+        for op_module in module.modules():
+            if isinstance(op_module, _OVOperationModule):
+                module_extension, conversion_extension = op_module.openvino_extensions()
+                module_extensions[op_module] = module_extension
+                conversion_extensions.append(conversion_extension)
     return module_extensions, conversion_extensions
