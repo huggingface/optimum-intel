@@ -1763,12 +1763,27 @@ class OVModelQwenImage21Transformer(OVPipelinePart):
         return (sample,)
 
 
+def _check_ltx2_rope_inputs(part: OVPipelinePart, required_inputs):
+    # LTX-2 exports made before RoPE became host-computed (cos, sin) graph inputs take coordinates instead,
+    # which the current wrappers no longer feed. Fail at load time with what to do, rather than at the first
+    # inference with an OpenVINO "port not found" error.
+    input_names = {name for inp in part.model.inputs for name in inp.get_names()}
+    missing = sorted(set(required_inputs) - input_names)
+    if missing:
+        raise ValueError(
+            f"The LTX-2 {part.model_name} at {part.model_save_dir} was exported with an older version of "
+            f"optimum-intel and is no longer supported: it is missing the RoPE inputs {missing}. "
+            "Please re-export the model with `optimum-cli export openvino`."
+        )
+
+
 class OVModelTransformerLTX2(OVPipelinePart):
     # Class-level, so the unsupported-feature notice below is emitted once per process.
     _warned_no_cross_modality_gate = False
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        _check_ltx2_rope_inputs(self, [name for names in LTX2_ROPE_INPUTS.values() for name in names])
         # Weight-free rotary modules of the reference transformer. The pipeline uses `rope` and
         # `audio_rope` to prepare the coordinates, and the (cos, sin) transformer inputs are computed
         # from all four here, on the host, in fp32/fp64.
@@ -1968,6 +1983,14 @@ class OVModelTransformerLTX2(OVPipelinePart):
 class OVModelConnectors(OVPipelinePart):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        _check_ltx2_rope_inputs(
+            self,
+            [
+                f"{connector}_rotary_{part}"
+                for connector in ("video_connector", "audio_connector")
+                for part in ("cos", "sin")
+            ],
+        )
         # Weight-free RoPE modules of the two connectors, built from the exported config. Their (cos, sin)
         # are graph inputs, computed here on the host since f16 cannot resolve the rotary angles.
         from diffusers.pipelines.ltx2.connectors import LTX2RotaryPosEmbed1d
