@@ -734,6 +734,18 @@ class OVWeightCompressionTest(unittest.TestCase):
             OVModelForCausalLM,
             "gpt2",
             False,
+            dict(
+                bits=4,
+                sym=False,
+                group_size=32,
+                scoped_configs=[{"patterns": [".*mlp.*"], "bits": 8, "sym": False, "group_size": -1}],
+            ),
+            {"model": {"int8": 24, "int4": 20}},
+        ),
+        (
+            OVModelForCausalLM,
+            "gpt2",
+            False,
             dict(bits=4, sym=False, group_size=-1, ratio=0.8, all_layers=True),
             {"model": {"int8": 18, "int4": 26}},
         ),
@@ -1734,70 +1746,6 @@ class OVWeightCompressionTest(unittest.TestCase):
             openvino_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
             self.assertEqual(openvino_config.quantization_config.to_dict(), ref_quantization_config.to_dict())
 
-    @unittest.skipIf(not hasattr(nncf, "ScopedConfig"), "NNCF version does not support scoped configs")
-    def test_ovmodel_compression_with_scoped_configs(self):
-        quantization_config = OVWeightQuantizationConfig(
-            bits=4,
-            sym=True,
-            group_size=16,
-            scoped_configs=[
-                {"patterns": [".*self_attn.*"], "bits": 8, "sym": False, "group_size": -1},
-                # The last matching scoped config is applied
-                {"patterns": [".*q_proj.*"], "bits": 4, "sym": False, "group_size": 16},
-            ],
-        )
-        model = OVModelForCausalLM.from_pretrained(
-            MODEL_NAMES["llama"], export=True, quantization_config=quantization_config
-        )
-        weight_types = defaultdict(set)
-        for op in model.model.get_ops():
-            if op.get_type_name() != "Constant" or "zero_point" in op.get_friendly_name():
-                continue
-            element_type = op.get_element_type()
-            if element_type not in (ov.Type.u4, ov.Type.i4, ov.Type.u8, ov.Type.i8):
-                continue
-            name = op.get_friendly_name()
-            key = "q_proj" if "q_proj" in name else "self_attn" if "self_attn" in name else "other"
-            weight_types[key].add(element_type)
-        self.assertEqual(weight_types["q_proj"], {ov.Type.u4})
-        self.assertEqual(weight_types["self_attn"], {ov.Type.u8})
-        self.assertIn(ov.Type.i4, weight_types["other"])
-
-    @unittest.skipIf(not hasattr(nncf, "ScopedConfig"), "NNCF version does not support scoped configs")
-    def test_ovmodel_mixed_quantization_with_scoped_configs(self):
-        quantization_config = OVMixedQuantizationConfig(
-            weight_quantization_config=OVWeightQuantizationConfig(
-                bits=8,
-                scoped_configs=[
-                    {"patterns": [".*self_attn.*"], "bits": 4, "sym": False, "group_size": 16},
-                    # The last matching scoped config is applied
-                    {"patterns": [".*q_proj.*"], "bits": 4, "sym": True, "group_size": 16},
-                    {"patterns": [".*mlp.*"], "bits": 4, "sym": False, "group_size": 16},
-                ],
-            ),
-            full_quantization_config=OVQuantizationConfig(),
-            dataset="wikitext2",
-            num_samples=1,
-        )
-        model = OVModelForCausalLM.from_pretrained(
-            MODEL_NAMES["llama"], export=True, quantization_config=quantization_config
-        )
-        weight_types = defaultdict(set)
-        for op in model.model.get_ops():
-            if op.get_type_name() != "Constant" or "zero_point" in op.get_friendly_name():
-                continue
-            element_type = op.get_element_type()
-            if element_type not in (ov.Type.u4, ov.Type.i4, ov.Type.u8, ov.Type.i8):
-                continue
-            name = op.get_friendly_name()
-            for key in ("q_proj", "self_attn", "mlp"):
-                if key in name:
-                    weight_types[key].add(element_type)
-                    break
-        self.assertEqual(dict(weight_types), {"q_proj": {ov.Type.i4}, "self_attn": {ov.Type.u4}, "mlp": {ov.Type.u4}})
-        # Activations are quantized as well
-        self.assertGreater(sum(op.get_type_name() == "FakeQuantize" for op in model.model.get_ops()), 0)
-
     @parameterized.expand(((OVModelForCausalLM, "gpt2"),))
     def test_ovmodel_stateful_load_with_compressed_weights(self, model_cls, model_type):
         model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, load_in_8bit=True, stateful=True)
@@ -2311,6 +2259,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
                 sensitivity_metric="mean_activation_magnitude",
                 num_samples=100,
                 quant_method=OVQuantizationMethod.DEFAULT,
+                scoped_configs=[{"patterns": [".*self_attn.*"], "bits": 8, "sym": False, "group_size": -1}],
             ),
         ),
         (OVWeightQuantizationConfig(bits=4, dataset=["hello world", "i'm alive"]),),
@@ -2626,69 +2575,6 @@ class OVQuantizationConfigTest(unittest.TestCase):
 
             mock_method.assert_called_once_with(mock_model, **expected_kwargs)
 
-    @unittest.skipIf(not hasattr(nncf, "ScopedConfig"), "NNCF version does not support scoped configs")
-    def test_scoped_configs(self):
-        quantization_config = OVWeightQuantizationConfig(
-            bits=4,
-            sym=True,
-            scoped_configs=[
-                {"patterns": [".*self_attn.*"], "validate": False, "bits": 8, "sym": False, "group_size": -1},
-                {"names": ["lm_head"], "bits": 4},
-            ],
-        )
-        ref_scoped_configs = [
-            nncf.ScopedConfig(
-                patterns=[".*self_attn.*"],
-                validate=False,
-                mode=nncf.CompressWeightsMode.INT8_ASYM,
-                group_size=-1,
-            ),
-            nncf.ScopedConfig(names=["lm_head"], mode=nncf.CompressWeightsMode.INT4_ASYM),
-        ]
-        self.assertEqual(quantization_config.to_nncf_dict()["scoped_configs"], ref_scoped_configs)
-        self.assertNotIn("scoped_configs", OVWeightQuantizationConfig(bits=4).to_nncf_dict())
-
-        ov_config = OVConfig(quantization_config=quantization_config)
-        with TemporaryDirectory() as tmp_dir:
-            ov_config.save_pretrained(tmp_dir)
-            loaded_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE).quantization_config
-        self.assertEqual(loaded_config.scoped_configs, quantization_config.scoped_configs)
-        self.assertEqual(loaded_config.to_nncf_dict()["scoped_configs"], ref_scoped_configs)
-
-    @unittest.skipIf(not hasattr(nncf, "ScopedConfig"), "NNCF version does not support scoped configs")
-    def test_scoped_configs_serialization_all_config_types(self):
-        scoped_configs = [{"patterns": [".*self_attn.*"], "bits": 4, "sym": True, "group_size": 16}]
-        configs = {
-            "weight": OVWeightQuantizationConfig(bits=4, scoped_configs=scoped_configs),
-            "mixed": OVMixedQuantizationConfig(
-                weight_quantization_config=OVWeightQuantizationConfig(bits=4, scoped_configs=scoped_configs),
-                full_quantization_config=OVQuantizationConfig(),
-            ),
-            "pipeline": OVPipelineQuantizationConfig(
-                quantization_configs={
-                    "model1": OVWeightQuantizationConfig(bits=4, scoped_configs=scoped_configs),
-                    "model2": OVWeightQuantizationConfig(bits=8, scoped_configs=scoped_configs),
-                }
-            ),
-            "from_dict": _quantization_config_from_dict({"bits": 4, "scoped_configs": scoped_configs}),
-        }
-        self.assertIsInstance(configs["from_dict"], OVWeightQuantizationConfig)
-
-        def get_scoped_configs(config):
-            if isinstance(config, OVMixedQuantizationConfig):
-                return [config.weight_quantization_config.scoped_configs]
-            if isinstance(config, OVPipelineQuantizationConfig):
-                return [c.scoped_configs for c in config.quantization_configs.values()]
-            return [config.scoped_configs]
-
-        for name, config in configs.items():
-            with self.subTest(name), TemporaryDirectory() as tmp_dir:
-                OVConfig(quantization_config=config).save_pretrained(tmp_dir)
-                loaded_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE).quantization_config
-                self.assertIs(type(loaded_config), type(config))
-                for loaded_scoped_configs in get_scoped_configs(loaded_config):
-                    self.assertEqual(loaded_scoped_configs, scoped_configs)
-
     @parameterized.expand(
         [
             ("not_a_list", {"patterns": [".*self_attn.*"]}),
@@ -2703,26 +2589,6 @@ class OVQuantizationConfigTest(unittest.TestCase):
     def test_invalid_scoped_configs(self, _, scoped_configs):
         with self.assertRaises(ValueError):
             OVWeightQuantizationConfig(bits=4, scoped_configs=scoped_configs)
-
-    @unittest.skipIf(not hasattr(nncf, "ScopedConfig"), "NNCF version does not support scoped configs")
-    def test_non_weight_compression_configs_reject_scoped_configs(self):
-        # Scoped configs are a weight compression feature
-        scoped_configs = [{"patterns": [".*self_attn.*"], "bits": 4}]
-        with self.assertRaises(ValueError):
-            OVQuantizationConfig(scoped_configs=scoped_configs)
-        with self.assertRaises(ValueError):
-            OVQuantizationConfig.from_dict({"dtype": "f8e4m3", "scoped_configs": scoped_configs})
-        with self.assertRaises(ValueError):
-            OVMixedQuantizationConfig(
-                weight_quantization_config=OVWeightQuantizationConfig(bits=4),
-                full_quantization_config={"dtype": "f8e4m3", "scoped_configs": scoped_configs},
-            )
-        with self.assertRaises(ValueError):
-            OVMixedQuantizationConfig(
-                weight_quantization_config=OVWeightQuantizationConfig(bits=4),
-                full_quantization_config=OVQuantizationConfig(),
-                scoped_configs=scoped_configs,
-            )
 
     def compare_config_dict_to_config_object(self, config_dict: dict, config_obj: OVQuantizationConfigBase):
         if "quantization_configs" in config_dict:
