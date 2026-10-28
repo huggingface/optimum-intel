@@ -888,16 +888,10 @@ def _apply_default_ignored_scope_config(
     return quantization_config_copy or quantization_config
 
 
-def _get_scope_instance(scope: Optional[Dict[str, Any]]) -> "nncf.IgnoredScope":
-    if scope is None:
-        return nncf.IgnoredScope()
-    return nncf.IgnoredScope(**copy.deepcopy(scope))
-
-
 def _get_scoped_config_instances(scoped_configs: Optional[List[dict]]) -> Optional[List["nncf.ScopedConfig"]]:
     """
     Converts scoped configs to `nncf.ScopedConfig` instances for `nncf.compress_weights()` call. Every scoped config
-    is an ignored scope dict together with "bits", "sym" and "group_size" keys.
+    is a scope dict together with "bits", "sym" and "group_size" keys.
     """
     if scoped_configs is None:
         return None
@@ -912,7 +906,7 @@ def _get_scoped_config_instances(scoped_configs: Optional[List[dict]]) -> Option
             raise ValueError(f"Only support quantization to {list(signed_bitness)} bits but found {bits}")
         if group_size is not None and group_size != -1 and group_size <= 0:
             raise ValueError(f"`group_size` must be greater than 0 or equal to -1, but found {group_size}")
-        scope = _get_scope_instance(scoped_config)
+        scope = nncf.Scope(**copy.deepcopy(scoped_config))
         mode = nncf.CompressWeightsMode(signed_bitness[bits] + ("_sym" if sym else "_asym"))
         instances.append(nncf.ScopedConfig(**scope.__dict__, mode=mode, group_size=group_size))
     return instances
@@ -1029,7 +1023,9 @@ class OVQuantizationConfigBase(QuantizationConfigMixin):
             raise ValueError(f"`num_samples` is expected to be a positive integer, but found: {self.num_samples}")
 
     def get_ignored_scope_instance(self) -> "nncf.IgnoredScope":
-        return _get_scope_instance(self.ignored_scope)
+        if self.ignored_scope is None:
+            return nncf.IgnoredScope()
+        return nncf.IgnoredScope(**copy.deepcopy(self.ignored_scope))
 
     def clone(self):
         return copy.deepcopy(self)
