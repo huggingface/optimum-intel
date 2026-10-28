@@ -49,6 +49,7 @@ from optimum.intel.utils.modeling_utils import (
 from .utils import (
     _MAX_UNCOMPRESSED_SIZE,
     MULTI_MODAL_TEXT_GENERATION_MODELS,
+    check_transformers_version_compatibility,
     clear_class_registry,
     deduce_diffusers_dtype,
     is_auto_compression_disabled,
@@ -489,6 +490,11 @@ def main_export(
             raise ValueError(
                 f"Asked to export a {model_type} model for the task {task}{autodetected_message}, but the Optimum OpenVINO exporter only supports the tasks {', '.join(model_tasks.keys())} for {model_type}. Please use a supported task. Please open an issue at https://github.com/huggingface/optimum-intel/issues if you would like the task {task} to be supported in the OpenVINO export for {model_type}."
             )
+        if model_type in TasksManager._SUPPORTED_MODEL_TYPE:
+            export_config_constructor = TasksManager.get_exporter_config_constructor(
+                exporter="openvino", task=task, model_type=model_type, library_name=library_name
+            )
+            check_transformers_version_compatibility(export_config_constructor)
 
         # some models force flash_attn attention by default that does not support load model on cpu
         if model_type in FORCE_ATTN_MODEL_CLASSES:
@@ -885,6 +891,13 @@ def _main_quantize(
             model_cls_name = _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
             if library_name == "sentence_transformers":
                 model_cls_name = "OVSentenceTransformer"
+            elif (
+                library_name == "transformers"
+                and task == "text-classification"
+                and model_type in MULTI_MODAL_TEXT_GENERATION_MODELS
+            ):
+                # a VLM with a sequence classification head is exported as VLM parts
+                model_cls_name = "OVModelForVisualSequenceClassification"
             model_cls = getattr(__import__("optimum.intel", fromlist=[model_cls_name]), model_cls_name)
         except (AttributeError, ImportError, KeyError) as e:
             raise RuntimeError(f"Wasn't able to locate OpenVINO class for task {original_task} ({task}).") from e

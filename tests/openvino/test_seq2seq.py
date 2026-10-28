@@ -15,6 +15,7 @@
 import copy
 import gc
 import os
+import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -33,6 +34,7 @@ from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
     AutoModelForSeq2SeqLM,
+    AutoModelForSequenceClassification,
     AutoModelForSpeechSeq2Seq,
     AutoModelForTextToSpectrogram,
     AutoProcessor,
@@ -54,7 +56,9 @@ from utils_tests import (
     TEST_IMAGE_URL,
     TEST_NAME_TO_MODEL_TYPE,
     Timer,
+    get_num_quantized_nodes,
     get_supported_model_for_library,
+    is_model_type_transformers_compatible,
 )
 
 from optimum.exporters.openvino.stateful import model_has_state
@@ -67,6 +71,7 @@ from optimum.intel import (
     OVModelForSpeechSeq2Seq,
     OVModelForTextToSpeechSeq2Seq,
     OVModelForVisualCausalLM,
+    OVModelForVisualSequenceClassification,
 )
 from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
 from optimum.intel.openvino.modeling_text2speech import (
@@ -78,6 +83,7 @@ from optimum.intel.openvino.modeling_text2speech import (
 from optimum.intel.openvino.modeling_visual_language import (
     MODEL_PARTS_CLS_MAPPING,
     MODEL_TYPE_TO_CLS_MAPPING,
+    SEQUENCE_CLASSIFICATION_MODEL_TYPE_TO_CLS_MAPPING,
     _OVQwen3OmniMoeForCausalLM,
 )
 from optimum.intel.pipelines import pipeline as optimum_pipeline
@@ -606,12 +612,14 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "qwen3_5_mtp",
         "qwen3_5_moe",
         "qwen3_5_moe_mtp",
+        "qwen3_5_moe_mtp_legacy_weights",
         "qwen3_omni_moe",
         "mistral3",
         "ministral3",
         "muse_glimmer",
         "deepseek_ocr2",
         "minicpmv4_7",
+        "minicpm_ocr",
     ]
     if is_openvino_version(">=", "2026.3") and is_compressed_tensors_available():
         SUPPORTED_ARCHITECTURES.append("qwen3_5_compressed_tensors")
@@ -627,6 +635,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "gemma4_unified",
         "gemma4_unified-it",
         "minicpmv4_7",
+        "minicpm_ocr",
     ]
     SUPPORT_AUDIO = ["gemma4", "gemma4_unified-it", "qwen3_omni_moe"]
     # "llama" is registered for image-text-to-text
@@ -681,10 +690,12 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "qwen3_5_mtp",
             "qwen3_5_moe",
             "qwen3_5_moe_mtp",
+            "qwen3_5_moe_mtp_legacy_weights",
             "gemma4_unified",
             "gemma4_unified-it",
             "muse_glimmer",
             "minicpmv4_7",
+            "minicpm_ocr",
         ]:
             from transformers import AutoModelForImageTextToText
 
@@ -1260,6 +1271,112 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 device=OPENVINO_DEVICE,
             )
             self.assertIsInstance(ov_restored_model, type(ov_model))
+
+
+class OVModelForVisualSequenceClassificationIntegrationTest(unittest.TestCase):
+    TASK = "text-classification"
+    # the version range is the one of the model type's text-classification export config
+    SUPPORTED_ARCHITECTURES = [
+        arch
+        for arch in ["qwen3_5_seq_cls"]
+        if is_model_type_transformers_compatible(TEST_NAME_TO_MODEL_TYPE.get(arch, arch), task="text-classification")
+    ]
+    # int8 weight nodes of the tiny model parts after `--weight-format int8`
+    EXPECTED_INT8_NODES = {
+        "qwen3_5_seq_cls": {
+            "openvino_language_model": 70,
+            "openvino_text_embeddings_model": 1,
+            "openvino_vision_embeddings_model": 1,
+            "openvino_vision_embeddings_merger_model": 10,
+            "openvino_vision_embeddings_pos_model": 1,
+        }
+    }
+
+    @staticmethod
+    def _get_inputs(processor, padding_side="left"):
+        image = Image.open(requests.get(TEST_IMAGE_URL, stream=True).raw).resize((320, 240))
+        conversations = {
+            "image": [
+                [{"role": "user", "content": [{"type": "image", "image": image}, {"type": "text", "text": "A cat?"}]}]
+            ],
+            "text": [[{"role": "user", "content": [{"type": "text", "text": "Is this a question?"}]}]],
+            # rows of different lengths: the last non-pad token is found on either padding side
+            "batch": [
+                [{"role": "user", "content": [{"type": "text", "text": "Short."}]}],
+                [
+                    {
+                        "role": "user",
+                        "content": [{"type": "image", "image": image}, {"type": "text", "text": "A longer prompt."}],
+                    }
+                ],
+            ],
+        }
+        return {
+            name: processor.apply_chat_template(
+                conversation,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt",
+                padding=True,
+                padding_side=padding_side,
+            )
+            for name, conversation in conversations.items()
+        }
+
+    def _compare(self, ov_model, transformers_model, processor):
+        for padding_side in ("left", "right"):
+            for name, inputs in self._get_inputs(processor, padding_side).items():
+                with torch.no_grad():
+                    expected = transformers_model(**inputs).logits
+                logits = ov_model(**inputs).logits
+                self.assertEqual(logits.shape, (inputs["input_ids"].shape[0], transformers_model.config.num_labels))
+                self.assertTrue(
+                    torch.allclose(logits, expected, atol=1e-4),
+                    f"{name}, {padding_side} padding: max abs diff {(logits - expected).abs().max()}",
+                )
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
+    def test_compare_to_transformers(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        processor = AutoProcessor.from_pretrained(model_id)
+        transformers_model = AutoModelForSequenceClassification.from_pretrained(model_id).eval()
+        ov_model = OVModelForVisualSequenceClassification.from_pretrained(
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+        self.assertIsInstance(ov_model, SEQUENCE_CLASSIFICATION_MODEL_TYPE_TO_CLS_MAPPING[ov_model.config.model_type])
+        self.assertEqual(ov_model.config.id2label, transformers_model.config.id2label)
+        self.assertEqual(ov_model.config.architectures, [type(transformers_model).__name__])
+        self._compare(ov_model, transformers_model, processor)
+
+        with TemporaryDirectory() as save_dir:
+            ov_model.save_pretrained(save_dir)
+            # a classifier does not draft tokens: the MTP head of the checkpoint is not exported
+            self.assertFalse((Path(save_dir) / "openvino_mtp_model.xml").exists())
+            restored_model = OVModelForVisualSequenceClassification.from_pretrained(
+                save_dir, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+            )
+            self.assertIsInstance(restored_model, type(ov_model))
+            self._compare(restored_model, transformers_model, processor)
+        del ov_model, restored_model
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
+    def test_exporters_cli_int8(self, model_arch):
+        with TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_arch]} --task {self.TASK} "
+                f"--weight-format int8 {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            for part, expected in self.EXPECTED_INT8_NODES[model_arch].items():
+                model = openvino.Core().read_model(Path(tmpdir) / f"{part}.xml")
+                self.assertEqual(get_num_quantized_nodes(model)[1]["int8"], expected, part)
+            ov_model = OVModelForVisualSequenceClassification.from_pretrained(tmpdir, device=OPENVINO_DEVICE)
+            inputs = self._get_inputs(AutoProcessor.from_pretrained(tmpdir))["batch"]
+            self.assertEqual(ov_model(**inputs).logits.shape, (2, ov_model.config.num_labels))
+            del ov_model
+            gc.collect()
 
 
 @pytest.mark.skipif(is_transformers_version("<", "5.0"), reason="OVModelForMultimodalLM requires transformers >= 5.0")

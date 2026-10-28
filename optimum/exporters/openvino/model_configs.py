@@ -64,6 +64,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyQwen2VLLMInputGenerator,
     DummyQwen2VLVisionEmbedInputGenerator,
     DummyQwen3_5LMInputGenerator,
+    DummyQwen3_5SequenceClassificationLMInputGenerator,
     DummyQwen3OmniMoeAudioInputGenerator,
     DummyQwen3OmniMoeCode2WavInputGenerator,
     DummyQwen3OmniMoeLMInputGenerator,
@@ -106,7 +107,9 @@ from optimum.exporters.openvino.input_generators import (
     LTX2VaeDummyInputGenerator,
     LTX2VocoderDummyInputGenerator,
     LTXTransformerDummyInputGenerator,
+    LTXVaeDecoderDummyInputGenerator,
     LTXVaeDummyInputGenerator,
+    LTXVaeEncoderDummyInputGenerator,
     MambaCacheDummyInputGenerator,
     OVFalconDummyPastKeyValuesGenerator,
     OVMiniCPM3DummyPastKeyValuesGenerator,
@@ -202,6 +205,7 @@ from optimum.exporters.openvino.model_patcher import (
     Qwen2MoEPatcher,
     Qwen2VLLanguageModelPatcher,
     Qwen2VLVisionEmbMergerPatcher,
+    Qwen3_5ForSequenceClassificationLanguageModelPatcher,
     Qwen3_5ModelPatcher,
     Qwen3_5MoeModelPatcher,
     Qwen3_5MoeMTPModelPatcher,
@@ -244,7 +248,11 @@ from optimum.exporters.openvino.model_patcher import (
     ZImageTransformerModelPatcher,
     _get_model_attribute,
 )
-from optimum.exporters.openvino.utils import is_ltx2_3_transformer_config
+from optimum.exporters.openvino.utils import (
+    GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE,
+    GRANITEMOEHYBRID_MAMBA_LAYER_TYPE,
+    is_ltx2_3_transformer_config,
+)
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
     is_diffusers_available,
@@ -1486,6 +1494,7 @@ class GPTNeoxJapaneseOpenVINOConfig(TextDecoderOpenVINOConfig):
 )
 class Gemma2OpenVINOConfig(GemmaOpenVINOConfig):
     _MODEL_PATCHER = Gemma2ModelPatcher
+    MAX_TRANSFORMERS_VERSION = None
 
 
 @register_in_tasks_manager(
@@ -1558,7 +1567,6 @@ class Gemma4UnifiedTextOpenVINOConfig(Gemma4TextOpenVINOConfig):
     # attention, optional global KV heads / head dim), so add_past_key_values is inherited.
     # It has no per-layer embeddings (PLE), so no extra inputs are required.
     MIN_TRANSFORMERS_VERSION = "5.10"
-    MAX_TRANSFORMERS_VERSION = "5.10.99"
 
 
 @register_in_tasks_manager(
@@ -3018,7 +3026,7 @@ class LTXVaeEncoderOpenVINOConfig(VisionOpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
         num_channels="in_channels", image_size="sample_size", allow_new=True
     )
-    DUMMY_INPUT_GENERATOR_CLASSES = (LTXVaeDummyInputGenerator,)
+    DUMMY_INPUT_GENERATOR_CLASSES = (LTXVaeEncoderDummyInputGenerator,)
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -3037,7 +3045,7 @@ class LTXVaeEncoderOpenVINOConfig(VisionOpenVINOConfig):
 class LTXVaeDecoderOpenVINOConfig(VisionOpenVINOConfig):
     ATOL_FOR_VALIDATION = 3e-4  # TODO: this only happens in test_export.py
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(num_channels="latent_channels", allow_new=True)
-    DUMMY_INPUT_GENERATOR_CLASSES = (LTXVaeDummyInputGenerator,)
+    DUMMY_INPUT_GENERATOR_CLASSES = (LTXVaeDecoderDummyInputGenerator,)
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -3045,7 +3053,8 @@ class LTXVaeDecoderOpenVINOConfig(VisionOpenVINOConfig):
             "latent_sample": {0: "batch_size", 2: "num_frames", 3: "latent_height", 4: "latent_width"},
         }
         if self._normalized_config.config.timestep_conditioning:
-            base_input["timestep"] = {}
+            # Diffusers conditions each decoded sample independently and slices `timestep` with the latent batch.
+            base_input["timestep"] = {0: "batch_size"}
         return base_input
 
     @property
@@ -3688,15 +3697,25 @@ class MiniCPMV4_7OpenVINOConfig(BaseVLMOpenVINOConfig):
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
 
     @property
+    def use_vit_merger(self) -> bool:
+        # the "4x" downsample mode skips the ViT window merger, see MiniCPMV4_6Model.get_image_features
+        return self._orig_config.downsample_mode != "4x"
+
+    @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         if self._behavior == MiniCPMV4_7ConfigBehavior.VISION_EMBEDDINGS:
-            return {
+            inputs = {
                 "pixel_values": {3: "patches_width"},
                 "position_ids": {0: "num_patches"},
-                "window_index": {0: "num_patches"},
-                "merge_index": {0: "num_merged_patches"},
             }
+            if self.use_vit_merger:
+                inputs["window_index"] = {0: "num_patches"}
+            inputs["merge_index"] = {0: "num_merged_patches"}
+            return inputs
         return {}
+
+    def _create_dummy_input_generator_classes(self, **kwargs):
+        return super()._create_dummy_input_generator_classes(use_vit_merger=self.use_vit_merger, **kwargs)
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
@@ -3774,6 +3793,17 @@ class MiniCPMV4_7OpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior == MiniCPMV4_7ConfigBehavior.VISION_EMBEDDINGS:
             return MiniCPMV4_7VisionEmbeddingsPatcher(self, model, model_kwargs)
         return super().patch_model_for_export(model, model_kwargs)
+
+
+@register_in_tasks_manager("minicpm_ocr", *["image-text-to-text"], library_name="transformers")
+class MiniCPMOcrOpenVINOConfig(MiniCPMV4_7OpenVINOConfig):
+    """
+    MiniCPM-OCR keeps the MiniCPM-V 4.6 architecture: the vision tower, ViT window merger and MLP merger of MiniCPM-V
+    4.7 on top of a dense Qwen3.5 language model with plain 1D RoPE instead of canvas M-RoPE. The graphs are the
+    MiniCPM-V 4.7 ones; the checkpoints use the "4x" downsample mode, which leaves the ViT window merger out.
+    """
+
+    MIN_TRANSFORMERS_VERSION = "5.21.0"
 
 
 class Phi3VisionConfigBehavior(str, enum.Enum):
@@ -4189,7 +4219,6 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
     ]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen2VLVisionEmbedInputGenerator,)
-    MAX_TRANSFORMERS_VERSION = "5.0"
 
     def __init__(
         self,
@@ -4324,8 +4353,6 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
 
 @register_in_tasks_manager("qwen2_5_vl", *["image-text-to-text"], library_name="transformers")
 class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
-    MAX_TRANSFORMERS_VERSION = "5.0"
-
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
@@ -5996,7 +6023,6 @@ class Gemma4UnifiedOpenVINOConfig(Gemma3OpenVINOConfig):
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Gemma4UnifiedConfigBehavior]
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyVisionInputGenerator, DummyTextInputGenerator)
     MIN_TRANSFORMERS_VERSION = "5.10"
-    MAX_TRANSFORMERS_VERSION = "5.10.99"
 
     def __init__(
         self,
@@ -6836,8 +6862,8 @@ class GraniteMoeHybridOpenVINOConfig(MambaOpenVINOConfig):
             decoder_sequence_name = "past_sequence_length + sequence_length"
             cache_name_prefix = "cache_params.present"
 
-        self.num_mamba_layers = self._normalized_config.layer_types.count("mamba")
-        self.num_attention_layers = self._normalized_config.layer_types.count("attention")
+        self.num_mamba_layers = self._normalized_config.layer_types.count(GRANITEMOEHYBRID_MAMBA_LAYER_TYPE)
+        self.num_attention_layers = self._normalized_config.layer_types.count(GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE)
         for i in range(self.num_mamba_layers):
             # [batch_size, conv_kernel_size - 1, d_model]
             inputs_or_outputs[f"{cache_name_prefix}.conv.{i}"] = {0: "batch_size"}
@@ -7811,8 +7837,7 @@ class Qwen3_5TextOpenVINOConfig(Qwen3VLTextOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Qwen3_5DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = Qwen3_5DummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
-    MIN_TRANSFORMERS_VERSION = "5.2.0"
-    MAX_TRANSFORMERS_VERSION = "5.2.99"
+    MIN_TRANSFORMERS_VERSION = "5.15"
     _MODEL_PATCHER = Qwen3_5ModelPatcher
 
     @property
@@ -7893,8 +7918,8 @@ class Qwen3_5OpenVINOConfig(Qwen3VLOpenVINOConfig):
         model_type.value for model_type in QwenVLConfigBehavior if model_type != QwenVLConfigBehavior.MTP
     ]
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen3VLVisionEmbedInputGenerator,)
-    MIN_TRANSFORMERS_VERSION = "5.2.0"
-    MAX_TRANSFORMERS_VERSION = "5.2.99"
+    MIN_TRANSFORMERS_VERSION = "5.15"
+    MAX_TRANSFORMERS_VERSION = None
 
     def __init__(
         self,
@@ -8019,6 +8044,57 @@ class Qwen3_5OpenVINOConfig(Qwen3VLOpenVINOConfig):
                 "qwen3_5_text", self._orig_config.text_config, self.int_dtype, self.float_dtype
             ).outputs
         raise Exception("Unknown Qwen3.5 behavior type.")
+
+
+@register_in_tasks_manager("qwen3_5", *["text-classification"], library_name="transformers")
+class Qwen3_5ForSequenceClassificationOpenVINOConfig(Qwen3_5OpenVINOConfig):
+    """
+    Qwen3_5ForSequenceClassification (e.g. reward models on the Qwen3.5 VLM): the Qwen3.5 vision and text embeddings
+    graphs, and a language model graph that ends in the `score` head instead of `lm_head`, giving the class logits of
+    every token (see `Qwen3_5ForSequenceClassificationLanguageModelPatcher`). The runtime reads them at the last non-pad
+    token, see `OVModelForVisualSequenceClassification`.
+    """
+
+    # the language model is exported with the transformers `DynamicCache`, whose linear attention layers keep their
+    # states by index since 5.14 (the layout `qwen3_5_gated_delta_net_forward` reads)
+    MIN_TRANSFORMERS_VERSION = "5.14.0"
+    MAX_TRANSFORMERS_VERSION = None
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # the MTP head drafts tokens for generation, a classifier has no use for it
+        self.SUPPORTED_BEHAVIORS = [
+            behavior for behavior in self.SUPPORTED_BEHAVIORS if behavior != QwenVLConfigBehavior.MTP.value
+        ]
+
+    def with_behavior(self, behavior: Union[str, QwenVLConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, QwenVLConfigBehavior):
+            behavior = QwenVLConfigBehavior(behavior)
+
+        if behavior == QwenVLConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config(
+                "qwen3_5_text",
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
+                max_transformers_version=self.MAX_TRANSFORMERS_VERSION,
+            )
+
+        if behavior == QwenVLConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                "qwen3_5_text",
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=Qwen3_5ForSequenceClassificationLanguageModelPatcher,
+                dummy_input_generator=DummyQwen3_5SequenceClassificationLMInputGenerator,
+                inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
+                max_transformers_version=self.MAX_TRANSFORMERS_VERSION,
+            )
+
+        return super().with_behavior(behavior)
 
 
 class Qwen3_5MTPOpenVINOConfig(OpenVINOConfigWithPast):
