@@ -49,6 +49,11 @@ ARCH_TO_CB_COMPATIBLE_SUBMODELS = {
         "task": "image-text-to-text",
         "submodels": ("language_model",),
     },
+    # dense hybrid Gated DeltaNet + full attention language model
+    "minicpm_ocr": {
+        "task": "image-text-to-text",
+        "submodels": ("language_model",),
+    },
 }
 
 # Architectures exported through an out-of-tree library are not part of the transformers set, so
