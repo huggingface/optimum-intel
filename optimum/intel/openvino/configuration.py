@@ -890,8 +890,7 @@ def _apply_default_ignored_scope_config(
 
 def _get_scoped_config_instances(scoped_configs: Optional[List[dict]]) -> Optional[List["nncf.ScopedConfig"]]:
     """
-    Converts scoped configs to `nncf.ScopedConfig` instances for `nncf.compress_weights()` call. Every scoped config
-    is a scope dict together with "bits", "sym" and "group_size" keys.
+    Converts scoped configs to `nncf.ScopedConfig` instances for `nncf.compress_weights()` call.
     """
     if scoped_configs is None:
         return None
@@ -920,7 +919,7 @@ def _validate_scoped_configs(scoped_configs: Optional[List[dict]]):
             "The `scoped_configs` parameter requires a newer NNCF version with `nncf.ScopedConfig` support. "
             "Please update NNCF."
         )
-    if not isinstance(scoped_configs, list) or not all(isinstance(c, dict) for c in scoped_configs):
+    if not isinstance(scoped_configs, list) or not all(isinstance(config, dict) for config in scoped_configs):
         raise ValueError(f"`scoped_configs` is expected to be a list of dicts, but found: {scoped_configs}")
     try:
         _get_scoped_config_instances(scoped_configs)
@@ -1392,6 +1391,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                     advanced_parameters, group_size_fallback_mode=nncf.GroupSizeFallbackMode(self.group_size_fallback)
                 )
             kwargs["advanced_parameters"] = advanced_parameters
+        scoped_configs = _get_scoped_config_instances(self.scoped_configs)
         result = {
             "mode": mode,
             "ratio": self.ratio,
@@ -1405,10 +1405,9 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             "gptq": self.gptq,
             "lora_correction": self.lora_correction,
             "backup_mode": backup_mode,
+            "scoped_configs": scoped_configs,
             **kwargs,
         }
-        if self.scoped_configs is not None:
-            result["scoped_configs"] = _get_scoped_config_instances(self.scoped_configs)
         return result
 
 
