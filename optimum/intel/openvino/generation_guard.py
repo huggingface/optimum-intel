@@ -998,7 +998,8 @@ class OVGuardSession:
             ]
             return self.guard.backend.moderate_conversations(conversations, RESPONSE_SCOPE, self.blocking_labels)
 
-        token_offset = self._consumed - self._prompt_length
+        # A full re-scan positions start at the first prompt token, so the prompt length is already counted.
+        token_offset = (self._consumed - self._prompt_length) if self._incremental else -self._prompt_length
         if self._incremental:
             chunk = input_ids[:, self._consumed :]
         else:

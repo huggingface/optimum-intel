@@ -483,6 +483,21 @@ class OVGuardedGenerationTest(unittest.TestCase):
         del llm, guard
         gc.collect()
 
+    @parameterized.expand([("incremental", True), ("full_rescan", False)])
+    def test_response_token_indices_start_at_zero(self, _, with_past):
+        llm, guard = self._load_llm(), self._load_token_classifier_guard(with_past=with_past)
+        out = llm.generate(
+            self._prompt(llm),
+            max_new_tokens=6,
+            do_sample=False,
+            guard=guard,
+            guard_config=OVGuardConfig(chunk_size=2, blocking_labels=()),
+            return_dict_in_generate=True,
+        )
+        self.assertEqual([verdict.token_index for verdict in out.guard.response], list(range(6)))
+        del llm, guard
+        gc.collect()
+
     def test_batched_generation_covers_every_sequence(self):
         llm, guard = self._load_llm(), self._load_token_classifier_guard()
         ids = self._prompt(llm, batch_size=2)

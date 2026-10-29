@@ -612,6 +612,7 @@ def get_multi_head_token_classification_spec(
             return spec
     return None
 
+
 # GraniteMoeHybrid's `config.layer_types` used "mamba"/"attention" for transformers < 5.13 and later
 # renamed to "linear_attention"/"full_attention" in v5.13 https://github.com/huggingface/transformers/pull/46738
 if is_transformers_version(">=", "5.13"):
