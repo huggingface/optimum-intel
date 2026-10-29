@@ -467,7 +467,7 @@ class Gemma4DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
                 past_seq_len = self.sliding_window
                 if self.model_type == "gemma3n_text":
                     past_seq_len = self.sequence_length
-                elif self.model_type == "gemma4_assistant":
+                elif self.model_type in {"gemma4_text", "gemma4_assistant"}:
                     past_seq_len = min(self.sequence_length, self.sliding_window)
                 shape = (
                     self.batch_size,
