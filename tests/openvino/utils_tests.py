@@ -222,9 +222,15 @@ def _save_tiny_qwen3_tokenizer(output_dir: Path) -> None:
 _DSPARK_MODEL_PATHS = {}
 
 
-def get_dspark_model_path(sample_from_anchor: bool = True, with_tokenizer: bool = True):
-    """Create a tiny DSpark checkpoint with a vanilla Markov head, once per process."""
-    key = (sample_from_anchor, with_tokenizer)
+def get_dspark_model_path(
+    sample_from_anchor: bool = True, with_tokenizer: bool = True, draft_vocab_size: Optional[int] = None
+):
+    """Create a tiny DSpark checkpoint with a vanilla Markov head, once per process.
+
+    With draft_vocab_size, the draft predicts a random, unsorted subset of the target vocabulary through its own
+    lm_head, and d2t maps it back as in the published pruned-vocabulary DSpark drafts.
+    """
+    key = (sample_from_anchor, with_tokenizer, draft_vocab_size)
     if key in _DSPARK_MODEL_PATHS:
         return _DSPARK_MODEL_PATHS[key]
 
@@ -247,6 +253,9 @@ def get_dspark_model_path(sample_from_anchor: bool = True, with_tokenizer: bool 
     config.markov_head_type = "vanilla"
     config.enable_confidence_head = False
     config.sample_from_anchor = sample_from_anchor
+    if draft_vocab_size is not None:
+        config.draft_vocab_size = draft_vocab_size
+        config.tie_word_embeddings = False
 
     output_dir = Path(tempfile.mkdtemp(prefix="optimum_intel_tiny_random_qwen3_dspark_"))
     atexit.register(shutil.rmtree, output_dir, ignore_errors=True)
@@ -257,6 +266,9 @@ def get_dspark_model_path(sample_from_anchor: bool = True, with_tokenizer: bool 
         # which would let tests pass without the head ever changing a sampled token.
         torch.nn.init.normal_(model.markov_head.markov_w1.weight, std=1.0)
         torch.nn.init.normal_(model.markov_head.markov_w2.weight, std=1.0)
+        if draft_vocab_size is not None:
+            target_ids = torch.randperm(config.vocab_size)[:draft_vocab_size]
+            model.d2t.copy_(target_ids - torch.arange(draft_vocab_size))
         model.save_pretrained(output_dir)
     model.config.architectures = ["Qwen3DSparkModel"]
     model.config.save_pretrained(output_dir)

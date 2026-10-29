@@ -59,6 +59,8 @@ from optimum.exporters.openvino.base import OpenVINOConfig
 from optimum.exporters.openvino.dflash_utils import (
     DFLASH_ARCHITECTURES,
     config_architecture,
+    dflash_draft_vocab_size,
+    has_pruned_draft_vocabulary,
     parse_and_validate_dflash_config,
     parse_and_validate_dspark_config,
 )
@@ -9209,12 +9211,38 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
         self.fc = nn.Linear(len(self.target_layer_ids) * config.hidden_size, config.hidden_size, bias=False)
         self.hidden_norm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.mask_token_id = dflash_config.get("mask_token_id", None)
+        if has_pruned_draft_vocabulary(config):
+            # A pruned draft predicts its own vocabulary, where draft token i is target token i + d2t[i] (Eagle-3).
+            draft_vocab_size = dflash_draft_vocab_size(config)
+            self.lm_head = nn.Linear(config.hidden_size, draft_vocab_size, bias=False)
+            self.register_buffer("d2t", torch.zeros(draft_vocab_size, dtype=torch.long))
+        else:
+            self.lm_head = None
+            self.register_buffer("d2t", None)
         self._init_dflash_variant(config)
         self.post_init()
 
     def _init_dflash_variant(self, config) -> None:
         # Called before post_init(), so that the modules a variant adds are weight-initialized and loaded too.
         pass
+
+    def check_pruned_vocabulary(self, missing_keys) -> None:
+        """Checks that a pruned-vocabulary checkpoint provided its LM head and a one-to-one d2t mapping."""
+        if self.lm_head is None:
+            return
+        missing = sorted({"lm_head.weight", "d2t"}.intersection(missing_keys))
+        if missing:
+            raise ValueError(
+                "A DFlash draft with draft_vocab_size < vocab_size requires the checkpoint tensors "
+                f"{', '.join(missing)}."
+            )
+        target_ids = torch.arange(self.d2t.numel(), device=self.d2t.device) + self.d2t
+        if (
+            target_ids.min() < 0
+            or target_ids.max() >= self.config.vocab_size
+            or target_ids.unique().numel() != target_ids.numel()
+        ):
+            raise ValueError("The DFlash draft d2t must map the draft tokens to distinct target token ids.")
 
     def _dflash_layer_inputs(self, token_type_ids: torch.LongTensor, block_rows: torch.LongTensor) -> Dict[str, Any]:
         return {}
@@ -9314,6 +9342,15 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
         )
 
 
+@dataclass
+class DFlashDraftOutput(ModelOutput):
+    """Output of a DFlash draft with a pruned vocabulary: draft-vocabulary logits and the Eagle-3 d2t mapping."""
+
+    logits: Optional[torch.FloatTensor] = None
+    past_key_values: Optional[Cache] = None
+    d2t: Optional[torch.LongTensor] = None
+
+
 # adopted from https://github.com/z-lab/dflash/blob/main/dflash/model.py#L302
 class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
     """DFlash draft head exported as embeddings-in / hidden-states-out.
@@ -9323,6 +9360,9 @@ class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
     the context rows).
     OpenVINO GenAI selects each sequence's candidate rows (``dflash/candidate_position_offset`` rows
     into the block) and grafts the target lm_head onto them at load time.
+
+    A draft with a pruned vocabulary (``draft_vocab_size < vocab_size``) keeps its own lm_head instead and emits
+    the ``logits`` of every row over the draft vocabulary, together with the ``d2t`` mapping to target token ids.
     """
 
     def forward(
@@ -9335,8 +9375,8 @@ class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
         past_key_values: Optional[Cache] = None,
         use_cache: Optional[bool] = None,
         **kwargs,
-    ) -> BaseModelOutputWithPast:
-        return super().forward(
+    ) -> Union[BaseModelOutputWithPast, DFlashDraftOutput]:
+        outputs = super().forward(
             hidden_states=hidden_states,
             noise_embedding=inputs_embeds,
             position_ids=position_ids,
@@ -9345,6 +9385,13 @@ class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
             past_key_values=past_key_values,
             use_cache=use_cache,
             **kwargs,
+        )
+        if self.lm_head is None:
+            return outputs
+        return DFlashDraftOutput(
+            logits=self.lm_head(outputs.last_hidden_state),
+            past_key_values=outputs.past_key_values,
+            d2t=self.d2t,
         )
 
 
@@ -9479,15 +9526,30 @@ class Qwen3DFlash2ForCausalLM(Qwen3DFlash2DraftModel, Qwen3DFlashForCausalLM):
 
 # adopted from https://github.com/deepseek-ai/DeepSpec/blob/main/deepspec/modeling/dspark/markov_head.py
 class DSparkVanillaMarkovHead(nn.Module):
-    """DeepSpec vanilla Markov head: the next-token logit bias is ``markov_w2(markov_w1[previous token])``."""
+    """DeepSpec vanilla Markov head: the next-token logit bias is ``markov_w2(markov_w1[previous token])``.
 
-    def __init__(self, vocab_size: int, markov_rank: int):
+    Previous tokens are target tokens, so markov_w1 covers the target vocabulary even when markov_w2 covers a
+    pruned draft vocabulary.
+    """
+
+    def __init__(self, vocab_size: int, markov_rank: int, draft_vocab_size: Optional[int] = None):
         super().__init__()
         self.markov_w1 = nn.Embedding(vocab_size, markov_rank)
-        self.markov_w2 = nn.Linear(markov_rank, vocab_size, bias=False)
+        self.markov_w2 = nn.Linear(markov_rank, draft_vocab_size or vocab_size, bias=False)
 
     def forward(self, prev_token_ids: torch.LongTensor) -> torch.Tensor:
         return self.markov_w2(self.markov_w1(prev_token_ids))
+
+    def to_target_vocabulary(self, d2t: torch.LongTensor, vocab_size: int) -> "DSparkVanillaMarkovHead":
+        """The same head over the target vocabulary, where tokens outside the draft vocabulary get a zero bias."""
+        draft_rows = self.markov_w2.weight.detach()
+        target_ids = torch.arange(d2t.numel(), device=d2t.device) + d2t
+        target_rows = draft_rows.new_zeros(vocab_size, draft_rows.shape[1]).index_copy(0, target_ids, draft_rows)
+        with torch.device("meta"):
+            head = DSparkVanillaMarkovHead(vocab_size, draft_rows.shape[1])
+        head.markov_w1 = self.markov_w1
+        head.markov_w2.weight = nn.Parameter(target_rows, requires_grad=False)
+        return head
 
 
 # adopted from https://github.com/deepseek-ai/DeepSpec/blob/main/deepspec/modeling/dspark/qwen3/modeling.py#L201
@@ -9504,12 +9566,14 @@ class Qwen3DSparkForCausalLM(Qwen3DFlashForCausalLM):
         dspark_config = parse_and_validate_dspark_config(config)
         self.markov_head = None
         if dspark_config.markov_rank > 0:
-            self.markov_head = DSparkVanillaMarkovHead(config.vocab_size, dspark_config.markov_rank)
+            self.markov_head = DSparkVanillaMarkovHead(
+                config.vocab_size, dspark_config.markov_rank, dflash_draft_vocab_size(config)
+            )
 
     def markov_head_for_export(self, top_k: int) -> "MarkovHeadForExport":
         if self.markov_head is None:
             raise ValueError("The DSpark draft has no Markov head (markov_rank is 0).")
-        return DSparkVanillaMarkovHeadForExport(self.markov_head, self.config, top_k)
+        return DSparkVanillaMarkovHeadForExport(self.markov_head, self.config, top_k, d2t=self.d2t)
 
 
 class MarkovHeadForExport(nn.Module):
@@ -9594,10 +9658,22 @@ class MarkovHeadForExport(nn.Module):
 
 
 class DSparkVanillaMarkovHeadForExport(MarkovHeadForExport):
-    """DSpark vanilla Markov head: the transition score from token i to token j is ``markov_w1[i] . markov_w2[j]``."""
+    """DSpark vanilla Markov head: the transition score from token i to token j is ``markov_w1[i] . markov_w2[j]``.
 
-    def __init__(self, markov_head: DSparkVanillaMarkovHead, config: "Qwen3Config", top_k: int):
+    The head always scores target-vocabulary logits. For a pruned draft, given by ``d2t``, the runtime maps the
+    draft logits to the target vocabulary with -inf outside the draft vocabulary.
+    """
+
+    def __init__(
+        self,
+        markov_head: DSparkVanillaMarkovHead,
+        config: "Qwen3Config",
+        top_k: int,
+        d2t: Optional[torch.LongTensor] = None,
+    ):
         super().__init__(top_k)
+        if d2t is not None:
+            markov_head = markov_head.to_target_vocabulary(d2t, config.vocab_size)
         self.markov_head = markov_head
         self.config = config
         # Weights must be read through modules: 16-bit export hides raw `.weight` tensors behind placeholders.

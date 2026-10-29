@@ -247,6 +247,13 @@ DFlash v2 export also produces `openvino_markov_head_model.xml`, its candidate s
 - MiniCPM-V-4.7-1B-DSpark
 - MiniCPM-V-4.7-35B-A3B-DSpark
 
+## [MiniCPM-OCR 1.0 DSpark](https://huggingface.co/openbmb/MiniCPM-OCR-1.0-DSpark)
+- MiniCPM-OCR-1.0-DSpark
+
+A DSpark draft with a pruned vocabulary (`draft_vocab_size` smaller than `vocab_size`) keeps its own lm_head: its
+`openvino_model.xml` emits `logits` over the draft vocabulary and the Eagle-3 style `d2t` mapping to target token ids
+instead of the hidden states. Its Markov head model still scores target-vocabulary logits.
+
 ## [Ouro](https://huggingface.co/ByteDance/Ouro-1.4B)
 - Ouro-1.4B
 - Ouro-1.4B-Thinking

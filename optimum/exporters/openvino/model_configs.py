@@ -44,6 +44,7 @@ from optimum.exporters.openvino.dflash_utils import (
     MarkovHeadSpec,
     config_architecture,
     dflash_candidate_position_offset,
+    has_pruned_draft_vocabulary,
     markov_head_spec,
     parse_and_validate_dflash_config,
 )
@@ -513,9 +514,11 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
         )
         self.dflash = config_architecture(config) in DFLASH_ARCHITECTURES
         self.dflash2 = False
+        self.pruned_draft_vocabulary = False
         self.markov_head = None
         if self.dflash:
             self.dflash2 = parse_and_validate_dflash_config(config).version == 2
+            self.pruned_draft_vocabulary = has_pruned_draft_vocabulary(config)
             self.candidate_position_offset = dflash_candidate_position_offset(config)
             self.markov_head = markov_head_spec(config)
             if self.markov_head is not None:
@@ -559,6 +562,14 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
         if self.dflash:
             common_outputs = super().outputs
             common_outputs.pop("logits", None)
+            if self.pruned_draft_vocabulary:
+                # The draft's own lm_head over the draft vocabulary, and the d2t mapping to target token ids.
+                common_outputs.pop("last_hidden_state", None)
+                return {
+                    "logits": {0: "batch_size", 1: "sequence_length"},
+                    **common_outputs,
+                    "d2t": {0: "draft_vocab_size"},
+                }
             return {
                 "last_hidden_state": {0: "batch_size", 1: "sequence_length"},
                 **common_outputs,

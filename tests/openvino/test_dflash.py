@@ -16,6 +16,7 @@
 import json
 import math
 import os
+import shutil
 import unittest
 from collections import Counter
 from copy import deepcopy
@@ -28,16 +29,19 @@ import openvino as ov
 import torch
 from openvino._offline_transformations import paged_attention_transformation
 from parameterized import parameterized
+from safetensors.torch import load_file, save_file
 from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
 from utils_tests import MODEL_NAMES, get_dflash2_model_path, get_dspark_model_path
 
 from optimum.exporters.openvino import export_from_model
-from optimum.exporters.openvino.__main__ import infer_task, main_export
+from optimum.exporters.openvino.__main__ import infer_task, load_native_draft_model, main_export
 from optimum.exporters.openvino.convert import _get_submodels_and_export_configs, export_models
 from optimum.exporters.openvino.dflash_utils import (
     MARKOV_HEAD_DEFAULT_TOP_K,
     DSparkConfig,
+    has_pruned_draft_vocabulary,
+    markov_head_spec,
     parse_and_validate_dflash_config,
     parse_and_validate_dspark_config,
 )
@@ -55,6 +59,10 @@ from optimum.exporters.openvino.model_patcher import (
 from optimum.intel.openvino.utils import TemporaryDirectory
 from optimum.intel.utils.import_utils import is_transformers_version
 from optimum.utils.input_generators import DummyTextInputGenerator
+
+
+# Below MARKOV_HEAD_DEFAULT_TOP_K, so the exported K is capped by the draft vocabulary.
+_PRUNED_DRAFT_VOCAB_SIZE = 48
 
 
 def _per_row_inputs(config, context_length, block_length, committed_length):
@@ -550,6 +558,169 @@ class DSparkExportTest(unittest.TestCase):
             ov_edges = torch.from_numpy(np.array(ov_outputs[compiled_markov_head.output("edge_scores")]))
             torch.testing.assert_close(ov_edges, expected_edges, rtol=1e-4, atol=1e-4)
 
+    @staticmethod
+    def _pruned_model():
+        model_path = get_dspark_model_path(draft_vocab_size=_PRUNED_DRAFT_VOCAB_SIZE)
+        return load_native_draft_model("Qwen3DSparkModel", model_path).eval()
+
+    @staticmethod
+    def _reference_pruned_edges(markov_w1, markov_w2, d2t, draft_logits, anchor_token_id, top_k):
+        """Top-K lattice of one block of a pruned draft, scored over the draft vocabulary as DeepSpec does."""
+        unary_logits, draft_ids = draft_logits.topk(top_k, dim=-1)
+        candidate_ids = draft_ids + d2t[draft_ids]
+        predecessor_ids = torch.cat([torch.full((1, top_k), int(anchor_token_id)), candidate_ids[:-1]])
+        edge_scores = markov_w1[predecessor_ids] @ markov_w2[draft_ids].transpose(-1, -2)
+        return edge_scores + unary_logits.unsqueeze(-2), candidate_ids
+
+    def test_pruned_draft_vocabulary_config(self):
+        config = self._dspark_config(markov_rank=8, draft_vocab_size=16)
+        self.assertTrue(has_pruned_draft_vocabulary(config))
+        self.assertEqual(markov_head_spec(config).top_k, 16)
+        large_config = self._dspark_config(markov_rank=8, vocab_size=256, draft_vocab_size=128)
+        self.assertEqual(markov_head_spec(large_config).top_k, MARKOV_HEAD_DEFAULT_TOP_K)
+        for task in ("text-generation", "feature-extraction"):
+            with self.subTest(task=task):
+                self.assertEqual(list(Qwen3OpenVINOConfig(config, task=task).outputs), ["logits", "d2t"])
+
+        for full_config in (
+            self._dspark_config(markov_rank=8),
+            self._dspark_config(markov_rank=8, draft_vocab_size=32),
+        ):
+            with self.subTest(draft_vocab_size=getattr(full_config, "draft_vocab_size", None)):
+                self.assertFalse(has_pruned_draft_vocabulary(full_config))
+                self.assertEqual(
+                    list(Qwen3OpenVINOConfig(full_config, task="text-generation").outputs), ["last_hidden_state"]
+                )
+
+        for size in (0, 33, 16.0, True):
+            with self.subTest(draft_vocab_size=size), self.assertRaisesRegex(ValueError, "draft_vocab_size"):
+                Qwen3OpenVINOConfig(self._dspark_config(markov_rank=8, draft_vocab_size=size))
+
+    def test_pruned_vocabulary_checkpoint_is_validated_on_load(self):
+        model_path = Path(get_dspark_model_path(draft_vocab_size=_PRUNED_DRAFT_VOCAB_SIZE))
+        model = load_native_draft_model("Qwen3DSparkModel", str(model_path))
+        config = model.config
+        checkpoint = load_file(model_path / "model.safetensors")
+        self.assertTrue(torch.equal(model.d2t, checkpoint["d2t"]))
+        self.assertTrue(torch.equal(model.lm_head.weight, checkpoint["lm_head.weight"]))
+        self.assertEqual(model.lm_head.weight.shape, (_PRUNED_DRAFT_VOCAB_SIZE, config.hidden_size))
+        # Previous tokens are target tokens, while the next-token table covers the draft vocabulary.
+        self.assertEqual(model.markov_head.markov_w1.weight.shape, (config.vocab_size, config.markov_rank))
+        self.assertEqual(model.markov_head.markov_w2.weight.shape, (_PRUNED_DRAFT_VOCAB_SIZE, config.markov_rank))
+        full_vocabulary_model = load_native_draft_model("Qwen3DSparkModel", get_dspark_model_path())
+        self.assertIsNone(full_vocabulary_model.lm_head)
+        self.assertIsNone(full_vocabulary_model.d2t)
+
+        d2t = checkpoint["d2t"]
+        target_ids = torch.arange(d2t.numel()) + d2t
+        duplicate_d2t, negative_d2t, out_of_range_d2t = d2t.clone(), d2t.clone(), d2t.clone()
+        duplicate_d2t[1] = target_ids[0] - 1
+        negative_d2t[0] = -1
+        out_of_range_d2t[0] = config.vocab_size
+        cases = {
+            "missing_d2t": ({name: value for name, value in checkpoint.items() if name != "d2t"}, "tensors d2t"),
+            "missing_lm_head": (
+                {name: value for name, value in checkpoint.items() if name != "lm_head.weight"},
+                "tensors lm_head.weight",
+            ),
+            "duplicate_d2t": ({**checkpoint, "d2t": duplicate_d2t}, "distinct target token ids"),
+            "negative_d2t": ({**checkpoint, "d2t": negative_d2t}, "distinct target token ids"),
+            "out_of_range_d2t": ({**checkpoint, "d2t": out_of_range_d2t}, "distinct target token ids"),
+        }
+        with TemporaryDirectory() as tmpdirname:
+            for name, (tensors, message) in cases.items():
+                with self.subTest(name), self.assertRaisesRegex(ValueError, message):
+                    broken_path = Path(tmpdirname) / name
+                    broken_path.mkdir()
+                    shutil.copy(model_path / "config.json", broken_path)
+                    save_file(tensors, broken_path / "model.safetensors", metadata={"format": "pt"})
+                    load_native_draft_model("Qwen3DSparkModel", str(broken_path))
+
+    def test_pruned_vocabulary_export_package_and_markov_head_computations(self):
+        model = self._pruned_model()
+        config = model.config
+        target_ids = torch.arange(_PRUNED_DRAFT_VOCAB_SIZE) + model.d2t
+        with TemporaryDirectory() as tmpdirname:
+            output_dir = Path(tmpdirname)
+            parts = _export_draft(model, output_dir)
+            self.assertEqual(list(parts), ["model", "markov_head_model"])
+
+            core = ov.Core()
+            draft_ir = core.read_model(output_dir / "openvino_model.xml")
+            markov_head_ir = core.read_model(output_dir / "openvino_markov_head_model.xml")
+            self.assertEqual(
+                [(item.any_name, item.element_type) for item in draft_ir.outputs],
+                [("logits", ov.Type.f32), ("d2t", ov.Type.i64)],
+            )
+            self.assertEqual(draft_ir.output("logits").partial_shape[2].get_length(), _PRUNED_DRAFT_VOCAB_SIZE)
+            d2t_source = draft_ir.output("d2t").get_node().input_value(0).get_node()
+            self.assertEqual(d2t_source.get_type_name(), "Constant")
+            self.assertTrue(np.array_equal(d2t_source.get_data(), model.d2t.numpy()))
+            self.assertEqual(self._markov_weights(draft_ir, config), [])
+
+            torch.manual_seed(5)
+            inputs = _per_row_inputs(config, context_length=3, block_length=4, committed_length=0)
+            with torch.no_grad():
+                reference_logits = model(**inputs, use_cache=False).logits
+            ov_logits = core.compile_model(draft_ir, "CPU")({name: value.numpy() for name, value in inputs.items()})
+            torch.testing.assert_close(
+                torch.from_numpy(np.array(ov_logits["logits"])), reference_logits, rtol=1e-4, atol=1e-5
+            )
+
+            # The Markov head scores target-vocabulary logits, so both of its tables cover the target vocabulary.
+            markov_rt_info = markov_head_ir.get_rt_info()["dflash"]
+            self.assertEqual(markov_rt_info["top_k"].value, str(_PRUNED_DRAFT_VOCAB_SIZE))
+            self.assertEqual(markov_rt_info["vocab_size"].value, str(config.vocab_size))
+            table_bytes = config.vocab_size * config.markov_rank * ov.Type.f32.size
+            self.assertGreaterEqual(len(self._markov_weights(markov_head_ir, config)), 2)
+            self.assertLess((output_dir / "openvino_markov_head_model.bin").stat().st_size, 3 * table_bytes)
+
+            markov_w1 = model.markov_head.markov_w1.weight.detach()
+            markov_w2 = model.markov_head.markov_w2.weight.detach()
+            markov_step_ir = self._keep_computation(markov_head_ir, ["prev_token_ids"], ["markov_bias"])
+            prev_token_ids = torch.tensor([0, int(target_ids[3]), config.vocab_size - 1])
+            ov_bias = core.compile_model(markov_step_ir, "CPU")({"prev_token_ids": prev_token_ids.numpy()})[0]
+            ov_bias = torch.from_numpy(np.array(ov_bias))
+            with torch.no_grad():
+                draft_bias = model.markov_head(prev_token_ids)
+            torch.testing.assert_close(ov_bias[:, target_ids], draft_bias, rtol=1e-4, atol=1e-4)
+            outside_draft_vocabulary = torch.ones(config.vocab_size, dtype=torch.bool)
+            outside_draft_vocabulary[target_ids] = False
+            self.assertTrue((ov_bias[:, outside_draft_vocabulary] == 0).all())
+
+            # The runtime widens the draft logits to the target vocabulary with -inf outside the draft vocabulary.
+            block_lengths = [3, 1, 4]
+            draft_blocks = self._packed_blocks(block_lengths, _PRUNED_DRAFT_VOCAB_SIZE)
+            target_logits = torch.full((sum(block_lengths), config.vocab_size), float("-inf"))
+            target_logits[:, target_ids] = draft_blocks["draft_logits"]
+            lattice_inputs = {
+                **draft_blocks,
+                "draft_logits": target_logits,
+                "anchor_token_ids": torch.randint(config.vocab_size, (len(block_lengths),)),
+            }
+            for top_k in (None, self.TOP_K):
+                with self.subTest(top_k=top_k):
+                    lattice_ir = self._keep_computation(
+                        markov_head_ir, list(lattice_inputs), ["edge_scores", "candidate_ids"], top_k
+                    )
+                    expected_top_k = top_k or _PRUNED_DRAFT_VOCAB_SIZE
+                    compiled_lattice = core.compile_model(lattice_ir, "CPU")
+                    ov_outputs = compiled_lattice({name: value.numpy() for name, value in lattice_inputs.items()})
+                    ov_candidate_ids = torch.from_numpy(np.array(ov_outputs[compiled_lattice.output("candidate_ids")]))
+                    ov_edges = torch.from_numpy(np.array(ov_outputs[compiled_lattice.output("edge_scores")]))
+                    begins = lattice_inputs["subsequence_begins"].tolist()
+                    for block, (begin, end) in enumerate(zip(begins[:-1], begins[1:])):
+                        expected_edges, expected_ids = self._reference_pruned_edges(
+                            markov_w1,
+                            markov_w2,
+                            model.d2t,
+                            draft_blocks["draft_logits"][begin:end],
+                            lattice_inputs["anchor_token_ids"][block],
+                            expected_top_k,
+                        )
+                        self.assertTrue(torch.equal(ov_candidate_ids[begin:end], expected_ids))
+                        torch.testing.assert_close(ov_edges[begin:end], expected_edges, rtol=1e-4, atol=1e-4)
+
 
 @unittest.skipUnless(is_transformers_version(">=", "4.57"), "DFlash-2 requires Transformers 4.57 or newer")
 class DFlash2ExportTest(unittest.TestCase):
@@ -671,6 +842,11 @@ class DFlash2ExportTest(unittest.TestCase):
         invalid_mask_config.dflash_config["mask_token_id"] = config.vocab_size
         with self.assertRaisesRegex(ValueError, "mask_token_id"):
             parse_and_validate_dflash_config(invalid_mask_config)
+
+        pruned_config = deepcopy(config)
+        pruned_config.draft_vocab_size = config.vocab_size // 2
+        with self.assertRaisesRegex(ValueError, "pruned draft vocabulary"):
+            parse_and_validate_dflash_config(pruned_config)
 
         duplicate_layers_config = deepcopy(config)
         duplicate_layers_config.dflash_config["target_layer_ids"] = [0, 0]
@@ -1021,7 +1197,7 @@ _PA_KEY_CACHE, _PA_SLIDING_WINDOW, _PA_TOKEN_TYPE_IDS = 3, 10, 25
 class DFlashPagedAttentionTest(unittest.TestCase):
     """The draft IR of every DFlash variant runs on PagedAttention, the DFlash backend of OpenVINO GenAI."""
 
-    VARIANTS = (("dflash",), ("dflash2",), ("dspark",))
+    VARIANTS = (("dflash",), ("dflash2",), ("dspark",), ("dspark_pruned",))
 
     @staticmethod
     def _model(variant):
@@ -1057,6 +1233,9 @@ class DFlashPagedAttentionTest(unittest.TestCase):
             config.markov_rank = 8
             config.mask_token_id = mask_token_id
             config.target_layer_ids = target_layer_ids
+            if variant == "dspark_pruned":
+                config.draft_vocab_size = _PRUNED_DRAFT_VOCAB_SIZE
+                config.tie_word_embeddings = False
             model_class = Qwen3DSparkForCausalLM
         torch.manual_seed(0)
         model = model_class(config).eval()
@@ -1065,10 +1244,18 @@ class DFlashPagedAttentionTest(unittest.TestCase):
                 # the default base kernel only passes the current row, which would hide taps reaching other rows
                 if name.endswith("base_kernel"):
                     parameter.copy_(torch.randn_like(parameter))
+            if model.d2t is not None:
+                draft_vocab_size = model.d2t.numel()
+                model.d2t.copy_(torch.randperm(config.vocab_size)[:draft_vocab_size] - torch.arange(draft_vocab_size))
         return model
 
     @staticmethod
-    def _reference_outputs(model, steps):
+    def _draft_rows(output):
+        """What the draft emits for every row: its logits if it has an lm_head, else its hidden states."""
+        return output.logits if "logits" in output else output.last_hidden_state
+
+    @classmethod
+    def _reference_outputs(cls, model, steps):
         """Outputs of consecutive draft steps, dropping each block from the cache afterwards as past_lens does.
 
         The draft builds the cache itself, and its sliding layers must keep the whole past: the mask applies the window.
@@ -1077,7 +1264,7 @@ class DFlashPagedAttentionTest(unittest.TestCase):
         with torch.no_grad():
             for inputs in steps:
                 output = model(**inputs, past_key_values=cache, use_cache=True)
-                outputs.append(output.last_hidden_state)
+                outputs.append(cls._draft_rows(output))
                 cache = output.past_key_values
                 cache.crop(cache.get_seq_length() - int(inputs["token_type_ids"].sum()))
         return outputs
@@ -1186,9 +1373,9 @@ class DFlashPagedAttentionTest(unittest.TestCase):
             hidden_states=torch.where(is_block, inputs["hidden_states"], torch.randn_like(inputs["hidden_states"])),
         )
         with torch.no_grad():
-            reference = model(**inputs, use_cache=False).last_hidden_state[:, is_block[0, :, 0]]
-            ignored_output = model(**ignored_rows_changed, use_cache=False).last_hidden_state[:, is_block[0, :, 0]]
-            context_output = model(**context_changed, use_cache=False).last_hidden_state[:, is_block[0, :, 0]]
+            reference = self._draft_rows(model(**inputs, use_cache=False))[:, is_block[0, :, 0]]
+            ignored_output = self._draft_rows(model(**ignored_rows_changed, use_cache=False))[:, is_block[0, :, 0]]
+            context_output = self._draft_rows(model(**context_changed, use_cache=False))[:, is_block[0, :, 0]]
         torch.testing.assert_close(ignored_output, reference)
         self.assertFalse(torch.allclose(context_output, reference))
 
@@ -1222,7 +1409,12 @@ class DFlashPagedAttentionTest(unittest.TestCase):
                 ]
                 feed = self._paged_feed(step_inputs, committed_lengths, block_tables)
                 self.assertEqual({port.get_any_name() for port in request.model_inputs}, set(feed) | cache_names)
-                output = torch.from_numpy(np.array(request.infer(feed)["last_hidden_state"]))
+                results = request.infer(feed)
+                output_name = "last_hidden_state"
+                if model.d2t is not None:
+                    output_name = "logits"
+                    self.assertTrue(np.array_equal(results["d2t"], model.d2t.numpy()))
+                output = torch.from_numpy(np.array(results[output_name]))
                 # every row of every sequence comes out, in row order
                 reference = torch.cat([outputs[step] for outputs in references], dim=1)
                 torch.testing.assert_close(

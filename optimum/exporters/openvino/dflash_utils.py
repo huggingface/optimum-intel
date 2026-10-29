@@ -125,6 +125,9 @@ def _validate_common_dflash_config(config: PretrainedConfig, dflash_config: Dict
         raise ValueError(f"DFlash v{version} export requires a positive integer vocabulary size.")
     if not isinstance(mask_token_id, int) or isinstance(mask_token_id, bool) or not 0 <= mask_token_id < vocab_size:
         raise ValueError(f"DFlash v{version} dflash_config['mask_token_id'] must be an integer in [0, vocab_size).")
+    draft_vocab_size = dflash_draft_vocab_size(config)
+    if not _is_positive_int(draft_vocab_size) or draft_vocab_size > vocab_size:
+        raise ValueError(f"DFlash v{version} draft_vocab_size must be an integer in [1, vocab_size].")
 
     target_layer_ids = dflash_config["target_layer_ids"]
     if (
@@ -146,6 +149,8 @@ def _validate_dflash2_config(config: PretrainedConfig, dflash_config: Dict[str, 
     missing = [name for name in DFLASH2_REQUIRED_CONFIG_FIELDS if dflash_config.get(name) is None]
     if missing:
         raise ValueError(f"DFlash v2 export requires configuration fields: {', '.join(missing)}.")
+    if has_pruned_draft_vocabulary(config):
+        raise ValueError("DFlash v2 export does not support a pruned draft vocabulary.")
 
     conv_group_size = dflash_config["conv_group_size"]
     conv_kernel_size = dflash_config["conv_kernel_size"]
@@ -188,9 +193,25 @@ def _is_positive_int(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
+def dflash_draft_vocab_size(config: PretrainedConfig) -> Any:
+    """The number of tokens the draft predicts: draft_vocab_size when the vocabulary is pruned, else vocab_size."""
+    draft_vocab_size = getattr(config, "draft_vocab_size", None)
+    return config.vocab_size if draft_vocab_size is None else draft_vocab_size
+
+
+def has_pruned_draft_vocabulary(config: PretrainedConfig) -> bool:
+    """Whether the draft predicts a subset of the target vocabulary through its own LM head and a d2t mapping."""
+    return dflash_draft_vocab_size(config) < config.vocab_size
+
+
 def is_dflash_draft_model(ov_model: Model) -> bool:
     """Whether an IR was exported as a DFlash draft backbone (a Markov head model is not one)."""
     return ov_model.has_rt_info(["dflash_mode"]) and ov_model.get_rt_info(["dflash_mode"]).value == "True"
+
+
+def dflash_draft_has_lm_head(ov_model: Model) -> bool:
+    """Whether a DFlash draft IR computes its own logits instead of reusing the target LM head at runtime."""
+    return any("logits" in output.get_names() for output in ov_model.outputs)
 
 
 def parse_and_validate_dflash_config(config: PretrainedConfig, expected_version: int | None = None) -> DFlashConfig:
@@ -274,10 +295,11 @@ def markov_head_spec(config: PretrainedConfig) -> MarkovHeadSpec | None:
         dspark_config = parse_and_validate_dspark_config(config)
         if dspark_config.markov_rank == 0:
             return None
+        # The scorer runs on target-width logits, but only draft-vocabulary entries are finite.
         return MarkovHeadSpec(
             dspark_config.markov_rank,
             dspark_config.markov_head_type,
-            min(MARKOV_HEAD_DEFAULT_TOP_K, config.vocab_size),
+            min(MARKOV_HEAD_DEFAULT_TOP_K, dflash_draft_vocab_size(config)),
         )
     if DFLASH_ARCHITECTURE_VERSIONS.get(architecture) == 2:
         dflash_config = parse_and_validate_dflash_config(config, expected_version=2).values
