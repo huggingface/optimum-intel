@@ -17,6 +17,7 @@ import gc
 import os
 import subprocess
 import unittest
+from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import numpy as np
