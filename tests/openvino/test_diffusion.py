@@ -90,6 +90,20 @@ def _ltx2_modality_isolation_off(model_arch):
     return {"modality_scale": 1.0, "audio_modality_scale": 1.0}
 
 
+def _record_ltx2_timestep_shapes(pipeline):
+    """Record the shape of every `timestep` the LTX-2 transformer request receives."""
+    pipeline.transformer.compile()
+    request = pipeline.transformer.request
+    shapes = []
+
+    def recording_request(inputs, *args, **kwargs):
+        shapes.append(tuple(inputs["timestep"].shape))
+        return request(inputs, *args, **kwargs)
+
+    pipeline.transformer.request = recording_request
+    return shapes
+
+
 class OVPipelineForText2ImageTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = [
         "stable-diffusion",
@@ -1238,6 +1252,24 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
+    def test_ltx2_timestep_per_sample(self, model_arch: str):
+        # Text-to-video denoises every token at the same noise level, so the transformer gets one timestep
+        # per sample ([B, 1]), which its per-token input broadcasts. Expanding it to [B, S] would compute
+        # the AdaLN modulation for every token, which costs ~9 GiB of GPU memory on LTX-2.3.
+        if not model_arch.startswith("ltx2"):
+            self.skipTest(f"{model_arch} takes a rank-1 timestep")
+
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
+        timestep_shapes = _record_ltx2_timestep_shapes(pipeline)
+        pipeline(**self.generate_inputs(height=64, width=64, batch_size=1, model_arch=model_arch))
+
+        self.assertTrue(timestep_shapes)
+        # One sample per pass: the classifier-free guidance halves run one after the other, as in GenAI.
+        for shape in timestep_shapes:
+            self.assertEqual(shape, (1, 1))
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
+    @require_diffusers
     def test_compare_spatio_temporal_guidance_to_diffusers_pipeline(self, model_arch: str):
         # STG perturbs the self-attention of selected transformer blocks, which the exported graph
         # cannot select by block index on its own, so check the traced mask reproduces it.
@@ -1336,7 +1368,10 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
 
         self.assertFalse(ov_pipeline.is_dynamic)
         expected_batch = batch_size * num_images_per_prompt
-        expected_batch *= 2
+        # LTX-2 runs the two classifier-free guidance halves in separate transformer passes, so its
+        # transformer is sized for one half; LTX-Video runs them together.
+        if not model_arch.startswith("ltx2"):
+            expected_batch *= 2
         self.assertEqual(
             ov_pipeline.batch_size,
             expected_batch,
@@ -1422,6 +1457,24 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
         from diffusers import LTXImageToVideoPipeline
 
         return LTXImageToVideoPipeline
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
+    @require_diffusers
+    def test_ltx2_timestep_per_token(self, model_arch: str):
+        # Image-to-video keeps its conditioning frames at a lower noise level than the rest, so the
+        # timestep must stay per token ([B, S]), unlike text-to-video's [B, 1].
+        if not model_arch.startswith("ltx2"):
+            self.skipTest(f"{model_arch} takes a rank-1 timestep")
+
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
+        timestep_shapes = _record_ltx2_timestep_shapes(pipeline)
+        inputs = self.generate_inputs(height=64, width=64, batch_size=1, num_frames=9, model_arch=model_arch)
+        pipeline(**inputs)
+
+        self.assertTrue(timestep_shapes)
+        for shape in timestep_shapes:
+            self.assertEqual(shape[0], 1)
+            self.assertGreater(shape[1], 1)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
@@ -1516,7 +1569,10 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
 
         self.assertFalse(ov_pipeline.is_dynamic)
         expected_batch = batch_size * num_images_per_prompt
-        expected_batch *= 2
+        # LTX-2 runs the two classifier-free guidance halves in separate transformer passes, so its
+        # transformer is sized for one half; LTX-Video runs them together.
+        if not model_arch.startswith("ltx2"):
+            expected_batch *= 2
         self.assertEqual(
             ov_pipeline.batch_size,
             expected_batch,

@@ -67,6 +67,7 @@ from optimum.exporters.openvino.patching_utils import (
 from optimum.exporters.openvino.utils import (
     GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE,
     GRANITEMOEHYBRID_MAMBA_LAYER_TYPE,
+    LTX2_ROPE_INPUTS,
     is_ltx2_3_transformer_config,
 )
 from optimum.intel.utils.import_utils import (
@@ -11403,13 +11404,16 @@ class KokoroModelPatcher(ModelPatcher):
         self._model.forward = self._model._orig_forward
 
 
-def _ltx2_connector_forward_patched(self, hidden_states, attention_mask=None, attn_mask_binarize_threshold=-9000.0):
+def _ltx2_connector_forward_patched(
+    self, hidden_states, attention_mask=None, attn_mask_binarize_threshold=-9000.0, rotary_emb=None
+):
     """
     Patched forward for LTX2ConnectorTransformer1d.
 
     Original does boolean-mask indexing `hidden_states[i, mask[i].bool(), :]`, whose output
     length depends on mask values and cannot be traced. Rewritten with fixed-shape sort +
-    gather + arange mask (valid tokens left, registers right).
+    gather + arange mask (valid tokens left, registers right). The RoPE (cos, sin) pair is taken
+    from `rotary_emb` when given, so it is a graph input rather than computed in the graph.
 
     Original (`LTX2ConnectorTransformer1d.forward`, data-dependent indexing at L304):
     https://github.com/huggingface/diffusers/blob/v0.38.0/src/diffusers/pipelines/ltx2/connectors.py#L279-L330
@@ -11444,7 +11448,8 @@ def _ltx2_connector_forward_patched(self, hidden_states, attention_mask=None, at
 
         attention_mask = torch.zeros_like(attention_mask)
 
-    rotary_emb = self.rope(batch_size, seq_len, device=hidden_states.device)
+    if rotary_emb is None:
+        rotary_emb = self.rope(batch_size, seq_len, device=hidden_states.device)
 
     for block in self.transformer_blocks:
         hidden_states = block(hidden_states, attention_mask=attention_mask, rotary_emb=rotary_emb)
@@ -11454,12 +11459,21 @@ def _ltx2_connector_forward_patched(self, hidden_states, attention_mask=None, at
 
 
 def _ltx2_connectors_top_level_forward_patched(
-    self, text_encoder_hidden_states, attention_mask, padding_side="left", scale_factor=8
+    self,
+    text_encoder_hidden_states,
+    attention_mask,
+    video_connector_rotary_cos=None,
+    video_connector_rotary_sin=None,
+    audio_connector_rotary_cos=None,
+    audio_connector_rotary_sin=None,
+    padding_side="left",
+    scale_factor=8,
 ):
     """
     Patched top-level forward for LTX2TextConnectors: inlines per_layer_masked_mean_norm
     (masked_fill/arange/amin/amax, all fixed-shape) and hardcodes padding_side="left" so the
-    connectors stack traces cleanly as a single graph.
+    connectors stack traces cleanly as a single graph. Each connector's RoPE (cos, sin) is a graph
+    input, precomputed on the host as for the transformer, since f16 cannot resolve its angles.
 
     Originals (`LTX2TextConnectors.forward` and `per_layer_masked_mean_norm`):
     https://github.com/huggingface/diffusers/blob/v0.38.0/src/diffusers/pipelines/ltx2/connectors.py#L397-L476
@@ -11525,14 +11539,22 @@ def _ltx2_connectors_top_level_forward_patched(
     add_attn_mask = add_attn_mask.reshape(attention_mask.shape[0], 1, 1, attention_mask.shape[-1])
     add_attn_mask = add_attn_mask * torch.finfo(text_dtype).max
 
-    video_text_embedding, video_attn_mask = self.video_connector(video_text_emb_proj, add_attn_mask)
+    video_rotary_emb = (
+        None if video_connector_rotary_cos is None else (video_connector_rotary_cos, video_connector_rotary_sin)
+    )
+    video_text_embedding, video_attn_mask = self.video_connector(
+        video_text_emb_proj, add_attn_mask, rotary_emb=video_rotary_emb
+    )
 
     # Convert video attn mask to binary
     binary_attn_mask = (video_attn_mask < 1e-6).to(torch.int64)
     binary_attn_mask = binary_attn_mask.reshape(video_text_embedding.shape[0], video_text_embedding.shape[1], 1)
     video_text_embedding = video_text_embedding * binary_attn_mask
 
-    audio_text_embedding, _ = self.audio_connector(audio_text_emb_proj, add_attn_mask)
+    audio_rotary_emb = (
+        None if audio_connector_rotary_cos is None else (audio_connector_rotary_cos, audio_connector_rotary_sin)
+    )
+    audio_text_embedding, _ = self.audio_connector(audio_text_emb_proj, add_attn_mask, rotary_emb=audio_rotary_emb)
 
     return video_text_embedding, audio_text_embedding, binary_attn_mask.squeeze(-1)
 
@@ -11594,28 +11616,21 @@ def _ltx2_apply_split_rotary_emb(x, freqs):
     """
     cos, sin = freqs
     x_dtype = x.dtype
+    # Take the half head dim from cos, not from x: it stays static in the IR, which OpenVINO's RoPE fusion requires.
+    r = cos.shape[-1]
 
     if x.ndim == 3 and cos.ndim == 4:
         b, h, t, _ = cos.shape
-        x = x.reshape(b, t, h, -1).swapaxes(1, 2)
+        x = x.reshape(b, t, h, 2 * r).swapaxes(1, 2)
         needs_reshape = True
     else:
         needs_reshape = False
 
-    last = x.shape[-1]
-    r = last // 2
-
-    split_x = x.reshape(*x.shape[:-1], 2, r).float()
-    first_x = split_x[..., :1, :]
-    second_x = split_x[..., 1:, :]
-
-    cos_u = cos.unsqueeze(-2)
-    sin_u = sin.unsqueeze(-2)
-
-    first_out = first_x * cos_u - sin_u * second_x
-    second_out = second_x * cos_u + sin_u * first_x
-
-    out = torch.cat([first_out, second_out], dim=-2).reshape(*split_x.shape[:-2], last)
+    # Canonical rotate-half form (x * cos + rotate_half(x) * sin), which OpenVINO CPU fuses into a RoPE node.
+    x = x.float()
+    cos = torch.cat([cos, cos], dim=-1)
+    sin = torch.cat([sin, sin], dim=-1)
+    out = x * cos + torch.cat([-x[..., r:], x[..., :r]], dim=-1) * sin
 
     if needs_reshape:
         out = out.swapaxes(1, 2).reshape(b, t, -1)
@@ -11849,6 +11864,24 @@ def _ltx2_cross_modality_gated_forward(orig_forward, guidance_state):
     return forward
 
 
+def _ltx2_precomputed_rope_forward(orig_forward, rope_state, module_name):
+    """
+    Forward for an `LTX2AudioVideoRotaryPosEmbed` that returns the (cos, sin) pair held in
+    `rope_state[module_name]` when there is one, and computes it from the coordinates otherwise.
+
+    Original (`LTX2AudioVideoRotaryPosEmbed.forward`):
+    https://github.com/huggingface/diffusers/blob/v0.40.0/src/diffusers/models/transformers/transformer_ltx2.py#L1003-L1078
+    """
+
+    def forward(coords, device=None):
+        freqs = rope_state.get(module_name)
+        if freqs is None:
+            return orig_forward(coords, device=device)
+        return freqs
+
+    return forward
+
+
 class LTX2TransformerPatcher(ModelPatcher):
     """
     Export patcher for the LTX2 transformer: installs the trace-safe attention processor and
@@ -11859,6 +11892,10 @@ class LTX2TransformerPatcher(ModelPatcher):
     tensor inputs, since a static IR cannot branch on them at runtime: `cross_modality_gate` scales
     the audio<->video cross-attention residuals, and `stg_perturbation_mask` holds one blend weight
     per block for the self-attentions of perturbable blocks. Both are neutral (all ones) by default.
+
+    RoPE is traced from precomputed (cos, sin) inputs (`LTX2_ROPE_INPUTS`) rather than from
+    `video_coords`/`audio_coords`, so the large rotary angles are never computed in the graph, where
+    an f16 inference precision would destroy them.
     """
 
     def __enter__(self):
@@ -11903,6 +11940,16 @@ class LTX2TransformerPatcher(ModelPatcher):
         # Wrap forward to return dict (needed for output naming) and force return_dict=False internally
         self._orig_model_forward = self._model.forward
 
+        # RoPE is traced from precomputed (cos, sin) inputs instead of the coordinates; see
+        # `LTX2_ROPE_INPUTS`. Each rotary module hands back its pair when one is given.
+        self._rope_state = {}
+        self._orig_rope_forwards = []
+        for module_name in LTX2_ROPE_INPUTS:
+            module = getattr(self._model, module_name, None)
+            if module is not None:
+                self._orig_rope_forwards.append((module, module.forward))
+                module.forward = _ltx2_precomputed_rope_forward(module.forward, self._rope_state, module_name)
+
         # `sigma`/`audio_sigma` only exist on the transformer forward from the LTX-2.3 PR onwards.
         # On older diffusers (LTX-2.0 era) they are absent, so only forward them when supported —
         # this keeps LTX-2.0 export working across diffusers versions.
@@ -11925,19 +11972,37 @@ class LTX2TransformerPatcher(ModelPatcher):
             audio_sigma=None,
             encoder_attention_mask=None,
             audio_encoder_attention_mask=None,
-            num_frames=None,
-            height=None,
-            width=None,
-            fps=24.0,
-            audio_num_frames=None,
             video_coords=None,
             audio_coords=None,
             cross_modality_gate=None,
             stg_perturbation_mask=None,
+            video_rotary_cos=None,
+            video_rotary_sin=None,
+            audio_rotary_cos=None,
+            audio_rotary_sin=None,
+            video_cross_attn_rotary_cos=None,
+            video_cross_attn_rotary_sin=None,
+            audio_cross_attn_rotary_cos=None,
+            audio_cross_attn_rotary_sin=None,
             **kwargs,
         ):
             self._guidance_state["cross_modality_gate"] = cross_modality_gate
             self._guidance_state["stg_perturbation_mask"] = stg_perturbation_mask
+
+            rope_inputs = {
+                "rope": (video_rotary_cos, video_rotary_sin),
+                "audio_rope": (audio_rotary_cos, audio_rotary_sin),
+                "cross_attn_rope": (video_cross_attn_rotary_cos, video_cross_attn_rotary_sin),
+                "cross_attn_audio_rope": (audio_cross_attn_rotary_cos, audio_cross_attn_rotary_sin),
+            }
+            for module_name, freqs in rope_inputs.items():
+                self._rope_state[module_name] = freqs if freqs[0] is not None else None
+            # The rotary modules ignore the coordinates once given their (cos, sin), but the model
+            # still slices them and would otherwise try to build them from frame/size arguments.
+            if video_coords is None and video_rotary_cos is not None:
+                video_coords = hidden_states.new_zeros((1, 3, 1, 2))
+            if audio_coords is None and audio_rotary_cos is not None:
+                audio_coords = audio_hidden_states.new_zeros((1, 1, 1, 2))
 
             # `sigma`/`audio_sigma` drive the prompt cross-attention modulation path used when the
             # checkpoint sets cross_attn_mod=True (e.g. LTX-2.3). Both pipelines pass
@@ -11969,11 +12034,6 @@ class LTX2TransformerPatcher(ModelPatcher):
                 timestep=timestep,
                 encoder_attention_mask=encoder_attention_mask,
                 audio_encoder_attention_mask=audio_encoder_attention_mask,
-                num_frames=num_frames,
-                height=height,
-                width=width,
-                fps=fps,
-                audio_num_frames=audio_num_frames,
                 video_coords=video_coords,
                 audio_coords=audio_coords,
                 return_dict=False,
@@ -11994,6 +12054,9 @@ class LTX2TransformerPatcher(ModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._orig_model_forward
+
+        for module, orig_forward in self._orig_rope_forwards:
+            module.forward = orig_forward
 
         for attn, orig_forward in self._orig_cross_modality_forwards:
             attn.forward = orig_forward
