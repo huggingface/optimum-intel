@@ -249,6 +249,7 @@ from optimum.exporters.openvino.model_patcher import (
 from optimum.exporters.openvino.utils import (
     GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE,
     GRANITEMOEHYBRID_MAMBA_LAYER_TYPE,
+    LTX2_ROPE_INPUTS,
     is_ltx2_3_transformer_config,
 )
 from optimum.exporters.tasks import TasksManager
@@ -3390,10 +3391,18 @@ class LTX2ConnectorsOpenVINOConfig(VaeEncoderOpenVINOConfig):
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
-        return {
+        inputs = {
             "text_encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
             "attention_mask": {0: "batch_size", 1: "sequence_length"},
         }
+        # As in the transformer, RoPE enters as precomputed (cos, sin), one pair per connector: the angles
+        # reach ~1.6e4 rad, which an f16 inference precision cannot resolve in the graph. The "split" layout
+        # is (batch, heads, tokens, dim), the "interleaved" one (batch, tokens, dim).
+        seq_axis = 2 if getattr(self._normalized_config.config, "rope_type", "interleaved") == "split" else 1
+        for connector in ("video_connector", "audio_connector"):
+            for name in (f"{connector}_rotary_cos", f"{connector}_rotary_sin"):
+                inputs[name] = {0: "batch_size", seq_axis: "sequence_length"}
+        return inputs
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
@@ -3437,19 +3446,22 @@ class LTX2VideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
             "audio_encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
             "encoder_attention_mask": {0: "batch_size", 1: "sequence_length"},
             "audio_encoder_attention_mask": {0: "batch_size", 1: "sequence_length"},
-            "width": {},
-            "height": {},
-            "num_frames": {},
-            "fps": {},
-            "audio_num_frames": {},
             "timestep": {0: "batch_size", 1: "video_sequence_length"},
             "audio_timestep": {0: "batch_size"},
-            "video_coords": {0: "batch_size", 2: "video_sequence_length"},
-            "audio_coords": {0: "batch_size", 2: "audio_sequence_length"},
         }
-        if is_ltx2_3_transformer_config(self._normalized_config.config):
+        # RoPE enters as precomputed cos/sin rather than coordinates; see `LTX2_ROPE_INPUTS`. The
+        # "split" layout is (batch, heads, tokens, dim), the "interleaved" one (batch, tokens, dim).
+        config = self._normalized_config.config
+        seq_axis = 2 if getattr(config, "rope_type", "interleaved") == "split" else 1
+        for module_name, names in LTX2_ROPE_INPUTS.items():
+            seq_name = (
+                "video_sequence_length" if module_name in ("rope", "cross_attn_rope") else "audio_sequence_length"
+            )
+            for name in names:
+                inputs[name] = {0: "batch_size", seq_axis: seq_name}
+        if is_ltx2_3_transformer_config(config):
             inputs["cross_modality_gate"] = {}
-        if getattr(self._normalized_config.config, "perturbed_attn", False):
+        if getattr(config, "perturbed_attn", False):
             inputs["stg_perturbation_mask"] = {}
         return inputs
 
