@@ -259,7 +259,7 @@ else:
 
 Generation stops as soon as the guard flags the prompt or a generated chunk, unless `OVGuardConfig.on_violation` says otherwise:
 
-* `"stop"` (default) ends generation at the flagged chunk.
+* `"stop"` (default) ends every flagged sequence and removes its tokens from the first violation on. In a batch, the other sequences keep generating, and the removed tokens are replaced with `pad_token_id`.
 * `"raise"` raises `OVGuardViolationError` instead.
 * `"continue"` only records the verdict and lets generation run to completion.
 

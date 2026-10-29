@@ -828,8 +828,17 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         if guard_session is not None:
             sequences = result.sequences if isinstance(result, ModelOutput) else result
             guard_session.flush(sequences)
+            sequences = guard_session.redact(sequences, _generation_config.pad_token_id)
             if isinstance(result, ModelOutput):
+                result.sequences = sequences
                 result.guard = guard_session.report
+            else:
+                result = sequences
+                if guard_session.report.flagged:
+                    logger.warning(
+                        f"The guard model flagged this generation: {guard_session.report.first_violation}. "
+                        "Pass `return_dict_in_generate=True` to get the full report in `output.guard`."
+                    )
         return result
 
     def _get_past_length(self, past_key_values=None):

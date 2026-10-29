@@ -406,6 +406,12 @@ class OVModelForTokenClassification(OVModel):
             attention_mask = np.ones((batch_size, past_length + sequence_length), dtype=np.int64)
         else:
             attention_mask = ensure_numpy(attention_mask)
+            if attention_mask.shape[-1] != past_length + sequence_length:
+                raise ValueError(
+                    f"`attention_mask` must cover the {past_length} tokens already in the KV cache plus the "
+                    f"{sequence_length} new ones, but has length {attention_mask.shape[-1]}. Call `reset_stream()` "
+                    "before classifying an unrelated sequence."
+                )
 
         if position_ids is None:
             # Derived from the mask rather than from a plain range so that left-padded batches keep

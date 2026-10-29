@@ -195,8 +195,8 @@ class OVGuardConfig:
             Risk labels that count as a violation, matched case-insensitively. `None` selects the
             defaults of the guard model, usually its unsafe label only.
         on_violation (`str`, defaults to `"stop"`):
-            `"stop"` ends generation at the flagged chunk, `"raise"` raises `OVGuardViolationError`,
-            `"continue"` only records the verdict.
+            `"stop"` ends every flagged sequence and removes its tokens from the first violation on,
+            `"raise"` raises `OVGuardViolationError`, `"continue"` only records the verdicts.
         emit_before_check (`bool`, defaults to `True`):
             Whether tokens are forwarded to `streamer` before the guard model has cleared them.
             Set to `False` to hold a chunk back until it is moderated, which prevents flagged text
@@ -885,6 +885,7 @@ class OVGuardSession:
         # An incremental scan reuses the KV cache of the guard model, which is only valid while the
         # guarded sequences grow by appending. Beam search reorders them, so it re-scans instead.
         self._incremental = self._token_level and incremental and backend.incremental
+        self._rows_stable = incremental
         # A generative guard re-reads the whole response, so it only checks once at the end unless
         # the caller explicitly asks for intermediate checks.
         self._chunk_size = self.config.chunk_size or (1 if self._token_level else 0)
@@ -898,7 +899,8 @@ class OVGuardSession:
         self._prompt_attention_mask: Optional[torch.Tensor] = None
         self._prompt_length = 0
         self._consumed = 0
-        self._cleared_response_tokens = 0
+        # Number of clean response tokens of every sequence that has been flagged, keyed by batch index.
+        self._cleared_by_row: Dict[int, int] = {}
         self._prompt_texts: List[str] = []
         self._prompt_future: Optional[Future] = None
         self._executor: Optional[ThreadPoolExecutor] = None
@@ -906,8 +908,8 @@ class OVGuardSession:
 
     @property
     def cleared_tokens(self) -> int:
-        """Number of generated tokens moderated so far without a violation."""
-        return self._cleared_response_tokens
+        """Number of generated tokens of the first sequence moderated so far without a violation."""
+        return self._cleared_by_row.get(0, self._consumed - self._prompt_length)
 
     @property
     def prompt_ids(self) -> Optional[torch.Tensor]:
@@ -922,7 +924,7 @@ class OVGuardSession:
         self._prompt_attention_mask = attention_mask
         self._prompt_length = input_ids.shape[-1]
         self._consumed = input_ids.shape[-1]
-        self._cleared_response_tokens = 0
+        self._cleared_by_row = {}
         if not self._token_level:
             self._prompt_texts = self.tokenizer.batch_decode(input_ids, skip_special_tokens=True)
 
@@ -940,33 +942,62 @@ class OVGuardSession:
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ov-guard")
         self._prompt_future = self._executor.submit(self._moderate_prompt)
 
-    def update(self, input_ids: torch.Tensor) -> bool:
-        """Moderates the tokens generated since the previous call. Returns whether to stop."""
+    def update(self, input_ids: torch.Tensor) -> torch.BoolTensor:
+        """Moderates the tokens generated since the previous call. Returns which sequences to stop."""
         self._await_prompt()
-        if self._violation is not None:
-            return self.config.on_violation == "stop"
-        pending = input_ids.shape[-1] - self._consumed
-        if self._chunk_size == 0 or pending < self._chunk_size:
-            return False
-        return self.flush(input_ids)
+        if self._chunk_size and input_ids.shape[-1] - self._consumed >= self._chunk_size:
+            self.flush(input_ids)
+        return self.stop_mask(input_ids.shape[0])
 
-    def flush(self, input_ids: torch.Tensor) -> bool:
+    def flush(self, input_ids: torch.Tensor) -> None:
         """Moderates every token generated so far that has not been moderated yet."""
         self._await_prompt()
         if input_ids.shape[-1] <= self._consumed:
-            return self._violation is not None and self.config.on_violation == "stop"
-
+            return
         verdicts = self._moderate_response(input_ids)
         self._consumed = input_ids.shape[-1]
-        if self._violation is None:
-            self._cleared_response_tokens = self._consumed - self._prompt_length
         self._collect(verdicts)
-        return self._violation is not None and self.config.on_violation == "stop"
+
+    def stop_mask(self, batch_size: int) -> torch.BoolTensor:
+        """Which of the `batch_size` running sequences `on_violation="stop"` has to stop."""
+        mask = torch.zeros(batch_size, dtype=torch.bool)
+        if self.config.on_violation != "stop" or not self._cleared_by_row:
+            return mask
+        if self._rows_stable and batch_size == self._prompt_ids.shape[0]:
+            mask[list(self._cleared_by_row)] = True
+        else:
+            # Beam search or several return sequences per prompt: rows no longer map to prompts, stop them all.
+            mask[:] = True
+        return mask
+
+    def redact(self, sequences: torch.Tensor, pad_token_id: Optional[int] = None) -> torch.Tensor:
+        """Removes the tokens of every sequence stopped by `on_violation="stop"`, from its first violation on.
+
+        In a batch, the removed tokens of a sequence are replaced with `pad_token_id`. Without one, every
+        sequence is cut to the shortest clean length.
+        """
+        if self.config.on_violation != "stop" or not self._cleared_by_row:
+            return sequences
+        batch_size = sequences.shape[0]
+        if self._rows_stable and batch_size == self._prompt_ids.shape[0]:
+            keep = [
+                self._cleared_by_row.get(row, sequences.shape[-1] - self._prompt_length) for row in range(batch_size)
+            ]
+        else:
+            keep = [min(self._cleared_by_row.values())] * batch_size
+        if pad_token_id is None:
+            keep = [min(keep)] * batch_size
+        sequences = sequences[:, : self._prompt_length + max(keep)].clone()
+        if pad_token_id is not None:
+            for row, cleared in enumerate(keep):
+                sequences[row, self._prompt_length + cleared :] = pad_token_id
+        return sequences
 
     def close(self) -> None:
         """Releases the background worker used by `prompt_mode="async"`."""
         if self._executor is not None:
-            self._executor.shutdown(wait=False)
+            # Waiting keeps a failed `generate` from leaving the guard request busy for the next call.
+            self._executor.shutdown(wait=True)
             self._executor = None
             self._prompt_future = None
 
@@ -1056,16 +1087,16 @@ class OVGuardSession:
             self.report.verdicts.append(verdict)
             if self.config.on_verdict is not None:
                 self.config.on_verdict(verdict)
-            if verdict.flagged and self._violation is None:
+            if not verdict.flagged:
+                continue
+            if self._violation is None:
                 self._violation = verdict
-        if self._violation is None:
-            return
-        # Only the tokens preceding the first violation are clean and may be released.
-        token_index = self._violation.token_index
-        self._cleared_response_tokens = (
-            token_index if self._violation.scope == RESPONSE_SCOPE and token_index is not None else 0
-        )
-        if self.config.on_violation == "raise":
+            if verdict.batch_index not in self._cleared_by_row:
+                # Only the tokens preceding the first violation of a sequence are clean.
+                token_index = verdict.token_index
+                clean = token_index if verdict.scope == RESPONSE_SCOPE and token_index is not None else 0
+                self._cleared_by_row[verdict.batch_index] = clean
+        if self._violation is not None and self.config.on_violation == "raise":
             raise OVGuardViolationError(self.report)
 
 
@@ -1076,8 +1107,7 @@ class OVGuardStoppingCriteria(StoppingCriteria):
         self.session = session
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> torch.BoolTensor:
-        should_stop = self.session.update(input_ids)
-        return torch.full((input_ids.shape[0],), should_stop, dtype=torch.bool, device=input_ids.device)
+        return self.session.update(input_ids).to(input_ids.device)
 
 
 class OVGuardedStreamer:

@@ -218,16 +218,12 @@ def _create_tiny_generative_guard_model():
     if config_file.exists() and weights_file.exists():
         return str(output_dir)
 
-    from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoModelForCausalLM, AutoTokenizer
 
     model_id = "optimum-intel-internal-testing/tiny-random-LlamaForCausalLM"
 
-    torch.manual_seed(SEED)
-
-    config = AutoConfig.from_pretrained(model_id)
-    config.torch_dtype = "float32"
-    config.dtype = "float32"
-    model = AutoModelForCausalLM.from_config(config).float().eval()
+    # Loading the weights too keeps the Hub cache snapshot complete, `_resolve_cached_model_paths` then reuses it.
+    model = AutoModelForCausalLM.from_pretrained(model_id, torch_dtype=torch.float32).eval()
     model.generation_config.pad_token_id = None
 
     tokenizer = AutoTokenizer.from_pretrained(model_id)

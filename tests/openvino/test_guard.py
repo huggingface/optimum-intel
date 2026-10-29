@@ -244,6 +244,29 @@ class OVTokenClassifierGuardTest(unittest.TestCase):
         del guard
         gc.collect()
 
+    def test_stateful_forward_continues_only_with_a_full_mask(self):
+        model = self._load().model
+        set_seed(SEED)
+        ids = torch.randint(0, model.config.vocab_size, (2, 8))
+        mask = torch.ones_like(ids)
+        mask[0, :2] = 0  # left-pad the first sequence
+
+        model.reset_stream()
+        full = model(ids, attention_mask=mask).logits
+        model.reset_stream()
+        first = model(ids[:, :5], attention_mask=mask[:, :5]).logits
+        # A mask covering only the new tokens means an unrelated sequence, which needs `reset_stream()`.
+        with self.assertRaises(ValueError):
+            model(ids[:, 5:], attention_mask=mask[:, 5:])
+        second = model(ids[:, 5:], attention_mask=mask).logits
+
+        # Padding positions carry no meaning, only the real tokens are compared.
+        for name in model.head_names:
+            incremental = torch.cat([first[name], second[name]], dim=1)
+            torch.testing.assert_close(incremental[:, 2:], full[name][:, 2:], atol=1e-4, rtol=1e-4)
+        del model
+        gc.collect()
+
     def test_unknown_blocking_label_is_rejected(self):
         guard = self._load()
         with self.assertRaises(ValueError):
@@ -438,16 +461,72 @@ class OVGuardedGenerationTest(unittest.TestCase):
     def test_on_violation_continue_does_not_stop_generation(self):
         llm, guard = self._load_llm(), self._load_token_classifier_guard()
         ids = self._prompt(llm)
+        puts, steps = [], []
         out = llm.generate(
             ids,
             max_new_tokens=8,
             do_sample=False,
             guard=guard,
-            guard_config=OVGuardConfig(blocking_labels=self.ALL_LABELS, on_violation="continue"),
+            streamer=SimpleNamespace(put=puts.append, end=lambda: None),
+            guard_config=OVGuardConfig(
+                blocking_labels=self.ALL_LABELS,
+                on_violation="continue",
+                prompt_mode="sync",
+                on_verdict=lambda verdict: steps.append(len(puts)),
+            ),
             return_dict_in_generate=True,
         )
         self.assertTrue(out.guard.flagged)
         self.assertEqual(out.sequences.shape[-1] - ids.shape[-1], 8)
+        # Moderation goes on after the flagged prompt: every response verdict arrives at its own step.
+        self.assertEqual(len(set(steps[1:])), 8)
+        del llm, guard
+        gc.collect()
+
+    def test_stop_removes_flagged_tokens(self):
+        llm, guard = self._load_llm(), self._load_token_classifier_guard()
+        ids = self._prompt(llm)
+        config = OVGuardConfig(chunk_size=2, prompt_mode="off", blocking_labels=self.ALL_LABELS)
+        out = llm.generate(
+            ids, max_new_tokens=8, do_sample=False, guard=guard, guard_config=config, return_dict_in_generate=True
+        )
+        self.assertEqual(out.guard.first_violation.token_index, 0)
+        torch.testing.assert_close(out.sequences, ids)
+
+        with self.assertLogs("optimum.intel.openvino.modeling_decoder", level="WARNING"):
+            sequences = llm.generate(ids, max_new_tokens=8, do_sample=False, guard=guard, guard_config=config)
+        torch.testing.assert_close(sequences, ids)
+        del llm, guard
+        gc.collect()
+
+    def test_violation_stops_only_the_flagged_sequence(self):
+        llm, guard = self._load_llm(), self._load_token_classifier_guard()
+        # Pick prompts the guard labels differently, so that blocking the first label flags one sequence only.
+        for seed in range(20):
+            set_seed(seed)
+            ids = torch.randint(0, llm.config.vocab_size, (2, 6))
+            guard.reset()
+            labels = [sequence[-1].label for sequence in guard.moderate_token_ids(ids, scope=PROMPT_SCOPE)]
+            if labels[0] != labels[1]:
+                break
+        else:
+            self.fail("No pair of prompts with different labels found.")
+
+        pad_token_id = 0
+        out = llm.generate(
+            ids,
+            attention_mask=torch.ones_like(ids),
+            max_new_tokens=6,
+            do_sample=False,
+            pad_token_id=pad_token_id,
+            guard=guard,
+            guard_config=OVGuardConfig(blocking_labels=(labels[0],), prompt_mode="sync", chunk_size=100),
+            return_dict_in_generate=True,
+            output_scores=True,
+        )
+        self.assertEqual([verdict.flagged for verdict in out.guard.prompt], [True, False])
+        self.assertEqual(len(out.scores), 6)  # the clean sequence kept generating
+        self.assertTrue((out.sequences[0, ids.shape[-1] :] == pad_token_id).all())
         del llm, guard
         gc.collect()
 
@@ -580,6 +659,25 @@ class OVGuardedGenerationTest(unittest.TestCase):
         self.assertTrue(out.guard.flagged)
         self.assertEqual(out.guard.prompt[0].label, UNPARSABLE_LABEL)
         self.assertLess(out.sequences.shape[-1] - ids.shape[-1], 8)
+        del llm, guard
+        gc.collect()
+
+    def test_generative_guard_removes_a_flagged_response(self):
+        llm, guard = self._load_llm("llama"), self._load_generative_guard()
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAMES["llama"])
+        ids = self._prompt(llm)
+        out = llm.generate(
+            ids,
+            max_new_tokens=8,
+            do_sample=False,
+            tokenizer=tokenizer,
+            guard=guard,
+            guard_config=OVGuardConfig(prompt_mode="off"),
+            return_dict_in_generate=True,
+        )
+        # The response is only checked once complete, and fails closed, so none of it may be returned.
+        self.assertTrue(out.guard.response[0].flagged)
+        torch.testing.assert_close(out.sequences, ids)
         del llm, guard
         gc.collect()
 
