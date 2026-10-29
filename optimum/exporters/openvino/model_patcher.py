@@ -13418,10 +13418,13 @@ def apply_rotary_pos_emb_qwen4_exp(x, cos, sin, rotary_dim: int, head_dim: int, 
     # rotate-half RoPE on the first `rotary_dim` of `head_dim` dimensions (partial rotary); both are static ints, as
     # under tracing the shapes are tensors
     cos, sin = cos.unsqueeze(unsqueeze_dim), sin.unsqueeze(unsqueeze_dim)
-    # no slicing for a full rotation: a full-width slice stays between the RoPE and its input and breaks the fusions
+    # no slicing for a full rotation: a full-width slice stays between the RoPE and its input and breaks the fusions;
+    # the splits are VariadicSplit along the explicit last axis in the IR, the form the RoPE fusions match before any
+    # constant normalization (neither the open end of a slice like x[..., h:] nor the axis -1 is recognized there)
     full_rotation = rotary_dim == head_dim
-    x_rope, x_pass = (x, None) if full_rotation else (x[..., :rotary_dim], x[..., rotary_dim:])
-    x1, x2 = x_rope[..., : rotary_dim // 2], x_rope[..., rotary_dim // 2 :]
+    last_axis = x.dim() - 1
+    x_rope, x_pass = (x, None) if full_rotation else torch.split(x, [rotary_dim, head_dim - rotary_dim], dim=last_axis)
+    x1, x2 = torch.split(x_rope, [rotary_dim // 2, rotary_dim // 2], dim=last_axis)
     x_rope = x_rope * cos + torch.cat((-x2, x1), dim=-1) * sin
     return x_rope if full_rotation else torch.cat([x_rope, x_pass], dim=-1)
 
@@ -13442,7 +13445,7 @@ def _qwen4_exp_ple_forward(
     gated_value = gated_value * conv_mask
     gated_value_normed = gated_value_normed * conv_mask
 
-    # dilated depthwise short convolution over [state, current]
+    # dilated depthwise short convolution over [state, current] (a dilated PagedCausalConv1D in a paged model)
     conv_input = torch.cat([conv_state, gated_value_normed.transpose(1, 2)], dim=-1)
     new_conv_state = conv_input[:, :, -self.short_conv_state_len :]
     conv_output = F.silu(self.conv1d(conv_input)).transpose(1, 2)
