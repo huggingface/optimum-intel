@@ -341,6 +341,7 @@ HUB_MODEL_NAMES = {
     "minicpmv4_7": "optimum-intel-internal-testing/tiny-random-minicpmv47",
     "minicpmv4_7_dspark": "optimum-intel-internal-testing/tiny-random-minicpmv47-dspark",
     "minicpm_ocr": "optimum-intel-internal-testing/tiny-random-minicpm-ocr",
+    "minicpm_ocr_dspark": "optimum-intel-internal-testing/tiny-random-minicpm-ocr-dspark",
     "minicpmo": "optimum-intel-internal-testing/tiny-random-MiniCPM-o-2_6",
     "minicpm_v4_5": "optimum-intel-internal-testing/tiny-random-minicpm-v-4_5",
     "mistral": "optimum-intel-internal-testing/tiny-random-mistral",
