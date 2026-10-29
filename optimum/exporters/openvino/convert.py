@@ -22,7 +22,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
 
 from huggingface_hub import snapshot_download
-from packaging.version import Version
 from transformers.generation import GenerationMixin
 from transformers.models.speecht5.modeling_speecht5 import SpeechT5HifiGan
 from transformers.utils import is_torch_available
@@ -42,6 +41,7 @@ from optimum.exporters.openvino.utils import (
     _get_qwen3_tts_submodels_fn_and_export_configs,
     _normalize_dummy_inputs,
     allow_skip_tracing_check,
+    check_transformers_version_compatibility,
     clear_class_registry,
     remove_none_from_dummy_inputs,
     save_config,
@@ -133,6 +133,11 @@ def _set_runtime_options(
             getattr(sub_export_config, "_orig_config", None), "model_type", None
         ) in {"gemma3n", "gemma4_unified"}:
             sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "8.0"
+        # Qwen3-TTS decoder stacks are stateful, but that is decided per model in
+        # `_get_submodels_and_export_configs` rather than on the export config, so the check above
+        # misses them. Without the scale the code predictor logits overflow fp16 on GPU.
+        if library_name == "qwen3_tts" and model_name in ("talker_model", "code_predictor_model"):
+            sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "8.0"
 
 
 def _save_model(
@@ -220,26 +225,7 @@ def export(
     if "diffusers" in str(model.__class__) and not is_diffusers_available():
         raise ImportError("The package `diffusers` is required to export diffusion models to OpenVINO.")
 
-    min_version = getattr(config, "MIN_TRANSFORMERS_VERSION", None)
-    max_version = getattr(config, "MAX_TRANSFORMERS_VERSION", None)
-
-    if min_version is not None:
-        if isinstance(min_version, Version):
-            min_version = min_version.base_version
-        if is_transformers_version("<", min_version):
-            raise ValueError(
-                f"The current version of Transformers does not allow for the export of the model. Minimum required is "
-                f"{config.MIN_TRANSFORMERS_VERSION}, got: {_transformers_version}"
-            )
-
-    if max_version is not None:
-        if isinstance(max_version, Version):
-            max_version = max_version.base_version
-        if is_transformers_version(">", max_version):
-            raise ValueError(
-                f"The current version of Transformers does not allow for the export of the model. Maximum required is "
-                f"{config.MAX_TRANSFORMERS_VERSION.replace('99', '*')}, got: {_transformers_version}"
-            )
+    check_transformers_version_compatibility(config)
 
     if stateful:
         # This will be checked anyway after the model conversion, but checking it earlier will save time for a user if not suitable version is used
@@ -679,6 +665,25 @@ def _save_qwen3_tts_config_and_assets(model, output: Path):
             shutil.copy2(item, dest)
 
 
+def _save_sensevoice_config_and_assets(model, output: Path):
+    """Save SenseVoiceSmall config.json and the CMVN statistics.
+
+    The exported folder contains a single ``openvino_model.xml`` alongside ``am.mvn`` (feature CMVN
+    statistics), so the runtime can preprocess audio without a ``funasr`` dependency.
+    """
+    from optimum.intel.openvino.modeling_funasr import copy_sensevoice_cmvn
+
+    output = Path(output)
+    save_config(model.config, output)
+
+    source = getattr(model, "_sensevoice_source", None)
+    if source is None:
+        logger.warning("SenseVoice source path unknown; skipping CMVN export.")
+        return
+
+    copy_sensevoice_cmvn(source, output)
+
+
 def export_from_model(
     model: Union["PreTrainedModel", "ModelMixin", "DiffusionPipeline"],
     output: Union[str, Path],
@@ -743,15 +748,6 @@ def export_from_model(
 
     is_encoder_decoder = getattr(getattr(model, "config", {}), "is_encoder_decoder", False)
 
-    # Qwen3-ASR is structurally encoder-decoder (audio_tower + text LM) but config says is_encoder_decoder=False
-    if model_type == "qwen3_asr" and not is_encoder_decoder:
-        is_encoder_decoder = True
-        model.config.is_encoder_decoder = True
-        if not hasattr(model, "get_encoder"):
-            model.get_encoder = lambda: model.thinker.audio_tower
-        # Set decoder_start_token_id so the saved config enables encoder-decoder generation
-        if model.config.decoder_start_token_id is None:
-            model.config.decoder_start_token_id = 0
     stateful = stateful and (
         ensure_export_task_support_stateful(task) or ensure_model_type_support_stateful(model_type)
     )
@@ -812,6 +808,8 @@ def export_from_model(
             model, library_name, task, preprocessors, custom_export_configs, fn_get_submodels
         )
 
+    is_sensevoice = library_name == "funasr" and getattr(model.config, "export_model_type", None) == "sense_voice"
+
     if library_name == "diffusers":
         export_config, models_and_export_configs = get_diffusion_models_for_export_ext(model, exporter="openvino")
         stateful_submodels = False
@@ -853,6 +851,9 @@ def export_from_model(
     elif library_name == "qwen3_tts":
         _save_qwen3_tts_config_and_assets(model, output)
         files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
+    elif is_sensevoice:
+        _save_sensevoice_config_and_assets(model, output)
+        files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
     elif library_name != "diffusers":
         if is_transformers_version("<", "5"):
             # some model configs may have issues with loading without parameters initialization
@@ -874,6 +875,12 @@ def export_from_model(
         save_config(model.config, output)
         generation_config = getattr(model, "generation_config", None)
         if generation_config is not None:
+            if not generation_config.do_sample and generation_config.temperature is not None:
+                # Qwen/Qwen3-ASR-0.6B currently sets temperature with do_sample=False, making its generation config
+                # invalid so Transformers won't save it. Remove this workaround once the checkpoint is fixed:
+                # https://huggingface.co/Qwen/Qwen3-ASR-0.6B/discussions/13
+                generation_config = copy.deepcopy(generation_config)
+                generation_config.temperature = None
             try:
                 generation_config.save_pretrained(output)
             except Exception as exception:
@@ -1121,6 +1128,11 @@ def _get_multi_modal_submodels_and_export_configs(
         model.config.glb_GN = model.model.embed_tokens_extend.image_embed.global_img_feature_extensor.tolist()
         model.config.sub_GN = model.model.embed_tokens_extend.image_embed.sub_img_feature_extensor.tolist()
         model.config.num_img_tokens = model.model.embed_tokens_extend.image_embed.num_img_tokens
+
+    if task == "text-classification":
+        # the checkpoint config can name the generative class (e.g. ms-swift seq_cls checkpoints of Qwen3.5), while the
+        # exported language model ends in the classification head
+        model.config.architectures = [model.__class__.__name__]
 
     if hasattr(model, "image_newline"):
         model.config.image_newline = model.image_newline.tolist()

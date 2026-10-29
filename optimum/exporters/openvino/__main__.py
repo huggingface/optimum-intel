@@ -49,6 +49,7 @@ from optimum.intel.utils.modeling_utils import (
 from .utils import (
     _MAX_UNCOMPRESSED_SIZE,
     MULTI_MODAL_TEXT_GENERATION_MODELS,
+    check_transformers_version_compatibility,
     clear_class_registry,
     deduce_diffusers_dtype,
     is_auto_compression_disabled,
@@ -98,7 +99,15 @@ def infer_task(
             # Use the with-past task so the encoder-decoder export is stateful (KV cache hidden in
             # OpenVINO state). Without the `-with-past` suffix the decoder is exported stateless and
             # incremental generation breaks (only the first token is correct).
-            task = "automatic-speech-recognition-with-past"
+            from optimum.intel.openvino.modeling_funasr import _is_sensevoice_source
+
+            if _is_sensevoice_source(
+                model_name_or_path, cache_dir=cache_dir, token=token, subfolder=subfolder, revision=revision
+            ):
+                # SenseVoiceSmall is a non-autoregressive (CTC encoder-only) model exported as a single stateless graph.
+                task = "automatic-speech-recognition"
+            else:
+                task = "automatic-speech-recognition-with-past"
         else:
             try:
                 task = TasksManager._infer_task_from_model_name_or_path(
@@ -500,6 +509,11 @@ def main_export(
             raise ValueError(
                 f"Asked to export a {model_type} model for the task {task}{autodetected_message}, but the Optimum OpenVINO exporter only supports the tasks {', '.join(model_tasks.keys())} for {model_type}. Please use a supported task. Please open an issue at https://github.com/huggingface/optimum-intel/issues if you would like the task {task} to be supported in the OpenVINO export for {model_type}."
             )
+        if model_type in TasksManager._SUPPORTED_MODEL_TYPE:
+            export_config_constructor = TasksManager.get_exporter_config_constructor(
+                exporter="openvino", task=task, model_type=model_type, library_name=library_name
+            )
+            check_transformers_version_compatibility(export_config_constructor)
 
         # some models force flash_attn attention by default that does not support load model on cpu
         if model_type in FORCE_ATTN_MODEL_CLASSES:
@@ -650,9 +664,18 @@ def main_export(
         elif library_name == "kokoro":
             model = _KokoroForTextToSpeech.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
         elif library_name == "funasr":
-            from optimum.intel.openvino.modeling_funasr import _FunASRForSpeechSeq2Seq
+            from optimum.intel.openvino.modeling_funasr import (
+                _FunASRForSpeechSeq2Seq,
+                _is_sensevoice_source,
+                _SenseVoiceForCTC,
+            )
 
-            model = _FunASRForSpeechSeq2Seq.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
+            if _is_sensevoice_source(
+                model_name_or_path, cache_dir=cache_dir, token=token, subfolder=subfolder, revision=revision
+            ):
+                model = _SenseVoiceForCTC.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
+            else:
+                model = _FunASRForSpeechSeq2Seq.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
         elif (
             library_name == "transformers"
             and (getattr(config, "architectures", None) or [None])[0] in _NATIVE_DRAFT_MODEL_CLASSES
@@ -904,6 +927,13 @@ def _main_quantize(
             model_cls_name = _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
             if library_name == "sentence_transformers":
                 model_cls_name = "OVSentenceTransformer"
+            elif (
+                library_name == "transformers"
+                and task == "text-classification"
+                and model_type in MULTI_MODAL_TEXT_GENERATION_MODELS
+            ):
+                # a VLM with a sequence classification head is exported as VLM parts
+                model_cls_name = "OVModelForVisualSequenceClassification"
             model_cls = getattr(__import__("optimum.intel", fromlist=[model_cls_name]), model_cls_name)
         except (AttributeError, ImportError, KeyError) as e:
             raise RuntimeError(f"Wasn't able to locate OpenVINO class for task {original_task} ({task}).") from e
@@ -959,7 +989,28 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
     from optimum.exporters.openvino.convert import export_tokenizer
 
     if is_openvino_tokenizers_available():
-        if library_name != "diffusers" and preprocessors:
+        if (
+            library_name == "funasr"
+            and model is not None
+            and getattr(model.config, "export_model_type", None) == "sense_voice"
+        ):
+            # SenseVoiceSmall ships a SentencePiece BPE model rather than a transformers tokenizer, so it
+            # is not among ``preprocessors``. It has no text input, so build only the OV detokenizer IR from
+            # that BPE model.
+            from optimum.intel.openvino.modeling_funasr import export_sensevoice_tokenizers
+
+            source = getattr(model, "_sensevoice_source", None)
+            if source is None:
+                logger.warning("SenseVoice source path unknown; OpenVINO detokenizer model won't be generated.")
+            else:
+                try:
+                    export_sensevoice_tokenizers(source, output)
+                except Exception as exception:
+                    logger.warning(
+                        "Could not convert the SenseVoice tokenizer. OpenVINO detokenizer "
+                        f"model won't be generated. Exception: {exception}"
+                    )
+        elif library_name != "diffusers" and preprocessors:
             processor_chat_template = None
             tokenizer = next(filter(lambda it: isinstance(it, PreTrainedTokenizerBase), preprocessors), None)
             if len(preprocessors) > 1:

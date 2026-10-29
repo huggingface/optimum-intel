@@ -96,7 +96,11 @@ from .modeling_seq2seq import (
     OVModelForVision2Seq,
 )
 from .modeling_text2speech import OVModelForTextToSpeechSeq2Seq
-from .modeling_visual_language import OVModelForMultimodalLM, OVModelForVisualCausalLM
+from .modeling_visual_language import (
+    OVModelForMultimodalLM,
+    OVModelForVisualCausalLM,
+    OVModelForVisualSequenceClassification,
+)
 
 
 if is_diffusers_available():

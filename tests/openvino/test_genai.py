@@ -357,6 +357,7 @@ _GENAI_VLM_UNSUPPORTED_ARCHITECTURES = (
     "qwen3_omni_moe",
     "mistral3",
     "ministral3",
+    "muse_glimmer",
 )
 
 # Gemma 4 version requirements for OpenVINO GenaAI are documented at:

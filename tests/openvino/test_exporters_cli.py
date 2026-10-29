@@ -16,7 +16,7 @@ import subprocess
 import unittest
 from pathlib import Path
 from typing import Dict
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from parameterized import parameterized
 from transformers import (
@@ -25,6 +25,8 @@ from transformers import (
     AutoModelForZeroShotImageClassification,
     AutoProcessor,
     AutoTokenizer,
+    PreTrainedTokenizerFast,
+    T5Tokenizer,
 )
 from utils_tests import (
     _ARCHITECTURES_TO_EXPECTED_INT8,
@@ -78,7 +80,11 @@ from optimum.intel.openvino.configuration import (
     _DEFAULT_IGNORED_SCOPE_CONFIGS,
     _DEFAULT_INT8_FQ_CONFIGS,
 )
-from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS, TemporaryDirectory
+from optimum.intel.openvino.utils import (
+    _HEAD_TO_AUTOMODELS,
+    TemporaryDirectory,
+    maybe_convert_tokenizer_to_fast,
+)
 from optimum.intel.utils.import_utils import (
     compare_versions,
     is_compressed_tensors_available,
@@ -128,6 +134,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("inpainting", "flux-fill"),
         ("text-to-image", "sana"),
         ("text-to-video", "ltx-video"),
+        ("text-to-video", "ltx-video-0.9.5"),
         ("text-to-video", "ltx2"),
         ("image-to-video", "ltx2"),
         ("text-to-video", "ltx2.3"),
@@ -162,6 +169,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-to-image", "z-image"),
         ("image-text-to-text", "muse_glimmer"),
         ("image-text-to-text", "minicpmv4_7"),
+        ("image-text-to-text", "minicpm_ocr"),
     ]
     # filter architectures depending on min/max transformers supported versions
     SUPPORTED_ARCHITECTURES = [
@@ -211,6 +219,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "ministral3": 2,
         "sana": 2,
         "ltx-video": 2,
+        "ltx-video-0.9.5": 2,
         "ltx2": 2,
         "ltx2.3": 2,
         "sam": 0,  # no tokenizer
@@ -232,6 +241,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "qwen3_vl_embedding": 2,
         "muse_glimmer": 2,
         "minicpmv4_7": 2,
+        "minicpm_ocr": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
@@ -864,9 +874,9 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "vision_embeddings_model": {"int8": 28},
             },
         ),
+        # Data-aware: mixed precision (ratio < 1) is not used, its sensitivity metrics do not support the 3D
+        # MoE expert weights yet.
         (
-            # data-aware: mixed precision (ratio < 1) is not used, its sensitivity metrics do not support the 3D
-            # MoE expert weights yet
             "image-text-to-text",
             "minicpmv4_7",
             "int4 --group-size 8 --ratio 1.0 --dataset textvqa --num-samples 1 --scale-estimation",
@@ -874,6 +884,37 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "lm_model": {"int8": 8, "int4": 102},
                 "text_embeddings_model": {"int8": 1},
                 "vision_embeddings_model": {"int8": 28},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "minicpmv4_7",
+            "int4 --group-size 8 --ratio 1.0 --dataset gsm8k --num-samples 1 --scale-estimation",
+            {
+                "lm_model": {"int8": 8, "int4": 102},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 28},
+            },
+        ),
+        (
+            "image-text-to-text",
+            "minicpm_ocr",
+            "int4 --group-size 8 --ratio 0.8",
+            {
+                "lm_model": {"int8": 36, "int4": 34},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 22},
+            },
+        ),
+        # data-aware, the recipe of the openbmb/MiniCPM-OCR-1.0 default int4 config
+        (
+            "image-text-to-text",
+            "minicpm_ocr",
+            "int4 --group-size 8 --ratio 0.8 --dataset textvqa --num-samples 1 --awq --scale-estimation",
+            {
+                "lm_model": {"int8": 28, "int4": 42},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 22},
             },
         ),
     ]
@@ -988,6 +1029,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "qwen2_5_vl",
                 "qwen3_vl",
                 "minicpmv4_7",
+                "minicpm_ocr",
             )
             if not is_model_type_transformers_compatible(model_type)
         }
@@ -1079,6 +1121,23 @@ class OVCLIExportTestCase(unittest.TestCase):
 
             if task.startswith("text-generation") and compare_versions("openvino-tokenizers", ">=", "2024.3.0.0"):
                 self.assertIn("Set tokenizer padding side to left", output)
+
+    def test_t5_tokenizer_is_converted_to_fast_if_needed(self):
+        t5_tokenizer = Mock(spec=T5Tokenizer)
+        fast_tokenizer = Mock(spec=PreTrainedTokenizerFast)
+        tokenizer_path = Path("tokenizer")
+
+        with patch(
+            "optimum.intel.openvino.utils.AutoTokenizer.from_pretrained", return_value=fast_tokenizer
+        ) as from_pretrained:
+            converted_tokenizer = maybe_convert_tokenizer_to_fast(t5_tokenizer, tokenizer_path)
+
+        if issubclass(T5Tokenizer, PreTrainedTokenizerFast):
+            self.assertIs(converted_tokenizer, t5_tokenizer)
+            from_pretrained.assert_not_called()
+        else:
+            self.assertIs(converted_tokenizer, fast_tokenizer)
+            from_pretrained.assert_called_once_with(tokenizer_path)
 
     @parameterized.expand(TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS)
     @unittest.skipIf(not is_openvino_tokenizers_available(), reason="test required openvino tokenizers")

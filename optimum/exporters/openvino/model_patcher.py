@@ -19,7 +19,9 @@ import json
 import logging
 import math
 import os
+import re
 import types
+from collections import defaultdict
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -62,7 +64,11 @@ from optimum.exporters.openvino.patching_utils import (
     postprocess_past_key_values,
     preprocess_past_key_values,
 )
-from optimum.exporters.openvino.utils import is_ltx2_3_transformer_config
+from optimum.exporters.openvino.utils import (
+    GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE,
+    GRANITEMOEHYBRID_MAMBA_LAYER_TYPE,
+    is_ltx2_3_transformer_config,
+)
 from optimum.intel.utils.import_utils import (
     is_diffusers_version,
     is_openvino_version,
@@ -5408,29 +5414,33 @@ class GraniteMoEModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
 
-        for layer in self._model.model.layers:
-            block_sparse_moe = layer.block_sparse_moe
-            block_sparse_moe.router._orig_forward = block_sparse_moe.router.forward
-            block_sparse_moe.router.forward = types.MethodType(
-                _granite_moe_topk_gating_forward, block_sparse_moe.router
-            )
-            block_sparse_moe.input_linear._orig_forward = block_sparse_moe.input_linear.forward
-            block_sparse_moe.input_linear.forward = types.MethodType(
-                _granite_moe_parallel_experts_forward, block_sparse_moe.input_linear
-            )
-            block_sparse_moe.output_linear._orig_forward = block_sparse_moe.output_linear.forward
-            block_sparse_moe.output_linear.forward = types.MethodType(
-                _granite_moe_parallel_experts_forward, block_sparse_moe.output_linear
-            )
+        if is_transformers_version("<", "5.13"):
+            for layer in self._model.model.layers:
+                block_sparse_moe = layer.block_sparse_moe
+                block_sparse_moe.router._orig_forward = block_sparse_moe.router.forward
+                block_sparse_moe.router.forward = types.MethodType(
+                    _granite_moe_topk_gating_forward, block_sparse_moe.router
+                )
+                block_sparse_moe.input_linear._orig_forward = block_sparse_moe.input_linear.forward
+                block_sparse_moe.input_linear.forward = types.MethodType(
+                    _granite_moe_parallel_experts_forward, block_sparse_moe.input_linear
+                )
+                block_sparse_moe.output_linear._orig_forward = block_sparse_moe.output_linear.forward
+                block_sparse_moe.output_linear.forward = types.MethodType(
+                    _granite_moe_parallel_experts_forward, block_sparse_moe.output_linear
+                )
+        else:
+            register_ov_batched_mm(self)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
 
-        for layer in self._model.model.layers:
-            block_sparse_moe = layer.block_sparse_moe
-            block_sparse_moe.router.forward = block_sparse_moe.router._orig_forward
-            block_sparse_moe.input_linear.forward = block_sparse_moe.input_linear._orig_forward
-            block_sparse_moe.output_linear.forward = block_sparse_moe.output_linear._orig_forward
+        if is_transformers_version("<", "5.13"):
+            for layer in self._model.model.layers:
+                block_sparse_moe = layer.block_sparse_moe
+                block_sparse_moe.router.forward = block_sparse_moe.router._orig_forward
+                block_sparse_moe.input_linear.forward = block_sparse_moe.input_linear._orig_forward
+                block_sparse_moe.output_linear.forward = block_sparse_moe.output_linear._orig_forward
 
 
 class OVSeq2SeqModelPatcher(ModelPatcher):
@@ -5583,6 +5593,10 @@ class CommonImageEmbeddingsModelPatcher(ModelPatcher):
             # we should be able to specify pooler_output as output_name, not supported here as pooler_output key does not exist
             if is_transformers_version(">=", "5") and hasattr(outputs, "pooler_output"):
                 outputs = outputs.pooler_output
+                # Some models (like gemma4) split pooler_output per-image into a tuple/list of variable-length tensors
+                # Concatenate them back into a single tensor so the traced graph exposes exactly one output
+                if isinstance(outputs, (tuple, list)):
+                    outputs = torch.cat(outputs, dim=0)
 
             output_names = list(config.outputs.keys())
             return {output_names[0]: outputs}
@@ -5755,7 +5769,7 @@ def _create_gemma4_bidirectional_mask_dict(attention_mask_2d, mm_token_type_ids,
     same_group = same_group.unsqueeze(1)  # [batch, 1, seq_len, total_len]
 
     # Un-mask same-group vision tokens in both masks (bidirectional attention within an image).
-    if is_transformers_version(">=", "5.9"):
+    if is_transformers_version(">=", "5.9") and is_transformers_version("<", "5.13"):
         full_mask = full_mask.masked_fill(same_group, 0.0)
     sliding_mask = sliding_mask.masked_fill(same_group, 0.0)
 
@@ -8365,10 +8379,10 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
                 mamba_idx = 0
                 attn_idx = 0
                 for i, block_type in enumerate(config.layers_block_type):
-                    if block_type == "mamba":
+                    if block_type == GRANITEMOEHYBRID_MAMBA_LAYER_TYPE:
                         self.mamba_mapping[i] = mamba_idx
                         mamba_idx += 1
-                    elif block_type == "attention":
+                    elif block_type == GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE:
                         self.attn_mapping[i] = attn_idx
                         attn_idx += 1
                 self.num_attn_layers = attn_idx
@@ -8383,6 +8397,9 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
                 if self.num_attn_layers == 0 or self.key_cache[0] is None:
                     return 0
                 return self.key_cache[0].shape[-2]
+
+            def get_query_offset(self, layer_idx: Optional[int] = 0) -> int:
+                return self.get_seq_length(layer_idx=layer_idx)
 
             def get_mask_sizes(self, query_length, layer_idx: int = 0):
                 # transformers >= 5.x passes the scalar `query_length` (int or 0-dim tensor);
@@ -8407,8 +8424,8 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
             attention_mask=None,
             cache_params=None,
         ):
-            num_mamba_layers = layer_types.count("mamba")
-            num_attn_layers = layer_types.count("attention")
+            num_mamba_layers = layer_types.count(GRANITEMOEHYBRID_MAMBA_LAYER_TYPE)
+            num_attn_layers = layer_types.count(GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE)
 
             use_cache = False
             wrapped_cache_params = None
@@ -8507,13 +8524,16 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
             return _forward
 
         for layer in self._model.model.layers:
-            if getattr(layer, "block_sparse_moe", None) is not None:
+            if getattr(layer, "block_sparse_moe", None) is not None and is_transformers_version("<", "5.13"):
                 patch_sparse_moe(layer.block_sparse_moe)
             if layer.mamba is not None:
                 mamba_layer = layer.mamba
                 mamba_layer._orig_forward = mamba_layer.forward
                 mamba_layer.selective_ssm_recurrent_cell = SelectiveSSMRecurrentCell()
                 mamba_layer.forward = make_mamba_forward(mamba_layer)
+
+        if is_transformers_version(">=", "5.13"):
+            register_ov_batched_mm(self)
 
     def __exit__(self, exc_type, exc_value, traceback):
         def unpatch_sparse_moe(sparse_moe_layer):
@@ -8525,7 +8545,7 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
 
         for layer in self._model.model.layers:
-            if getattr(layer, "block_sparse_moe", None) is not None:
+            if getattr(layer, "block_sparse_moe", None) is not None and is_transformers_version("<", "5.13"):
                 unpatch_sparse_moe(layer.block_sparse_moe)
             if layer.mamba is not None:
                 mamba_layer = layer.mamba
@@ -10616,7 +10636,7 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5DynamicCache
+        from transformers.cache_utils import DynamicCache, LinearAttentionCacheLayerMixin
 
         from openvino.frontend.pytorch import ConversionExtension, ModuleExtension
 
@@ -10633,60 +10653,6 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
             self._text_model = self._model.model
             self._text_config = self._model.model.config
 
-        class Qwen3_5DynamicCacheWrap(Qwen3_5DynamicCache):
-            def __init__(self, config, conv_states, recurrent_states, key_cache, value_cache):
-                # Call parent constructor with all required arguments
-                super().__init__(config=config)
-
-                self.conv_states = conv_states
-                self.recurrent_states = recurrent_states
-                self.key_cache = key_cache
-                self.value_cache = value_cache
-                self.full_attn_mapping = {}
-                self.linear_attn_mapping = {}
-                full_attn_layer_idx = 0
-                linear_attn_layer_idx = 0
-                for i in range(len(config.layer_types)):
-                    if self.layer_types[i] == "full_attention":
-                        self.full_attn_mapping[i] = full_attn_layer_idx
-                        full_attn_layer_idx += 1
-                    elif self.layer_types[i] == "linear_attention":
-                        self.linear_attn_mapping[i] = linear_attn_layer_idx
-                        linear_attn_layer_idx += 1
-
-            def update(
-                self,
-                key_states: torch.Tensor,
-                value_states: torch.Tensor,
-                layer_idx: int,
-                cache_kwargs: Optional[dict[str, Any]] = None,
-            ) -> tuple[torch.Tensor, torch.Tensor]:
-                # map layer_idx to key_cache (value_cache) idx
-                layer_idx = self.full_attn_mapping[layer_idx]
-                if self.key_cache[layer_idx] is None:
-                    self.key_cache[layer_idx] = key_states
-                    self.value_cache[layer_idx] = value_states
-                else:
-                    self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states], dim=2)
-                    self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states], dim=2)
-
-                return self.key_cache[layer_idx], self.value_cache[layer_idx]
-
-            def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
-                """Returns the sequence length of the cached states. A layer index can be optionally passed."""
-                # take any layer that contains cache and not empty tensor
-                layer_idx = self.transformer_layers[0] if layer_idx not in self.transformer_layers else layer_idx
-                layer_idx = self.full_attn_mapping[layer_idx]
-                if len(self.key_cache) <= layer_idx or self.key_cache[layer_idx] is None:
-                    return 0
-                return self.key_cache[layer_idx].shape[-2]
-
-            @property
-            def has_previous_state(self):
-                """We have a previous state if the last linear (conv) layer was already updated."""
-                layer_idx = self.linear_attn_mapping[self.last_linear_layer]
-                return self.conv_states[layer_idx] is not None
-
         # the patch is needed to include KV-cache, Conv, and SSM states in the inputs and outputs.
         def patched_forward(
             input_ids=None,
@@ -10696,30 +10662,26 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
             position_ids=None,
         ):
             text_config = self._text_config
-            num_full_attn_layers = text_config.layer_types.count("full_attention")
             num_linear_attn_layers = text_config.layer_types.count("linear_attention")
 
             use_cache = False
             wrapped_cache_params = None
             if cache_params is not None:
                 use_cache = True
-                conv_states = []
-                recurrent_states = []
-                key_cache = []
-                value_cache = []
+                # `cache_params` is grouped by layer type: all linear-attention layers first (conv, recurrent), then all full-attention layers (key, value).
+                conv_states = iter(cache_params[0 : 2 * num_linear_attn_layers : 2])
+                recurrent_states = iter(cache_params[1 : 2 * num_linear_attn_layers : 2])
+                key_states = iter(cache_params[2 * num_linear_attn_layers :: 2])
+                value_states = iter(cache_params[2 * num_linear_attn_layers + 1 :: 2])
 
-                # decouple ssm_states, conv_states, keys and values from cache_params
-                for idx in range(num_linear_attn_layers):
-                    conv_states.append(cache_params[2 * idx])
-                    recurrent_states.append(cache_params[2 * idx + 1])
-
-                for idx in range(num_full_attn_layers):
-                    key_cache.append(cache_params[2 * num_linear_attn_layers + 2 * idx])
-                    value_cache.append(cache_params[2 * num_linear_attn_layers + 2 * idx + 1])
-
-                wrapped_cache_params = Qwen3_5DynamicCacheWrap(
-                    text_config, conv_states, recurrent_states, key_cache, value_cache
-                )
+                wrapped_cache_params = DynamicCache(config=text_config)
+                for layer in wrapped_cache_params.layers:
+                    if isinstance(layer, LinearAttentionCacheLayerMixin):
+                        layer.conv_states[0] = next(conv_states)
+                        layer.recurrent_states[0] = next(recurrent_states)
+                    else:
+                        layer.keys, layer.values = next(key_states), next(value_states)
+                        layer.is_initialized = True
 
             if self._is_vlm:
                 # VLM case: call language model through the composite model
@@ -10747,16 +10709,18 @@ class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
             }
 
             if use_cache:
-                present_key_values = []
-                for idx in range(num_linear_attn_layers):
-                    present_key_values.append(past_kv.conv_states[idx])
-                    present_key_values.append(past_kv.recurrent_states[idx])
+                # output `present_key_values` in the same grouped order as the inputs: all linear-attention layers first (conv, recurrent), then all full-attention layers (key, value).
+                linear_attn_outputs = []
+                full_attn_outputs = []
+                for layer in past_kv.layers:
+                    if isinstance(layer, LinearAttentionCacheLayerMixin):
+                        linear_attn_outputs.append(layer.conv_states[0])
+                        linear_attn_outputs.append(layer.recurrent_states[0])
+                    else:
+                        full_attn_outputs.append(layer.keys)
+                        full_attn_outputs.append(layer.values)
 
-                for idx in range(num_full_attn_layers):
-                    present_key_values.append(past_kv.key_cache[idx])
-                    present_key_values.append(past_kv.value_cache[idx])
-
-                outputs["present_key_values"] = present_key_values
+                outputs["present_key_values"] = linear_attn_outputs + full_attn_outputs
 
             return outputs
 
@@ -10987,6 +10951,26 @@ def _set_nested_attr(module, name, tensor):
         setattr(module, param_name, nn.Parameter(tensor))
 
 
+def _set_stacked_moe_experts(module, prefix, per_expert):
+    """Stack per-expert MoE weights into the 3D parameters expected by ``Qwen3_5MoeExperts``.
+
+    Some checkpoints (e.g. Qwen3.5-35B-A3B) store the MTP MoE experts in the legacy per-expert
+    layout (``experts.{i}.gate_proj.weight`` / ``up_proj.weight`` / ``down_proj.weight``), while the
+    runtime module keeps them as stacked 3D tensors ``experts.gate_up_proj`` of shape
+    ``(num_experts, 2 * intermediate, hidden)`` and ``experts.down_proj`` of shape
+    ``(num_experts, hidden, intermediate)``. This mirrors the conversion transformers performs for
+    the main model's experts, which ``_load_mtp_weights`` bypasses by reading raw checkpoint keys.
+    """
+    expert_indices = sorted(per_expert)
+    gate_up = torch.stack(
+        [torch.cat([per_expert[i]["gate_proj"], per_expert[i]["up_proj"]], dim=0) for i in expert_indices],
+        dim=0,
+    )
+    down = torch.stack([per_expert[i]["down_proj"] for i in expert_indices], dim=0)
+    _set_nested_attr(module, f"{prefix}.gate_up_proj", gate_up)
+    _set_nested_attr(module, f"{prefix}.down_proj", down)
+
+
 def _load_mtp_weights(mtp_module, model):
     """Populate an MTP head module with the ``mtp.*`` weights from the checkpoint.
 
@@ -11021,15 +11005,31 @@ def _load_mtp_weights(mtp_module, model):
         shard_files = ["model.safetensors"]
 
     loaded = 0
+    # Per-expert MoE weights stored as `...experts.{i}.{gate,up,down}_proj.weight`. The MoE MTP head
+    # (`Qwen3_5MoeExperts`) instead holds stacked 3D parameters (`experts.gate_up_proj` / `experts.down_proj`),
+    # so these are collected here and stacked after all shards are read (see `_set_stacked_moe_experts`).
+    expert_weights = defaultdict(dict)
+    expert_re = re.compile(r"^(.*\.experts)\.(\d+)\.(gate_proj|up_proj|down_proj)\.weight$")
+
     for shard in shard_files:
         shard_path = _resolve(shard)
         if shard_path is None:
             continue
         with safe_open(shard_path, framework="pt") as f:
             for key in f.keys():
-                if key.startswith("mtp."):
-                    _set_nested_attr(mtp_module, key[4:], f.get_tensor(key))
-                    loaded += 1
+                if not key.startswith("mtp."):
+                    continue
+                name = key[4:]
+                expert_match = expert_re.match(name)
+                if expert_match is not None:
+                    prefix, expert_idx, proj = expert_match.groups()
+                    expert_weights[prefix].setdefault(int(expert_idx), {})[proj] = f.get_tensor(key)
+                else:
+                    _set_nested_attr(mtp_module, name, f.get_tensor(key))
+                loaded += 1
+
+    for prefix, per_expert in expert_weights.items():
+        _set_stacked_moe_experts(mtp_module, prefix, per_expert)
 
     if loaded == 0:
         raise RuntimeError(
@@ -11292,275 +11292,52 @@ class Qwen3_5MoeMTPModelPatcher(Qwen3_5MTPModelPatcher):
                 sparse_moe_block.forward = sparse_moe_block._orig_forward
 
 
-class Qwen3ASRModelPatcher(OVSeq2SeqModelPatcher):
-    """
-    Model patcher for Qwen3-ASR encoder-decoder export.
-
-    For encoder: patches the audio tower forward to use standard attention (no cu_seqlens/chunking).
-    For decoder: patches forward to accept encoder_outputs/decoder_input_ids and map them to the thinker's interface.
-    """
-
+# Qwen3ASRForConditionalGeneration only exposes generate(), so the base patcher has no forward to wrap.
+# Route the language export through thinker.model/lm_head and make its KV cache traceable.
+# Original model: https://github.com/QwenLM/Qwen3-ASR/blob/c17a131fe028b2e428b6e80a33d30bb4fa57b8df/qwen_asr/core/transformers_backend/modeling_qwen3_asr.py#L1311-L1362
+class Qwen3ASRLanguageModelPatcher(OVDecoderModelPatcher):
     def __init__(
         self,
         config: "OpenVINOConfig",
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        super().__init__(config, model, model_kwargs)
-
-    def __enter__(self):
-        super().__enter__()
-
-        if self.real_config._behavior == "encoder":
-            self._patch_audio_encoder()
-        elif self.real_config._behavior == "decoder":
-            self._patch_decoder()
-
-    def _patch_audio_encoder(self):
-        """
-        Patch audio encoder forward for OV-compatible tracing.
-        Removes dynamic chunking and cu_seqlens-based attention.
-        Patches attention layers to work with batched 3D inputs.
-        """
-        encoder = self._model
-        # Force eager attention to avoid cu_seqlens dependency
-        encoder.config._attn_implementation = "eager"
-        for layer in encoder.layers:
-            layer.self_attn.config._attn_implementation = "eager"
-
-            # Patch each attention layer to accept 3D batched input (batch, seq, dim)
-            attn = layer.self_attn
-            attn._orig_forward = attn.forward
-
-            def make_patched_attn_forward(attn_module):
-                # Original code: https://github.com/QwenLM/Qwen3-ASR/blob/c17a131fe028b2e428b6e80a33d30bb4fa57b8df/qwen_asr/core/transformers_backend/modeling_qwen3_asr.py#L477
-                def patched_attn_forward(hidden_states, cu_seqlens=None, attention_mask=None, **kwargs):
-                    # hidden_states: (batch, seq_len, dim) - standard 3D batched
-                    bsz, seq_length, _ = hidden_states.size()
-
-                    query_states = (
-                        attn_module.q_proj(hidden_states)
-                        .reshape(bsz, seq_length, attn_module.num_heads, -1)
-                        .transpose(1, 2)
-                    )
-                    key_states = (
-                        attn_module.k_proj(hidden_states)
-                        .reshape(bsz, seq_length, attn_module.num_heads, -1)
-                        .transpose(1, 2)
-                    )
-                    value_states = (
-                        attn_module.v_proj(hidden_states)
-                        .reshape(bsz, seq_length, attn_module.num_heads, -1)
-                        .transpose(1, 2)
-                    )
-
-                    attn_weights = torch.matmul(query_states, key_states.transpose(2, 3)) * attn_module.scaling
-                    attn_weights = torch.nn.functional.softmax(attn_weights, dim=-1, dtype=torch.float32).to(
-                        query_states.dtype
-                    )
-
-                    attn_output = torch.matmul(attn_weights, value_states)
-                    attn_output = attn_output.transpose(1, 2).contiguous().reshape(bsz, seq_length, -1)
-                    attn_output = attn_module.out_proj(attn_output)
-                    return attn_output
-
-                return patched_attn_forward
-
-            attn.forward = make_patched_attn_forward(attn)
-
-            # Patch each encoder layer to accept 3D input and skip cu_seqlens
-            layer._orig_forward = layer.forward
-
-            def make_patched_layer_forward(enc_layer):
-                # Original code:https://github.com/QwenLM/Qwen3-ASR/blob/c17a131fe028b2e428b6e80a33d30bb4fa57b8df/qwen_asr/core/transformers_backend/modeling_qwen3_asr.py#L536
-                def patched_layer_forward(hidden_states, cu_seqlens=None, attention_mask=None, **kwargs):
-                    residual = hidden_states
-                    hidden_states = enc_layer.self_attn_layer_norm(hidden_states)
-                    hidden_states = enc_layer.self_attn(hidden_states=hidden_states, attention_mask=attention_mask)
-                    hidden_states = residual + hidden_states
-                    residual = hidden_states
-                    hidden_states = enc_layer.final_layer_norm(hidden_states)
-                    hidden_states = enc_layer.fc1(hidden_states)
-                    hidden_states = enc_layer.activation_fn(hidden_states)
-                    hidden_states = enc_layer.fc2(hidden_states)
-                    hidden_states = residual + hidden_states
-                    return (hidden_states,)
-
-                return patched_layer_forward
-
-            layer.forward = make_patched_layer_forward(layer)
-
-        # Save original forward
-        encoder._orig_forward = encoder.forward
-
-        # Original code: https://github.com/QwenLM/Qwen3-ASR/blob/c17a131fe028b2e428b6e80a33d30bb4fa57b8df/qwen_asr/core/transformers_backend/modeling_qwen3_asr.py#L669
-        def patched_audio_forward(input_features, feature_lens=None, aftercnn_lens=None, **kwargs):
-            """
-            Simplified audio encoder forward for OV export.
-            Processes audio input without dynamic chunking.
-
-            input_features: (batch_size, num_mel_bins, seq_len) or (num_mel_bins, seq_len)
-            """
-            # Ensure input is batched: (batch, num_mel, seq_len)
-            if input_features.dim() == 2:
-                input_features = input_features.unsqueeze(0)
-
-            # Apply convolutions: conv2d expects (batch, 1, num_mel, seq_len)
-            x = input_features.unsqueeze(1)  # (batch, 1, num_mel, seq_len)
-            x = F.gelu(encoder.conv2d1(x))
-            x = F.gelu(encoder.conv2d2(x))
-            x = F.gelu(encoder.conv2d3(x))
-
-            b, c, f, t = x.size()
-            x = encoder.conv_out(x.permute(0, 3, 1, 2).contiguous().view(b, t, c * f))
-
-            # Add positional embeddings
-            pos_emb = encoder.positional_embedding.positional_embedding[:t, :].unsqueeze(0).to(x.dtype)
-            hidden_states = x + pos_emb  # (batch, t, hidden_dim)
-
-            # Process through patched encoder layers with standard 3D batched attention
-            for encoder_layer in encoder.layers:
-                layer_outputs = encoder_layer(hidden_states)
-                hidden_states = layer_outputs[0]
-
-            hidden_states = encoder.ln_post(hidden_states)
-            hidden_states = encoder.proj1(hidden_states)
-            hidden_states = encoder.act(hidden_states)
-            hidden_states = encoder.proj2(hidden_states)
-
-            return BaseModelOutput(last_hidden_state=hidden_states)
-
-        encoder.forward = patched_audio_forward
-
-    def _patch_decoder(self):
-        """
-        Patch full model forward for decoder export.
-        Maps seq2seq inputs (encoder_outputs, decoder_input_ids) to the thinker's interface.
-        Returns a flat tuple of tensors (logits + KV cache) for TorchScript tracing compatibility.
-        """
-        model = self._model
-        thinker = model.thinker
-
-        # Force eager attention for text model
-        thinker.config.text_config._attn_implementation = "eager"
-
-        # Save original forward
-        model._orig_forward = model.forward
-
-        # Original code: https://github.com/QwenLM/Qwen3-ASR/blob/c17a131fe028b2e428b6e80a33d30bb4fa57b8df/qwen_asr/core/transformers_backend/modeling_qwen3_asr.py#L1159
-        def patched_decoder_forward(
-            encoder_outputs=None,
-            decoder_input_ids=None,
-            attention_mask=None,
-            past_key_values=None,
+        def language_forward(
+            self,
+            attention_mask,
+            position_ids,
+            past_key_values,
+            inputs_embeds,
+            use_cache=True,
             cache_position=None,
-            **kwargs,
         ):
-            """
-            Decoder forward that accepts seq2seq-style inputs.
-            encoder_outputs: pre-computed audio features from encoder (batch, enc_seq_len, hidden_dim)
-            decoder_input_ids: text token ids (batch, dec_seq_len)
-            Returns a flat tuple: (logits, k0, v0, k1, v1, ...) for TorchScript compatibility.
-            """
-            # Convert past_key_values from legacy list format to DynamicCache
-            if past_key_values is not None and isinstance(past_key_values, (list, tuple)):
+            if isinstance(past_key_values, (list, tuple)):
                 cache = DynamicCache()
-                for layer_past in past_key_values:
-                    if len(layer_past) >= 2:
-                        cache.update(layer_past[0], layer_past[1], len(cache))
+                for layer_idx, layer_past in enumerate(past_key_values):
+                    cache.update(layer_past[0], layer_past[1], layer_idx)
                 past_key_values = cache
             elif past_key_values is None:
-                # Pre-create DynamicCache so that thinker.model uses it even during
-                # torch.jit.trace (the model skips cache creation when tracing).
                 past_key_values = DynamicCache()
 
-            input_ids = decoder_input_ids
-            inputs_embeds = thinker.get_input_embeddings()(input_ids)
-
-            # Merge audio features from encoder into embeddings at audio placeholder positions
-            if encoder_outputs is not None:
-                if isinstance(encoder_outputs, (tuple, list)):
-                    encoder_hidden_states = encoder_outputs[0]
-                else:
-                    encoder_hidden_states = encoder_outputs
-                # Flatten encoder outputs: (total_audio_tokens, hidden_dim)
-                audio_features = encoder_hidden_states.reshape(-1, encoder_hidden_states.shape[-1])
-                audio_features = audio_features.to(inputs_embeds.device, inputs_embeds.dtype)
-
-                # Use cumsum-based indexing + torch.where for OV-friendly dynamic shapes
-                special_audio_mask = input_ids == thinker.config.audio_token_id  # [batch, seq]
-                # cumsum gives 1-based index of audio tokens; subtract 1 for 0-based
-                audio_cumsum = special_audio_mask.long().cumsum(dim=-1) - 1  # [batch, seq]
-                # Clamp to valid range for gather (non-audio positions will be masked out anyway)
-                audio_cumsum = audio_cumsum.clamp(min=0)
-                # Expand to [batch, seq, hidden] by gathering from audio_features
-                gather_indices = audio_cumsum.unsqueeze(-1).expand(
-                    -1, -1, inputs_embeds.shape[-1]
-                )  # [batch, seq, hidden]
-                # audio_features is [total_audio_tokens, hidden], expand for batch gather
-                audio_features_expanded = audio_features.unsqueeze(0).expand(
-                    inputs_embeds.shape[0], -1, -1
-                )  # [batch, total, hidden]
-                gathered_audio = torch.gather(audio_features_expanded, 1, gather_indices)  # [batch, seq, hidden]
-                # Use where to select: audio feature at audio positions, original embed elsewhere
-                mask_3d = special_audio_mask.unsqueeze(-1)  # [batch, seq, 1]
-                inputs_embeds = torch.where(mask_3d, gathered_audio, inputs_embeds)
-
-            # Compute position_ids
-            position_ids = None
-            if attention_mask is not None:
-                if (
-                    cache_position is None
-                    or (cache_position is not None and cache_position[0] == 0)
-                    or thinker.rope_deltas is None
-                ):
-                    delta0 = (1 - attention_mask).sum(dim=-1).unsqueeze(1)
-                    position_ids, rope_deltas = thinker.get_rope_index(attention_mask)
-                    rope_deltas = rope_deltas - delta0
-                    thinker.rope_deltas = rope_deltas
-                else:
-                    batch_size, seq_length = input_ids.shape
-                    delta = cache_position[0] + thinker.rope_deltas
-                    position_ids = torch.arange(seq_length, device=input_ids.device)
-                    position_ids = position_ids.view(1, -1).expand(batch_size, -1)
-                    position_ids = position_ids.add(delta)
-                    position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
-
-            outputs = thinker.model(
+            outputs = self.thinker.model(
+                inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
                 position_ids=position_ids,
                 past_key_values=past_key_values,
-                inputs_embeds=inputs_embeds,
-                use_cache=True,
+                use_cache=use_cache,
                 cache_position=cache_position,
             )
+            logits = self.thinker.lm_head(outputs[0])
+            return logits, postprocess_past_key_values(outputs.past_key_values)
 
-            logits = thinker.lm_head(outputs[0])
-
-            past_kv = outputs.past_key_values
-            # Convert DynamicCache to flat tuple of tensors for TorchScript tracing
-            # Output format: (logits, k0, v0, k1, v1, ...)
-            flat_output = [logits]
-            if isinstance(past_kv, DynamicCache):
-                for layer in past_kv.layers:
-                    flat_output.append(layer.keys)
-                    flat_output.append(layer.values)
-            elif past_kv is not None:
-                legacy = past_kv if isinstance(past_kv, (list, tuple)) else past_kv.to_legacy_cache()
-                for layer_kv in legacy:
-                    flat_output.append(layer_kv[0])
-                    flat_output.append(layer_kv[1])
-
-            return tuple(flat_output)
-
-        model.forward = patched_decoder_forward
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(language_forward, model)
+        super().__init__(config, model, model_kwargs)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-
-        if hasattr(self._model, "_orig_forward"):
-            self._model.forward = self._model._orig_forward
-            del self._model._orig_forward
+        self._model.forward = self._model.__orig_forward
+        del self._model.__orig_forward
 
 
 class FunASRModelPatcher(OVSeq2SeqModelPatcher):
@@ -13307,6 +13084,9 @@ class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
     Exports the Qwen3.5 / Qwen3.5-MoE (hybrid Gated DeltaNet + full attention) language model of MiniCPM-V 4.7.
     """
 
+    # the head applied to the last hidden states to produce the `logits` output
+    _output_head_name = "lm_head"
+
     def __init__(
         self,
         config: "OpenVINOConfig",
@@ -13349,7 +13129,7 @@ class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
                 past_key_values=cache,
                 use_cache=True,
             )
-            logits = self._model.lm_head(outputs.last_hidden_state)
+            logits = getattr(self._model, self._output_head_name)(outputs.last_hidden_state)
 
             linear_attn_outputs, full_attn_outputs = [], []
             for layer in outputs.past_key_values.layers:
@@ -13412,6 +13192,16 @@ class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
                 restore_minicpmv4_7_moe_weights(experts)
 
 
+class Qwen3_5ForSequenceClassificationLanguageModelPatcher(MiniCPMV4_7LanguageModelPatcher):
+    """
+    Exports the language model of Qwen3_5ForSequenceClassification: the same hybrid Gated DeltaNet + full attention
+    decoder as MiniCPM-V 4.7 (transformers `DynamicCache`), ending in the `score` classification head instead of
+    `lm_head`. The `logits` output holds the class logits of every token; the runtime picks the last non-pad token.
+    """
+
+    _output_head_name = "score"
+
+
 # Patches MiniCPMV4_7VisionAttention.forward:
 # https://github.com/huggingface/transformers/blob/6da3313a6f89fb3fe0d51c02fe06e3664cd436b0/src/transformers/models/minicpmv4_7/modeling_minicpmv4_7.py#L114
 # Why: the export encodes one crop (or a batch of equal windows), so the data-dependent `cu_seqlens` split is dropped
@@ -13465,7 +13255,8 @@ class MiniCPMV4_7VisionEmbeddingsPatcher(ModelPatcher):
     """
     Exports the MiniCPM-V 4.7 vision tower, ViT window merger and MLP merger as one graph encoding one crop.
     Crops never interact, so the host runs it per crop and passes the grid-dependent indices: `position_ids`,
-    `window_index` and `merge_index`.
+    `window_index` and `merge_index`. The "4x" downsample mode (MiniCPM-OCR) leaves the ViT window merger and
+    `window_index` out.
     """
 
     def __init__(
@@ -13486,7 +13277,9 @@ class MiniCPMV4_7VisionEmbeddingsPatcher(ModelPatcher):
         # https://github.com/huggingface/transformers/blob/6da3313a6f89fb3fe0d51c02fe06e3664cd436b0/src/transformers/models/minicpmv4_7/modeling_minicpmv4_7.py#L531
         # Why: position ids, `cu_seqlens` and the per-crop merge loop are computed from `target_sizes` in Python; the
         # host passes `position_ids` / `merge_index` instead, so the graph is not tied to the example grid size.
-        def vision_embed_forward(self, pixel_values, position_ids, window_index, merge_index):
+        use_vit_merger = config.use_vit_merger
+
+        def vision_embed_forward(self, pixel_values, position_ids, window_index=None, merge_index=None):
             vision_tower = self.vision_tower
             embeddings = vision_tower.embeddings
             patch_embeds = embeddings.patch_embedding(pixel_values.to(embeddings.patch_embedding.weight.dtype))
@@ -13495,7 +13288,7 @@ class MiniCPMV4_7VisionEmbeddingsPatcher(ModelPatcher):
 
             for layer_idx, encoder_layer in enumerate(vision_tower.encoder.layers):
                 hidden_states = encoder_layer(hidden_states, attention_mask=None)
-                if layer_idx == vision_config.insert_layer_id:
+                if use_vit_merger and layer_idx == vision_config.insert_layer_id:
                     hidden_states = vision_tower.vit_merger(hidden_states, window_index)
             hidden_states = vision_tower.post_layernorm(hidden_states)
 

@@ -1190,13 +1190,14 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
     #
     #     ov_config={"code_predictor_model.ov_config": {"INFERENCE_PRECISION_HINT": "f32"}}
     #
-    # Two settings are worth knowing about. On GPU the code predictor needs that f32 pin: it runs
-    # `num_code_groups - 1` steps inside every talker frame off a cache that is reset each frame, and
-    # in the plugin's default f16 its logits go non-finite within the first few frames, which surfaces
-    # as `probability tensor contains either inf, nan or element < 0` out of the multinomial sampling
-    # in `code_predictor.generate`. The talker stack is unaffected, so the bulk of the compute
-    # (28 layers vs 5) still runs in f16. On CPU the default is f32, or bf16 where the CPU has AMX -
-    # and bf16 has f32's exponent range, so the overflow f16 hits cannot happen there.
+    # Two settings are worth knowing about. On GPU the code predictor runs `num_code_groups - 1` steps
+    # inside every talker frame off a cache that is reset each frame, and in the plugin's default f16
+    # its logits go non-finite within the first few frames, which surfaces as `probability tensor
+    # contains either inf, nan or element < 0` out of the multinomial sampling in
+    # `code_predictor.generate`. The export writes `ACTIVATIONS_SCALE_FACTOR=8.0` into the rt_info of
+    # both decoder stacks, as for any stateful LLM, which keeps them finite in f16; IRs exported
+    # before that need re-exporting, or the f32 pin above. On CPU the default is f32, or bf16 where
+    # the CPU has AMX - and bf16 has f32's exponent range, so the overflow f16 hits cannot happen there.
     #
     # Both stacks compile to fused stateful SDPA, which quantizes the key/value cache per the
     # plugin's default (u8 on CPU). Greedy decoding still yields the same codes as PyTorch frame for
@@ -1637,8 +1638,21 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
             per_component[component] = {**value}
         return shared, per_component
 
-    def _part_ov_config(self, name: str) -> Dict[str, Any]:
-        return {**self.ov_config, **self._supported_ov_config(self._device, self._component_ov_config.get(name))}
+    def _part_ov_config(self, name: str, model: Optional[openvino.Model] = None) -> Dict[str, Any]:
+        ov_config = {**self.ov_config, **self._supported_ov_config(self._device, self._component_ov_config.get(name))}
+        # The GPU plugin honours the exported `ACTIVATIONS_SCALE_FACTOR` rt_info for stateless graphs
+        # only: on GPUs with XMX it skips it for anything it classifies as an LLM, which the two
+        # stateful decoder stacks are. Their f16 activations then overflow, so pass the exported
+        # value explicitly, unless the caller set one.
+        option = ["runtime_options", "ACTIVATIONS_SCALE_FACTOR"]
+        if (
+            "GPU" in self._device
+            and isinstance(model, openvino.Model)
+            and "ACTIVATIONS_SCALE_FACTOR" not in ov_config
+            and model.has_rt_info(option)
+        ):
+            ov_config["ACTIVATIONS_SCALE_FACTOR"] = model.get_rt_info(option).astype(str)
+        return ov_config
 
     def _build_parts(self, ov_models: Dict[str, openvino.Model]) -> None:
         """Wrap each loaded graph in the part that drives it; components with no IR stay ``None``."""
@@ -1651,7 +1665,7 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
             model = ov_models.get(name)
             if model is None:
                 return None
-            return part_cls(model, self, model_name=name, ov_config=self._part_ov_config(name), **extra)
+            return part_cls(model, self, model_name=name, ov_config=self._part_ov_config(name, model), **extra)
 
         self.talker_model = build(
             "talker_model",

@@ -31,6 +31,10 @@ from optimum.intel.utils.import_utils import is_qwen_tts_available
 # are checked: submodels without a key/value cache - encoders, embedding tables, a codec - have no
 # state to page, and the transformation rejects them by design.
 ARCH_TO_CB_COMPATIBLE_SUBMODELS = {
+    "qwen3_asr": {
+        "task": "automatic-speech-recognition",
+        "submodels": ("language_model",),
+    },
     "ministral3": {
         "task": "image-text-to-text",
         "submodels": ("language_model",),
@@ -42,6 +46,11 @@ ARCH_TO_CB_COMPATIBLE_SUBMODELS = {
     # hybrid Gated DeltaNet + full attention language model with MoE: besides SDPA -> PagedAttention, the linear
     # attention layers become PagedGatedDeltaNet / PagedCausalConv1D
     "minicpmv4_7": {
+        "task": "image-text-to-text",
+        "submodels": ("language_model",),
+    },
+    # dense hybrid Gated DeltaNet + full attention language model
+    "minicpm_ocr": {
         "task": "image-text-to-text",
         "submodels": ("language_model",),
     },

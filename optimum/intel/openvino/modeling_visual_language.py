@@ -32,12 +32,13 @@ from transformers import (
     AutoImageProcessor,
     AutoModel,
     AutoModelForImageTextToText,
+    AutoModelForSequenceClassification,
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
     PreTrainedTokenizer,
 )
-from transformers.modeling_outputs import BaseModelOutputWithPooling
+from transformers.modeling_outputs import BaseModelOutputWithPooling, SequenceClassifierOutput
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLModel
 from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLModel
 from transformers.utils import ModelOutput
@@ -84,11 +85,7 @@ else:
 
 
 if is_transformers_version(">=", "5.2"):
-    from transformers.models.qwen3_5.modeling_qwen3_5 import (
-        Qwen3_5Model,
-        Qwen3_5VisionModel,
-        Qwen3_5VisionRotaryEmbedding,
-    )
+    from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5Model
 
 if is_transformers_version(">=", "5.18"):
     from transformers.models.minicpmv4_7.modeling_minicpmv4_7 import MiniCPMV4_7Model
@@ -234,7 +231,9 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
 
             if self.config.model_type in ["qwen3_5", "qwen3_5_moe"] and position_ids.ndim != 3:
                 position_ids = np.repeat(np.expand_dims(position_ids, 0), 4, axis=0)
-            elif (self.config.model_type in ["qwen2_vl", "qwen2_5_vl", "qwen3_vl"]) and position_ids.ndim == 2:
+            elif (
+                self.config.model_type in ["qwen2_vl", "qwen2_5_vl", "qwen3_vl", "qwen3_asr"]
+            ) and position_ids.ndim == 2:
                 # Qwen2-VL and Qwen3-VL use 3D mrope (3 spatial dimensions)
                 position_ids = np.repeat(np.expand_dims(position_ids, 0), 3, axis=0)
             elif self.config.model_type == "qwen3_omni_moe" and position_ids.ndim == 2:
@@ -397,6 +396,12 @@ class OVResampler(OVModelPart):
 
     def forward(self, image_feature, pos_embed, key_padding_mask):
         self.compile()
+        if key_padding_mask.dtype == torch.bool and self.input_dtypes.get("key_padding_mask") != "boolean":
+            # the resampler is exported with a floating point key_padding_mask, which nn.MultiheadAttention adds to
+            # the attention scores, so padded positions must be -inf instead of True (which would become 1.0)
+            key_padding_mask = torch.zeros(key_padding_mask.shape, dtype=torch.float32).masked_fill_(
+                key_padding_mask, float("-inf")
+            )
         result = self.request(
             {"image_feature": image_feature, "pos_embed": pos_embed, "key_padding_mask": key_padding_mask}
         )[0]
@@ -458,6 +463,67 @@ class OVAudioEncoder(OVModelPart):
         else:
             inputs = {k: v for k, v in kwargs.items() if k in self.input_names}
         return self.request(inputs)[0]
+
+
+class OVQwen3AudioEncoder(OVAudioEncoder):
+    def encode(self, input_features, feature_attention_mask):
+        encoder_inputs, feature_lens, chunk_lens = self._prepare_inputs(input_features, feature_attention_mask)
+        output = super().forward(**encoder_inputs)
+        return self._compact_features(output, chunk_lens), feature_lens
+
+    def _prepare_inputs(self, input_features, feature_attention_mask):
+        thinker_config = getattr(self.config, "thinker_config", self.config)
+        audio_config = getattr(thinker_config, "audio_config", None)
+        n_window = getattr(audio_config, "n_window", 100) if audio_config else 100
+        n_window_infer = getattr(audio_config, "n_window_infer", 400) if audio_config else 400
+
+        feature_lens = feature_attention_mask.sum(-1).to(torch.int64)
+        if torch.any(feature_lens == 0):
+            raise ValueError("Each sample must contain at least one valid audio frame.")
+        audio_flat = input_features.permute(0, 2, 1)[feature_attention_mask.bool()].permute(1, 0)
+
+        aftercnn_lens = _get_feat_extract_output_lengths(feature_lens)
+        chunk_num = torch.ceil(feature_lens / (n_window * 2)).long()
+        chunk_lengths = torch.tensor([n_window * 2] * chunk_num.sum(), dtype=torch.long)
+        tail_chunk_index = torch.nn.functional.pad(chunk_num, (1, 0), value=-1).cumsum(0)[1:]
+        chunk_lengths[tail_chunk_index] = feature_lens % (n_window * 2)
+        chunk_lengths[chunk_lengths == 0] = n_window * 2
+
+        chunk_list = audio_flat.T.split(chunk_lengths.tolist(), dim=0)
+        padded_feature = torch.nn.utils.rnn.pad_sequence(chunk_list, batch_first=True).transpose(1, 2)
+        chunk_output_lens = _get_feat_extract_output_lengths(chunk_lengths)
+        padded_mask_after_cnn = torch.nn.utils.rnn.pad_sequence(
+            [torch.ones(length, dtype=torch.bool) for length in chunk_output_lens],
+            batch_first=True,
+        )
+
+        window_aftercnn = padded_mask_after_cnn.shape[-1] * (n_window_infer // (n_window * 2))
+        cu_chunk_lens = [0]
+        for cnn_len in aftercnn_lens:
+            cnn_len_val = cnn_len.item()
+            cu_chunk_lens += [window_aftercnn] * (cnn_len_val // window_aftercnn)
+            remainder = cnn_len_val % window_aftercnn
+            if remainder != 0:
+                cu_chunk_lens += [remainder]
+        cu_seqlens = torch.tensor(cu_chunk_lens, device=aftercnn_lens.device).cumsum(-1, dtype=torch.int32)
+
+        encoder_inputs = {
+            "padded_feature": padded_feature,
+            "padded_mask_after_cnn": padded_mask_after_cnn,
+            "aftercnn_lens": aftercnn_lens,
+            "cu_seqlens": cu_seqlens,
+        }
+        return encoder_inputs, aftercnn_lens, chunk_output_lens
+
+    @staticmethod
+    def _compact_features(audio_output, chunk_output_lens):
+        audio_output = torch.from_numpy(audio_output) if not isinstance(audio_output, torch.Tensor) else audio_output
+        if audio_output.ndim != 3:
+            return audio_output
+        return torch.cat(
+            [audio_output[chunk_idx, : length.item()] for chunk_idx, length in enumerate(chunk_output_lens)],
+            dim=0,
+        )
 
 
 class OVTalkerDecoder(OVModelPart):
@@ -841,7 +907,7 @@ class OVModelForVisualCausalLM(OVBaseModel, OVDFlashTargetMixin, GenerationMixin
         self._supports_cache_class = False
         self.main_input_name = "input_ids"
         self._compile_only = kwargs.get("compile_only", False)
-        self.export_feature = kwargs.get("export_feature", "image-text-to-text")
+        self.export_feature = kwargs.get("export_feature", type(self).export_feature)
 
         for part in self.additional_parts:
             setattr(self, f"{part}_model", kwargs.get(part))
@@ -898,6 +964,10 @@ class OVModelForVisualCausalLM(OVBaseModel, OVDFlashTargetMixin, GenerationMixin
         save_config(self.config, save_directory)
 
     @classmethod
+    def _get_model_class(cls, config: PretrainedConfig):
+        return MODEL_TYPE_TO_CLS_MAPPING[config.model_type]
+
+    @classmethod
     def _from_pretrained(
         cls,
         model_id: Union[str, Path],
@@ -946,7 +1016,7 @@ class OVModelForVisualCausalLM(OVBaseModel, OVDFlashTargetMixin, GenerationMixin
             trust_remote_code (`bool`, *optional*, defaults to `False`):
                 Whether to trust remote code when loading model tokenizer/processor during quantization.
         """
-        model_cls = MODEL_TYPE_TO_CLS_MAPPING[config.model_type]
+        model_cls = cls._get_model_class(config)
         model_file_names = model_cls._all_ov_model_paths.copy()
         for k in tuple(model_file_names):
             model_file_names[f"{k}_bin"] = model_file_names[k].replace(".xml", ".bin")
@@ -4323,6 +4393,8 @@ class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
         )
         # OVQwen3OmniMoeVisionEmbeddings merges deepstack into the vision graph; swap in for the default wrapper.
         self.vision_embeddings = OVQwen3OmniMoeVisionEmbeddings(self.vision_embeddings.model, self)
+        if self.audio_encoder is not None:
+            self.audio_encoder = OVQwen3AudioEncoder(self.audio_encoder.model, self, model_name="audio_encoder")
 
         self._apply_component_device_overrides()
         if enable_compilation and not self._compile_only:
@@ -4681,60 +4753,9 @@ class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
             cached_features, cached_lens = cached
             return cached_features.clone(), cached_lens.clone()
 
-        thinker_config = getattr(self.config, "thinker_config", self.config)
-        audio_config = getattr(thinker_config, "audio_config", None)
-        n_window = getattr(audio_config, "n_window", 100) if audio_config else 100
-        n_window_infer = getattr(audio_config, "n_window_infer", 400) if audio_config else 400
-
-        feature_lens = feature_attention_mask.sum(-1).to(torch.int64)
-        if feature_lens.sum() == 0:
-            raise ValueError("feature_attention_mask is all-zero; no valid audio frames to process.")
-        audio_flat = input_features.permute(0, 2, 1)[feature_attention_mask.bool()].permute(1, 0)
-
-        aftercnn_lens = _get_feat_extract_output_lengths(feature_lens)
-        chunk_num = torch.ceil(feature_lens / (n_window * 2)).long()
-        chunk_lengths = torch.tensor([n_window * 2] * chunk_num.sum(), dtype=torch.long)
-        tail_chunk_index = torch.nn.functional.pad(chunk_num, (1, 0), value=-1).cumsum(0)[1:]
-        chunk_lengths[tail_chunk_index] = feature_lens % (n_window * 2)
-        chunk_lengths[chunk_lengths == 0] = n_window * 2
-
-        chunk_list = audio_flat.T.split(chunk_lengths.tolist(), dim=0)
-        padded_feature = torch.nn.utils.rnn.pad_sequence(chunk_list, batch_first=True).transpose(1, 2)
-        feature_lens_after_cnn = _get_feat_extract_output_lengths(chunk_lengths)
-        padded_mask_after_cnn = torch.nn.utils.rnn.pad_sequence(
-            [torch.ones(length, dtype=torch.bool) for length in feature_lens_after_cnn],
-            batch_first=True,
-        )
-
-        # cu_seqlens are required by the audio encoder's windowed attention kernels.
-        window_aftercnn = padded_mask_after_cnn.shape[-1] * (n_window_infer // (n_window * 2))
-        cu_chunk_lens = [0]
-        for cnn_len in aftercnn_lens:
-            cnn_len_val = cnn_len.item()
-            cu_chunk_lens += [window_aftercnn] * (cnn_len_val // window_aftercnn)
-            remainder = cnn_len_val % window_aftercnn
-            if remainder != 0:
-                cu_chunk_lens += [remainder]
-        cu_seqlens = torch.tensor(cu_chunk_lens, device=aftercnn_lens.device).cumsum(-1, dtype=torch.int32)
-
         if self.audio_encoder is None:
             raise ValueError("Audio encoder model not loaded. Cannot process audio inputs.")
-        audio_out = self.audio_encoder(
-            padded_feature=padded_feature,
-            padded_mask_after_cnn=padded_mask_after_cnn,
-            aftercnn_lens=aftercnn_lens,
-            cu_seqlens=cu_seqlens,
-        )
-        audio_out = torch.from_numpy(audio_out) if not isinstance(audio_out, torch.Tensor) else audio_out
-
-        # Encoder returns padded [N_chunks, aftercnn_time, dim]; drop pad frames per chunk before concatenation.
-        if audio_out.ndim == 3:
-            valid_tokens = []
-            for i, length in enumerate(feature_lens_after_cnn):
-                valid_tokens.append(audio_out[i, : length.item()])
-            audio_features = torch.cat(valid_tokens, dim=0)
-        else:
-            audio_features = audio_out
+        audio_features, aftercnn_lens = self.audio_encoder.encode(input_features, feature_attention_mask)
         self._lru_put(
             self._audio_cache,
             cache_key,
@@ -7579,10 +7600,41 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM):
         self.num_grid_per_side = int(config.vision_config.num_position_embeddings**0.5)
         self.spatial_merge_size = config.vision_config.spatial_merge_size
         head_dim = config.vision_config.hidden_size // config.vision_config.num_heads
-        self.rotary_pos_emb = Qwen3_5VisionRotaryEmbedding(head_dim // 2)
+        # axial vision RoPE over head_dim // 2 (theta 10000), computed here: the transformers rotary module and
+        # `rot_pos_emb` changed interface in later versions
+        rotary_dim = head_dim // 2
+        self.vision_rope_inv_freq = 1.0 / (10000.0 ** (torch.arange(0, rotary_dim, 2, dtype=torch.float) / rotary_dim))
 
     def __setattr__(self, name, value):
         OVModelForVisualCausalLM.__setattr__(self, name, value)
+
+    # Adapted from Qwen3_5VisionModel.rot_pos_emb (transformers 5.2)
+    def rot_pos_emb(self, grid_thw):
+        merge_size = self.spatial_merge_size
+        grid_thw_list = grid_thw.tolist()
+
+        max_hw = max(max(h, w) for _, h, w in grid_thw_list)
+        freq_table = torch.outer(
+            torch.arange(max_hw, dtype=torch.float), self.vision_rope_inv_freq
+        )  # (max_hw, dim // 2)
+
+        pos_ids = []
+        for num_frames, height, width in grid_thw_list:
+            merged_h, merged_w = height // merge_size, width // merge_size
+            # full-resolution (row, col) of every patch, ordered merge_size x merge_size block by block
+            row_idx = (
+                torch.arange(merged_h)[:, None, None, None] * merge_size
+                + torch.arange(merge_size)[None, None, :, None]
+            )
+            col_idx = (
+                torch.arange(merged_w)[None, :, None, None] * merge_size
+                + torch.arange(merge_size)[None, None, None, :]
+            )
+            row_idx = row_idx.expand(merged_h, merged_w, merge_size, merge_size).reshape(-1)
+            col_idx = col_idx.expand(merged_h, merged_w, merge_size, merge_size).reshape(-1)
+            pos_ids.append(torch.stack((row_idx, col_idx), dim=-1).repeat(num_frames, 1))
+
+        return freq_table[torch.cat(pos_ids)].flatten(1)
 
     def prepare_inputs_for_generation(
         self,
@@ -7597,8 +7649,25 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM):
         pixel_values_videos=None,
         image_grid_thw=None,
         video_grid_thw=None,
+        mm_token_type_ids=None,
+        is_first_iteration=False,
+        next_sequence_length=None,
         **kwargs,
     ):
+        # reconstruct cache_position as partially removed in v5.3 and totally removed in v5.5
+        if is_transformers_version(">=", "5.3") and (
+            cache_position is None or (not is_first_iteration and cache_position[0] == 0)
+        ):
+            if next_sequence_length is not None:
+                past_len = input_ids.shape[1] - next_sequence_length
+                cache_position = torch.arange(past_len, past_len + next_sequence_length, device=input_ids.device)
+            elif not is_first_iteration and attention_mask is not None:
+                # v5.3 decode step: input_ids is already sliced to 1 token, use attention_mask length
+                past_len = attention_mask.shape[1] - 1
+                cache_position = torch.tensor([past_len], device=input_ids.device)
+            else:
+                cache_position = torch.arange(input_ids.shape[1], device=input_ids.device)
+
         # Overwritten -- in specific circumstances we don't want to forward image inputs to the model
         if past_key_values is not None:
             if inputs_embeds is not None and input_ids.shape[1] == 0:  # Exception 4
@@ -7629,6 +7698,7 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM):
                 "image_grid_thw": image_grid_thw,
                 "video_grid_thw": video_grid_thw,
                 "cache_position": cache_position,
+                "mm_token_type_ids": mm_token_type_ids,
             }
         )
         return model_inputs
@@ -7789,12 +7859,28 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM):
         if position_ids is None and input_ids is not None and (attention_mask is None or attention_mask.ndim == 2):
             # calculate RoPE index once per generation in the pre-fill stage only
             if (cache_position is not None and cache_position[0] == 0) or self.rope_deltas is None:
-                vision_positions, rope_deltas = self.get_rope_index(
-                    input_ids,
-                    image_grid_thw=image_grid_thw,
-                    video_grid_thw=video_grid_thw,
-                    attention_mask=attention_mask,
-                )
+                if is_transformers_version(">=", "5.3"):
+                    # since transformers v5.3, get_rope_index requires mm_token_type_ids
+                    mm_token_type_ids = kwargs.get("mm_token_type_ids")
+                    if mm_token_type_ids is None:
+                        mm_token_type_ids = torch.zeros_like(input_ids, dtype=torch.int32)
+                        mm_token_type_ids[input_ids == self.config.image_token_id] = 1
+                        mm_token_type_ids[input_ids == self.config.video_token_id] = 2
+                    vision_positions, rope_deltas = self.get_rope_index(
+                        input_ids,
+                        mm_token_type_ids,
+                        image_grid_thw=image_grid_thw,
+                        video_grid_thw=video_grid_thw,
+                        attention_mask=attention_mask,
+                    )
+                else:
+                    vision_positions, rope_deltas = self.get_rope_index(
+                        input_ids,
+                        image_grid_thw=image_grid_thw,
+                        video_grid_thw=video_grid_thw,
+                        attention_mask=attention_mask,
+                    )
+
                 self.rope_deltas = rope_deltas
                 # Compute text positions (simple cumsum) and concatenate as dim 0
                 # to create shape (4, batch, seq_len): [text_pos, temporal, height, width]
@@ -7931,7 +8017,77 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM):
 if is_transformers_version(">=", "5.2"):
     _OVQwen3_5ForCausalLM.get_placeholder_mask = Qwen3_5Model.get_placeholder_mask
     _OVQwen3_5ForCausalLM.get_rope_index = Qwen3_5Model.get_rope_index
-    _OVQwen3_5ForCausalLM.rot_pos_emb = getattr(Qwen3_5VisionModel, "rot_pos_emb", None)
+
+
+class OVModelForVisualSequenceClassification(OVModelForVisualCausalLM):
+    """
+    OpenVINO runtime for vision-language models with a sequence classification head (`AutoModelForSequenceClassification`
+    of a VLM, e.g. reward models). The model parts are the ones of `OVModelForVisualCausalLM`, but the language model ends
+    in the classification head: one forward pass gives the class logits of every token, and the logits of the last non-pad
+    token are the result, as in transformers' `GenericForSequenceClassification`. Nothing is generated.
+    """
+
+    export_feature = "text-classification"
+    auto_model_class = AutoModelForSequenceClassification
+
+    @classmethod
+    def _get_model_class(cls, config: PretrainedConfig):
+        if config.model_type not in SEQUENCE_CLASSIFICATION_MODEL_TYPE_TO_CLS_MAPPING:
+            raise ValueError(
+                f"{config.model_type} is not supported by {cls.__name__}, supported model types: "
+                f"{list(SEQUENCE_CLASSIFICATION_MODEL_TYPE_TO_CLS_MAPPING)}"
+            )
+        return SEQUENCE_CLASSIFICATION_MODEL_TYPE_TO_CLS_MAPPING[config.model_type]
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor,
+        attention_mask: Optional[torch.LongTensor] = None,
+        pixel_values: Optional[torch.FloatTensor] = None,
+        **kwargs,
+    ) -> SequenceClassifierOutput:
+        inputs_embeds, attention_mask, position_ids, *_ = self.get_multimodal_embeddings(
+            input_ids, pixel_values, attention_mask=attention_mask, **kwargs
+        )
+        # without past_key_values the language model starts from a fresh state
+        logits = self.language_model(
+            None, inputs_embeds=inputs_embeds, attention_mask=attention_mask, position_ids=position_ids
+        ).logits
+
+        # the rightmost non-pad token, padding on either side; the last token without a pad token id
+        pad_token_id = self.config.get_text_config().pad_token_id
+        if pad_token_id is None:
+            if input_ids.shape[0] != 1:
+                raise ValueError("Cannot handle batch sizes > 1 if no padding token is defined.")
+            last_token = torch.full((input_ids.shape[0],), -1)
+        else:
+            is_token = (input_ids != pad_token_id).int()
+            last_token = (torch.arange(input_ids.shape[-1]) * is_token).argmax(-1)
+        return SequenceClassifierOutput(logits=logits[torch.arange(input_ids.shape[0]), last_token])
+
+    def generate(self, *args, **kwargs):
+        raise NotImplementedError(f"{self.__class__.__name__} classifies, it does not generate.")
+
+
+class _OVQwen3_5ForSequenceClassification(OVModelForVisualSequenceClassification, _OVQwen3_5ForCausalLM):
+    """
+    Qwen3_5ForSequenceClassification: the Qwen3.5 vision and text embeddings and M-RoPE positions of
+    `_OVQwen3_5ForCausalLM`, classified by `OVModelForVisualSequenceClassification.forward`.
+    """
+
+    def __init__(self, *args, **kwargs):
+        if is_transformers_version("<", "5.14.0"):
+            raise ImportError("Qwen3_5ForSequenceClassification requires transformers >= 5.14.0.")
+        super().__init__(*args, **kwargs)
+
+    def forward(self, *args, **kwargs) -> SequenceClassifierOutput:
+        # every call is a new prompt: compute its M-RoPE positions instead of reusing the cached rope deltas
+        self.rope_deltas = None
+        return super().forward(*args, **kwargs)
+
+
+if is_transformers_version(">=", "5.15"):
+    _OVQwen3_5ForCausalLM.get_vision_position_ids = Qwen3_5Model.get_vision_position_ids
 
 
 class _OVMuseGlimmerForCausalLM(OVModelForVisualCausalLM):
@@ -8050,6 +8206,10 @@ class _OVMiniCPMV4_7ForCausalLM(OVModelForVisualCausalLM):
     `get_rope_index` and extended with the cached `rope_deltas` while decoding.
     """
 
+    # visual tokens get canvas M-RoPE positions from `get_rope_index`, otherwise text positions
+    _canvas_rope = True
+    _supported_downsample_modes = ("16x",)
+
     def __init__(
         self,
         language_model: ov.Model,
@@ -8077,8 +8237,12 @@ class _OVMiniCPMV4_7ForCausalLM(OVModelForVisualCausalLM):
             quantization_config=quantization_config,
             **kwargs,
         )
-        if config.downsample_mode != "16x":
-            raise NotImplementedError(f"Only the 16x downsample mode is supported, got {config.downsample_mode}.")
+        if config.downsample_mode not in self._supported_downsample_modes:
+            raise NotImplementedError(
+                f"Supported downsample modes: {self._supported_downsample_modes}, got {config.downsample_mode}."
+            )
+        # the "4x" downsample mode skips the ViT window merger, see MiniCPMV4_6Model.get_image_features
+        self.use_vit_merger = config.downsample_mode != "4x"
         vision_config = config.vision_config
         self.patch_size = vision_config.patch_size
         self.num_patches_per_side = vision_config.image_size // vision_config.patch_size
@@ -8097,35 +8261,30 @@ class _OVMiniCPMV4_7ForCausalLM(OVModelForVisualCausalLM):
             start += num_patches
 
             crop_size = torch.tensor([[height, width]])
-            position_ids = get_vision_nearest_position_ids(crop_size, self.num_patches_per_side)
-            window_index, window_cu_seqlens = get_vision_window_index(
-                torch.nn.functional.pad(crop_size, (1, 0), value=1),
-                spatial_merge_size=1,
-                window_size=self.window_size,
-                patch_size=1,
-            )
-            if (window_cu_seqlens.diff() != self.window_size**2).any():
-                raise ValueError(f"Crop grid ({height}, {width}) must be divisible by the window size.")
-            # merge_index: token order for the final merger. The ViT window merger leaves a (height / window_h,
-            # width / window_w) grid; regroup it so that every merge_h x merge_w block is contiguous (MiniCPMV4_7Merger)
-            grid_h, grid_w = height // self.window_kernel_size[0], width // self.window_kernel_size[1]
+            index_inputs = {"position_ids": get_vision_nearest_position_ids(crop_size, self.num_patches_per_side)}
+            grid_h, grid_w = height, width
+            if self.use_vit_merger:
+                window_index, window_cu_seqlens = get_vision_window_index(
+                    torch.nn.functional.pad(crop_size, (1, 0), value=1),
+                    spatial_merge_size=1,
+                    window_size=self.window_size,
+                    patch_size=1,
+                )
+                if (window_cu_seqlens.diff() != self.window_size**2).any():
+                    raise ValueError(f"Crop grid ({height}, {width}) must be divisible by the window size.")
+                index_inputs["window_index"] = window_index
+                # the ViT window merger leaves a (height / window_h, width / window_w) grid
+                grid_h, grid_w = height // self.window_kernel_size[0], width // self.window_kernel_size[1]
+            # merge_index: token order for the final merger, the grid regrouped so that every merge_h x merge_w block
+            # is contiguous (MiniCPMV4_7Merger)
             merge_h, merge_w = self.merge_kernel_size
-            merge_index = (
+            index_inputs["merge_index"] = (
                 torch.arange(grid_h * grid_w)
                 .view(grid_h // merge_h, merge_h, grid_w // merge_w, merge_w)
                 .permute(0, 2, 1, 3)
                 .reshape(-1)
             )
-            features.append(
-                torch.from_numpy(
-                    self.vision_embeddings(
-                        crop,
-                        position_ids=position_ids,
-                        window_index=window_index,
-                        merge_index=merge_index,
-                    )[0]
-                )
-            )
+            features.append(torch.from_numpy(self.vision_embeddings(crop, **index_inputs)[0]))
         return torch.cat(features, dim=0)
 
     def get_image_features(self, pixel_values, target_sizes):
@@ -8197,7 +8356,7 @@ class _OVMiniCPMV4_7ForCausalLM(OVModelForVisualCausalLM):
 
         batch_size, seq_len = input_ids.shape
         has_multimodal = target_sizes is not None or target_sizes_videos is not None
-        if is_prefill and has_multimodal and mm_token_type_ids is not None:
+        if is_prefill and has_multimodal and mm_token_type_ids is not None and self._canvas_rope:
             position_ids, self.rope_deltas = self.get_rope_index(
                 input_ids,
                 mm_token_type_ids=mm_token_type_ids,
@@ -8316,6 +8475,19 @@ if is_transformers_version(">=", "5.18.0"):
     _OVMiniCPMV4_7ForCausalLM._frame_end_idx = staticmethod(MiniCPMV4_7Model._frame_end_idx)
 
 
+class _OVMiniCPMOcrForCausalLM(_OVMiniCPMV4_7ForCausalLM):
+    """
+    OpenVINO runtime for MiniCPM-OCR (MiniCPM-V 4.6 architecture, native transformers implementation).
+
+    Runs the MiniCPM-V 4.7 graphs, but the visual tokens take plain text positions (the same on the three M-RoPE
+    axes), as the language model has no canvas M-RoPE. The checkpoints use the "4x" downsample mode, which skips the
+    ViT window merger.
+    """
+
+    _canvas_rope = False
+    _supported_downsample_modes = ("4x", "16x")
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "muse_glimmer": _OVMuseGlimmerForCausalLM,
     "llava": _OVLlavaForCausalLM,
@@ -8324,6 +8496,7 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "mistral3": _OVMistral3ForCausalLM,
     "minicpmv": _OVMiniCPMVForCausalLM,
     "minicpmv4_7": _OVMiniCPMV4_7ForCausalLM,
+    "minicpm_ocr": _OVMiniCPMOcrForCausalLM,
     "llava-qwen2": _OVNanoLlavaForCausalLM,
     "maira2": _OVMaira2ForCausalLM,
     "phi3_v": _OVPhi3VisionForCausalLM,
@@ -8351,4 +8524,8 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "minicpmo": _OVMiniCPMOForCausalLM,
     "videochat_flash_qwen": _OVVideoChatFlashQwenForCausalLM,
     "deepseek_ocr2": _OVDeepseekOCR2ForCausalLM,
+}
+
+SEQUENCE_CLASSIFICATION_MODEL_TYPE_TO_CLS_MAPPING = {
+    "qwen3_5": _OVQwen3_5ForSequenceClassification,
 }
