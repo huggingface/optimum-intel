@@ -1824,6 +1824,32 @@ class OVCLIExportTestCase(unittest.TestCase):
                     checkpoint_types = checkpoint_types or markov_types
                     self.assertEqual(markov_types, checkpoint_types)
 
+    def test_exporters_cli_dspark_pruned_vocabulary(self):
+        import openvino as ov
+        from safetensors.torch import load_file
+
+        model_path = MODEL_NAMES["minicpm_ocr_dspark"]
+        config = json.loads(Path(cached_file(model_path, "config.json")).read_text())
+        d2t = load_file(cached_file(model_path, "model.safetensors"))["d2t"].tolist()
+        with TemporaryDirectory() as tmpdir:
+            command = ["optimum-cli", "export", "openvino", "--model", model_path, "--weight-format", "int4"]
+            subprocess.run([*command, "--group-size", "16", tmpdir], check=True)
+
+            draft_model = ov.Core().read_model(Path(tmpdir) / "openvino_model.xml")
+            self.assertEqual([output.any_name for output in draft_model.outputs], ["logits", "d2t"])
+            d2t_source = draft_model.output("d2t").get_node().input_value(0).get_node()
+            self.assertEqual(d2t_source.get_data().tolist(), d2t)
+            # The draft's own lm_head is its last MatMul, which int4 compression keeps 8-bit.
+            lm_head_shape = [config["draft_vocab_size"], config["hidden_size"]]
+            lm_head_types = {
+                op.get_output_element_type(0)
+                for op in draft_model.get_ops()
+                if op.get_type_name() == "Constant" and list(op.get_output_shape(0)) == lm_head_shape
+            }
+            self.assertEqual(lm_head_types, {ov.Type.u8})
+            weight_types = {op.get_output_element_type(0) for op in draft_model.get_ops()}
+            self.assertIn(ov.Type.u4, weight_types)
+
     @unittest.skipIf(is_transformers_version("<", "5"), reason="DSpark drafts require transformers>=5")
     def test_exporters_cli_dspark_does_not_export_tokenizer(self):
         draft_path = MODEL_NAMES["minicpmv4_7_dspark"]

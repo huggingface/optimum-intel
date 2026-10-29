@@ -262,7 +262,11 @@ def load_native_draft_model(architecture: str, model_name_or_path: str, **kwargs
     # The MuseGlimmer drafter class is built lazily because it needs transformers >= 5.15.
     if not isinstance(model_class, type):
         model_class = model_class()
-    return model_class.from_pretrained(model_name_or_path, **kwargs)
+    if architecture not in DFLASH_ARCHITECTURES:
+        return model_class.from_pretrained(model_name_or_path, **kwargs)
+    model, loading_info = model_class.from_pretrained(model_name_or_path, output_loading_info=True, **kwargs)
+    model.check_pruned_vocabulary(loading_info["missing_keys"])
+    return model
 
 
 def update_config_for_custom_draft_model(config, auto_model, auto_model_for_causal_lm):
@@ -891,7 +895,7 @@ def _main_quantize(
 
     """
     from optimum.intel.openvino.configuration import OVWeightQuantizationConfig
-    from optimum.intel.openvino.modeling_dflash import is_dflash_draft_model
+    from optimum.intel.openvino.modeling_dflash import dflash_draft_has_lm_head, is_dflash_draft_model
     from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
 
     # Step 0. Infer task and library name if needed
@@ -985,8 +989,10 @@ def _main_quantize(
         and quantization_config.all_layers is None
         and isinstance(getattr(model, "model", None), Model)
         and is_dflash_draft_model(model.model)
+        and not dflash_draft_has_lm_head(model.model)
     ):
-        # DFlash drafts have no embeddings or lm_head, so NNCF's "last MatMul stays int8" rule would hit a decoder layer.
+        # Without embeddings or lm_head, NNCF's "last MatMul stays int8" rule would hit a decoder layer. A draft with
+        # a pruned vocabulary keeps its own lm_head, which that rule then keeps 8-bit as for any decoder.
         quantization_config = quantization_config.clone()
         quantization_config.all_layers = True
     model._apply_quantization(
