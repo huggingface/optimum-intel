@@ -8604,6 +8604,8 @@ class NemotronHModelPatcher(GraniteMoeHybridModelPatcher):
 
     def __enter__(self):
         super().__enter__()
+        # GraniteMoeHybrid only registers `ov_batched_mm` from transformers 5.13. Before that, the NemotronH experts
+        # would keep the default `grouped_mm`, which uses `torch.histc` and can't be converted
         if is_transformers_version("<", "5.13"):
             register_ov_batched_mm(self)
 
