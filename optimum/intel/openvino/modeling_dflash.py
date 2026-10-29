@@ -29,12 +29,16 @@ import openvino as ov
 import torch
 from openvino import opset13
 from transformers import AutoModel, GenerationConfig, PretrainedConfig
-from transformers.generation.candidate_generator import DFlashTokenCandidateGenerator
 from transformers.modeling_outputs import BaseModelOutputWithPast
 
 from ..utils.import_utils import is_transformers_version
 from .modeling_base import OVBaseModel
 
+
+if is_transformers_version(">=", "5.15"):
+    from transformers.generation.candidate_generator import DFlashTokenCandidateGenerator
+else:
+    DFlashTokenCandidateGenerator = object
 
 if TYPE_CHECKING:
     from transformers.generation.logits_process import LogitsProcessorList
@@ -401,11 +405,8 @@ class OVDFlashTargetMixin:
     """
 
     def _setup_dflash(self, assistant_model: OVAssistantForCausalLM) -> None:
-        if is_transformers_version(">=", "5.16"):
-            raise ValueError(
-                "DFlash speculative decoding with OpenVINO models requires transformers 5.15.x, "
-                "as later versions changed `DFlashTokenCandidateGenerator`."
-            )
+        if is_transformers_version("<", "5.15"):
+            raise ValueError("DFlash speculative decoding with OpenVINO models requires transformers >= 5.15.")
         language_model = self.language_model
         layer_ids = list(assistant_model.config.target_layer_ids)
         if getattr(language_model, "_dflash_layer_ids", None) == layer_ids:
