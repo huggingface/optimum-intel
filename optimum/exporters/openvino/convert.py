@@ -194,6 +194,7 @@ def _save_model(
             "muse_glimmer",
             "muse_glimmer_text",
             "minicpmv4_7",
+            "minicpm_ocr",
         }
     ):
         add_hidden_states_rt_info(source_model, model, config)
