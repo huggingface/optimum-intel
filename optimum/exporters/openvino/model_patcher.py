@@ -407,15 +407,12 @@ def register_ov_grouped_mm(patcher):
     OV-compatible scatter_add_ variant while keeping the grouped_mm dispatch key so that
     hardware-accelerated grouped GEMM paths remain available on supported devices.
     """
-    import transformers.integrations.moe as moe_module
     from transformers.integrations.moe import ALL_EXPERTS_FUNCTIONS
 
-    #patcher._orig_grouped_mm_experts_forward = moe_module.grouped_mm_experts_forward
-   # moe_module.grouped_mm_experts_forward = ov_grouped_mm_experts_forward
+    # patcher._orig_grouped_mm_experts_forward = moe_module.grouped_mm_experts_forward
+    # moe_module.grouped_mm_experts_forward = ov_grouped_mm_experts_forward
     ALL_EXPERTS_FUNCTIONS._global_mapping["ov_grouped_mm"] = ov_grouped_mm_experts_forward
     patcher._model.set_experts_implementation("ov_grouped_mm")
-
-
 
 
 def patch_update_causal_mask(
