@@ -409,8 +409,6 @@ def register_ov_grouped_mm(patcher):
     """
     from transformers.integrations.moe import ALL_EXPERTS_FUNCTIONS
 
-    # patcher._orig_grouped_mm_experts_forward = moe_module.grouped_mm_experts_forward
-    # moe_module.grouped_mm_experts_forward = ov_grouped_mm_experts_forward
     ALL_EXPERTS_FUNCTIONS._global_mapping["ov_grouped_mm"] = ov_grouped_mm_experts_forward
     patcher._model.set_experts_implementation("ov_grouped_mm")
 
