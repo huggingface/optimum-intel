@@ -385,13 +385,13 @@ def ov_grouped_mm_experts_forward(
     offsets = torch.cumsum(tokens_per_expert, dim=0, dtype=torch.int32)
 
     gate_up_out = _moe_module._grouped_linear(
-        selected_hidden_states_g, selected_gate_up, selected_gate_up_bias, offsets, is_transposed=self.is_transposed
+        selected_hidden_states_g, selected_gate_up, offsets, selected_gate_up_bias, is_transposed=self.is_transposed
     )
 
     gated_out = self._apply_gate(gate_up_out)
 
     out_per_sample_g = _moe_module._grouped_linear(
-        gated_out, selected_down, selected_down_bias, offsets, is_transposed=self.is_transposed
+        gated_out, selected_down, offsets, selected_down_bias, is_transposed=self.is_transposed
     )
 
     out_per_sample = out_per_sample_g[inv_perm] * sample_weights.unsqueeze(-1)
