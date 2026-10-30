@@ -735,18 +735,6 @@ class OVWeightCompressionTest(unittest.TestCase):
             OVModelForCausalLM,
             "gpt2",
             False,
-            dict(
-                bits=4,
-                sym=False,
-                group_size=32,
-                scoped_configs=[{"patterns": [".*mlp.*"], "bits": 8, "sym": False, "group_size": -1}],
-            ),
-            {"model": {"int8": 24, "int4": 20}},
-        ),
-        (
-            OVModelForCausalLM,
-            "gpt2",
-            False,
             dict(bits=4, sym=False, group_size=-1, ratio=0.8, all_layers=True),
             {"model": {"int8": 18, "int4": 26}},
         ),
@@ -1164,6 +1152,23 @@ class OVWeightCompressionTest(unittest.TestCase):
             {"model": {"int8": 4}},
         ),
     ]
+
+    # TODO: move to the list above once the minimum required NNCF version supports `nncf.ScopedConfig`
+    if is_nncf_version(">=", "3.5.0.dev0"):
+        TRANSFORMERS_4BIT_CONFIGURATIONS.append(
+            (
+                OVModelForCausalLM,
+                "gpt2",
+                False,
+                dict(
+                    bits=4,
+                    sym=False,
+                    group_size=32,
+                    scoped_configs=[{"patterns": [".*mlp.*"], "bits": 8, "sym": False, "group_size": -1}],
+                ),
+                {"model": {"int8": 24, "int4": 20}},
+            )
+        )
 
     # filter models type depending on min max transformers version
     LOAD_IN_4_BITS_SCOPE = [
@@ -2260,7 +2265,6 @@ class OVQuantizationConfigTest(unittest.TestCase):
                 sensitivity_metric="mean_activation_magnitude",
                 num_samples=100,
                 quant_method=OVQuantizationMethod.DEFAULT,
-                scoped_configs=[{"patterns": [".*self_attn.*"], "bits": 8, "sym": False, "group_size": -1}],
             ),
         ),
         (OVWeightQuantizationConfig(bits=4, dataset=["hello world", "i'm alive"]),),
@@ -2322,6 +2326,16 @@ class OVQuantizationConfigTest(unittest.TestCase):
             ),
         ),
     )
+    # TODO: move to the tuple above once the minimum required NNCF version supports `nncf.ScopedConfig`
+    if is_nncf_version(">=", "3.5.0.dev0"):
+        QUANTIZATION_CONFIGS += (
+            (
+                OVWeightQuantizationConfig(
+                    bits=4,
+                    scoped_configs=[{"patterns": [".*self_attn.*"], "bits": 8, "sym": False, "group_size": -1}],
+                ),
+            ),
+        )
 
     QUANTIZATION_CONFIG_DICTS = (
         (dict(bits=8, sym=True), OVWeightQuantizationConfig, None),
@@ -2602,7 +2616,7 @@ class OVQuantizationConfigTest(unittest.TestCase):
             ("invalid_group_size", [{"patterns": [".*self_attn.*"], "group_size": 0}]),
         ]
     )
-    @unittest.skipIf(not hasattr(nncf, "ScopedConfig"), "NNCF version does not support scoped configs")
+    @unittest.skipIf(is_nncf_version("<", "3.5.0.dev0"), "NNCF version does not support scoped configs")
     def test_invalid_scoped_configs(self, _, scoped_configs):
         with self.assertRaises(ValueError):
             OVWeightQuantizationConfig(bits=4, scoped_configs=scoped_configs)

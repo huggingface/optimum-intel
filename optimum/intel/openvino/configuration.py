@@ -558,8 +558,20 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
     },
     "openbmb/MiniCPM-OCR-1.0": {
         "quantization_configs": {
-            # Two-stage int4 + int8 compression, see `_MiniCPMOCRQuantizationConfig`
-            "lm_model": {"config_class": "minicpm_ocr"},
+            "lm_model": {
+                "bits": 4,
+                "sym": False,
+                "group_size": 64,
+                "ratio": 1.0,
+                "dataset": "textvqa",
+                "num_samples": 32,
+                "quant_method": OVQuantizationMethod.AWQ,
+                "scale_estimation": True,
+                # MLP weights are compressed to int8
+                "scoped_configs": [
+                    {"patterns": [".*mlp\\.(gate_proj|up_proj|down_proj)/.*"], "bits": 8, "sym": False}
+                ],
+            },
             "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
             "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
         },
@@ -589,6 +601,80 @@ _DEFAULT_8BIT_WQ_CONFIGS = {
         },
     },
 }
+
+# TODO: remove once the minimum required NNCF version supports `nncf.ScopedConfig`.
+_LEGACY_DEFAULT_4BIT_WQ_CONFIGS = {
+    "openai/gpt-oss-20b": {
+        "quantization_config1": {
+            "bits": 4,
+            "sym": True,
+            "group_size": 32,
+            # With ignored scope below we keep some weights in their original precision during the first quantization
+            # run and then quantize them to int8 in the second run.
+            "ignored_scope": {"patterns": [".*self_attn.*", ".*router.*"]},
+        },
+        "quantization_config2": {
+            "bits": 8,
+            "sym": False,
+            "weight_only": True,
+        },
+    },
+    "openai/gpt-oss-120b": {
+        "quantization_config1": {
+            "bits": 4,
+            "sym": True,
+            "group_size": 32,
+            # With ignored scope below we keep some weights in their original precision during the first quantization
+            # run and then quantize them to int8 in the second run.
+            "ignored_scope": {"patterns": [".*self_attn.*", ".*router.*"]},
+        },
+        "quantization_config2": {
+            "bits": 8,
+            "sym": False,
+            "weight_only": True,
+        },
+    },
+    "arcee-ai/Trinity-Nano-Preview": {
+        "quantization_config1": {
+            "bits": 4,
+            "sym": False,
+            "group_size": 64,
+            # With ignored scope below we keep some weights in their original precision during the first quantization
+            # run and then quantize them to int8 in the second run.
+            "ignored_scope": {"patterns": [".*self_attn.*", ".*router.*"]},
+        },
+        "quantization_config2": {
+            "bits": 8,
+            "sym": False,
+            "weight_only": True,
+        },
+    },
+    "arcee-ai/Trinity-Mini": {
+        "quantization_config1": {
+            "bits": 4,
+            "sym": False,
+            "group_size": 64,
+            # With ignored scope below we keep some weights in their original precision during the first quantization
+            # run and then quantize them to int8 in the second run.
+            "ignored_scope": {"patterns": [".*self_attn.*", ".*router.*"]},
+        },
+        "quantization_config2": {
+            "bits": 8,
+            "sym": False,
+            "weight_only": True,
+        },
+    },
+    "openbmb/MiniCPM-OCR-1.0": {
+        "quantization_configs": {
+            # Two-stage int4 + int8 compression, see `_MiniCPMOCRQuantizationConfig`
+            "lm_model": {"config_class": "minicpm_ocr"},
+            "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
+            "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
+        },
+    },
+}
+if not is_nncf_version(">=", "3.5.0.dev0"):
+    _DEFAULT_4BIT_WQ_CONFIGS.update(_LEGACY_DEFAULT_4BIT_WQ_CONFIGS)
 
 # Add configs for model id aliases
 # The list below contains pairs of model ids: config for the second model id will be copied from the first model id.
