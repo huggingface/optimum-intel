@@ -138,7 +138,7 @@ class OVASRTest(unittest.TestCase):
         is_transformers_version("<", "4.57") or is_transformers_version(">=", "4.58"),
         reason="Currently, we support Qwen3-ASR and FunASR only for transformers==4.57 since they are trust-remote-code models.",
     )
-    def test_funasr_audio_features_truncated_to_prompt_length(self):
+    def test_fun_asr_audio_features_truncated_to_prompt_length(self):
         """Regression test for the FunASR OpenVINO decoder runaway / WER inflation.
 
         The exported audio encoder emits one feature per frame, which can be longer than the
