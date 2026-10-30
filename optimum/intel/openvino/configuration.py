@@ -616,7 +616,28 @@ _DEFAULT_8BIT_WQ_CONFIGS = {
     "Qwen/Qwen2.5-Coder-3B-Instruct": {"bits": 8, "sym": False, "dq_group_size": 128},
     "diffusers/LTX-2.3-Diffusers": {
         "quantization_configs": {
-            "transformer": {"bits": 8, "sym": False, "weight_only": True},
+            "transformer": {
+                "bits": 8,
+                "sym": True,
+                "group_size": 32,
+                "weight_only": True,
+                "ignored_scope": {
+                    "patterns": [
+                        r".*proj_in.*",  # patchify_proj, audio_patchify_proj
+                        r".*proj_out.*",  # proj_out, audio_proj_out
+                        r".*time_embed.*",  # adaln_single, audio_adaln_single
+                        r".*av_cross_attn_.*",  # av_ca_*_adaln_single
+                        r".*prompt_adaln.*",  # prompt_adaln_single, audio_prompt_adaln_single
+                    ],
+                },
+            },
+            "connectors": {
+                "bits": 8,
+                "sym": True,
+                "group_size": 32,
+                "weight_only": True,
+                "ignored_scope": {"patterns": [r".*text_proj_in"]},
+            },
             "text_encoder": {"bits": 8, "sym": False, "weight_only": True},
         },
     },
@@ -1049,6 +1070,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             Whether to use symmetric quantization on the weights. Does not affect backup precision symmetricity.
         group_size (`int`, *optional*):
             The group size to use for quantization. Recommended value is 128 and -1 uses per-column quantization.
+            8-bit quantization is per-column by default.
         tokenizer (`str`, *optional*):
             The tokenizer used to process the dataset. You can pass either:
                 - A string, the *model id* of a predefined tokenizer hosted inside a model repo on huggingface.co.
@@ -1261,10 +1283,6 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             if self.ratio != 1:
                 raise ValueError(
                     f"For 8-bit quantization, `ratio` is expected to be set to 1.0, but was set to {self.ratio}"
-                )
-            if self.group_size is not None and self.group_size != -1:
-                raise ValueError(
-                    f"For 8-bit quantization, `group_size` is expected to be set to -1, but was set to {self.group_size}"
                 )
             if self.all_layers:
                 raise ValueError("The `all_layers` parameter is not supported for 8-bit quantization")
