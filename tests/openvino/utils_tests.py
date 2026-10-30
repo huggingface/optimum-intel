@@ -11,12 +11,16 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+import atexit
 import json
 import os
+import shutil
 import tempfile
 import time
 import unittest
 from contextlib import contextmanager
+from copy import deepcopy
+from functools import lru_cache
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -28,6 +32,71 @@ from huggingface_hub import constants, scan_cache_dir
 import optimum.exporters.openvino  # noqa: F401 (registers OpenVINO export configs in TasksManager)
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import is_transformers_version
+
+
+def _save_tiny_qwen3_tokenizer(output_dir: Path) -> None:
+    from transformers import AutoTokenizer
+
+    AutoTokenizer.from_pretrained("optimum-intel-internal-testing/tiny-random-qwen3").save_pretrained(output_dir)
+
+
+@lru_cache(maxsize=1)
+def get_dflash2_model_path():
+    """Create a tiny DFlash-2 checkpoint, once per process, only when a DFlash-2 test needs it."""
+    from transformers import AutoConfig
+
+    from optimum.exporters.openvino.model_patcher import Qwen3DFlash2ForCausalLM
+
+    target_config = AutoConfig.from_pretrained("optimum-intel-internal-testing/tiny-random-qwen3")
+    target_num_hidden_layers = target_config.num_hidden_layers
+    config = deepcopy(target_config)
+    config.num_hidden_layers = min(2, target_num_hidden_layers)
+    config.num_target_layers = target_num_hidden_layers
+    if getattr(config, "layer_types", None):
+        config.layer_types = list(config.layer_types[: config.num_hidden_layers])
+    config.architectures = ["DFlash2DraftModel"]
+    config.is_causal = False
+    config.dflash_config = {
+        "conv_group_size": 8 if config.hidden_size % 8 == 0 else 1,
+        "conv_kernel_size": 2,
+        "mask_token_id": config.vocab_size - 1,
+        "selector_rank": 8,
+        "selector_top_k": 4,
+        "target_layer_ids": [0, target_num_hidden_layers - 1],
+        "input_embedding_scale": 1.25,
+        "output_multiplier": 0.75,
+        "final_logit_softcapping": 8.0,
+    }
+
+    output_dir = Path(tempfile.mkdtemp(prefix="optimum_intel_tiny_random_qwen3_dflash2_"))
+    atexit.register(shutil.rmtree, output_dir, ignore_errors=True)
+    with torch.random.fork_rng():
+        torch.manual_seed(0)
+        model = Qwen3DFlash2ForCausalLM(config).eval()
+        model.save_pretrained(output_dir)
+    # save_pretrained records the implementation class; published DFlash-2
+    # checkpoints use this architecture marker to select the custom loader.
+    model.config.architectures = ["DFlash2DraftModel"]
+    model.config.save_pretrained(output_dir)
+    _save_tiny_qwen3_tokenizer(output_dir)
+    return str(output_dir)
+
+
+@lru_cache(maxsize=1)
+def get_dflash2_target_model_path():
+    """Create a matching Qwen3 target checkpoint, once per process, for DFlash-2 integration tests."""
+    from transformers import AutoConfig
+    from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
+
+    config = AutoConfig.from_pretrained("optimum-intel-internal-testing/tiny-random-qwen3")
+    config.architectures = ["Qwen3ForCausalLM"]
+    output_dir = Path(tempfile.mkdtemp(prefix="optimum_intel_tiny_random_qwen3_target_"))
+    atexit.register(shutil.rmtree, output_dir, ignore_errors=True)
+    with torch.random.fork_rng():
+        torch.manual_seed(1)
+        Qwen3ForCausalLM(config).eval().save_pretrained(output_dir)
+    _save_tiny_qwen3_tokenizer(output_dir)
+    return str(output_dir)
 
 
 def _create_tiny_kokoro_model():
@@ -142,6 +211,71 @@ def _create_tiny_kokoro_model():
     torch.save(torch.randn(256, dtype=torch.float32), voice_file)
 
     return str(output_dir)
+
+
+def _save_tiny_qwen3_tokenizer(output_dir: Path) -> None:
+    from transformers import AutoTokenizer
+
+    AutoTokenizer.from_pretrained("optimum-intel-internal-testing/tiny-random-qwen3").save_pretrained(output_dir)
+
+
+_DSPARK_MODEL_PATHS = {}
+
+
+def get_dspark_model_path(
+    sample_from_anchor: bool = True, with_tokenizer: bool = True, draft_vocab_size: Optional[int] = None
+):
+    """Create a tiny DSpark checkpoint with a vanilla Markov head, once per process.
+
+    With draft_vocab_size, the draft predicts a random, unsorted subset of the target vocabulary through its own
+    lm_head, and d2t maps it back as in the published pruned-vocabulary DSpark drafts.
+    """
+    key = (sample_from_anchor, with_tokenizer, draft_vocab_size)
+    if key in _DSPARK_MODEL_PATHS:
+        return _DSPARK_MODEL_PATHS[key]
+
+    from transformers import AutoConfig
+
+    from optimum.exporters.openvino.model_patcher import Qwen3DSparkForCausalLM
+
+    target_config = AutoConfig.from_pretrained("optimum-intel-internal-testing/tiny-random-qwen3")
+    target_num_hidden_layers = target_config.num_hidden_layers
+    config = deepcopy(target_config)
+    config.num_hidden_layers = min(2, target_num_hidden_layers)
+    config.num_target_layers = target_num_hidden_layers
+    if getattr(config, "layer_types", None):
+        config.layer_types = list(config.layer_types[: config.num_hidden_layers])
+    config.architectures = ["Qwen3DSparkModel"]
+    config.block_size = 4
+    config.mask_token_id = config.vocab_size - 1
+    config.target_layer_ids = [0, target_num_hidden_layers - 1]
+    config.markov_rank = 8
+    config.markov_head_type = "vanilla"
+    config.enable_confidence_head = False
+    config.sample_from_anchor = sample_from_anchor
+    if draft_vocab_size is not None:
+        config.draft_vocab_size = draft_vocab_size
+        config.tie_word_embeddings = False
+
+    output_dir = Path(tempfile.mkdtemp(prefix="optimum_intel_tiny_random_qwen3_dspark_"))
+    atexit.register(shutil.rmtree, output_dir, ignore_errors=True)
+    with torch.random.fork_rng():
+        torch.manual_seed(0)
+        model = Qwen3DSparkForCausalLM(config).eval()
+        # The default initializer makes the Markov bias negligible next to the draft logits,
+        # which would let tests pass without the head ever changing a sampled token.
+        torch.nn.init.normal_(model.markov_head.markov_w1.weight, std=1.0)
+        torch.nn.init.normal_(model.markov_head.markov_w2.weight, std=1.0)
+        if draft_vocab_size is not None:
+            target_ids = torch.randperm(config.vocab_size)[:draft_vocab_size]
+            model.d2t.copy_(target_ids - torch.arange(draft_vocab_size))
+        model.save_pretrained(output_dir)
+    model.config.architectures = ["Qwen3DSparkModel"]
+    model.config.save_pretrained(output_dir)
+    if with_tokenizer:
+        _save_tiny_qwen3_tokenizer(output_dir)
+    _DSPARK_MODEL_PATHS[key] = str(output_dir)
+    return _DSPARK_MODEL_PATHS[key]
 
 
 SEED = 42
@@ -433,7 +567,17 @@ EAGLE3_MODELS = {"qwen3_eagle3": ("qwen3_eagle3", "qwen3_eagle3_target")}
 DFLASH_MODELS = {
     "qwen3_dflash": ("qwen3_dflash", "qwen3"),
     "qwen3_deepspec_dflash": ("qwen3_deepspec_dflash", "qwen3"),
+    # GenAI without DSpark support runs this draft as a plain DFlash draft and ignores the Markov head.
+    "qwen3_dspark": ("qwen3_dspark", "qwen3"),
 }
+
+
+@lru_cache(maxsize=1)
+def get_dflash2_model_pairs():
+    if not is_transformers_version(">=", "4.57"):
+        return {}
+    return {"qwen3_dflash2": (get_dflash2_model_path(), get_dflash2_target_model_path())}
+
 
 DFLASH_VLM_MODELS = {
     "qwen3_5_dflash": ("qwen3_5_dflash", "qwen3_5"),
@@ -743,6 +887,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "qwen3_eagle3": {"model": 20},
     "qwen3_dflash": {"model": 30},
     "qwen3_deepspec_dflash": {"model": 30},
+    "qwen3_dspark": {"model": 30},
     "qwen3_vl_eagle3": {"model": 18},
     "qwen3_next": {"model": 100},
     "gemma3n": {
@@ -807,11 +952,6 @@ REMOTE_CODE_MODELS = (
     "decilm",
     "minicpm3",
     "deepseek",
-    "qwen3_dflash",
-    "qwen3_deepspec_dflash",
-    "qwen3_5_dflash",
-    "qwen3_5_moe_dflash",
-    "gemma4_dflash",
     "qwen3_eagle3",
     "qwen3_vl_eagle3",
     "qwen3_asr",
@@ -1155,6 +1295,7 @@ TEST_NAME_TO_MODEL_TYPE = {
     "qwen3_5_moe_mtp_legacy_weights": "qwen3_5_moe",
     "qwen3_dflash": "qwen3",
     "qwen3_deepspec_dflash": "qwen3",
+    "qwen3_dspark": "qwen3",
     "qwen3_eagle3": "llama",
     "qwen3_eagle3_target": "qwen3",
     "qwen3_vl_eagle3": "llama",
