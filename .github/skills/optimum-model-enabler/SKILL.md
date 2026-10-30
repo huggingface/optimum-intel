@@ -264,6 +264,7 @@ Source support without tests is incomplete. Update the applicable files:
 
 - `tests/openvino/test_decoder.py` for decoder-only generation;
 - `tests/openvino/test_seq2seq.py` for seq2seq and VLM integration;
+- `tests/openvino/test_tts.py` for text-to-speech integration;
 - `tests/openvino/test_export.py` for model/API export coverage;
 - `tests/openvino/test_exporters_cli.py` for CLI export coverage;
 - `tests/openvino/test_quantization.py` for compression and quantization;
