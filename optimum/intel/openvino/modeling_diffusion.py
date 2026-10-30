@@ -2040,7 +2040,9 @@ class OVModelConnectors(OVPipelinePart):
         # Return in the fixed order expected by the diffusers pipeline unpacking:
         # connector_prompt_embeds, connector_audio_prompt_embeds, connector_attention_mask
         output_names = ["video_text_embedding", "audio_text_embedding", "connector_attention_mask"]
-        named = {next(iter(k.names)): torch.from_numpy(v) for k, v in ov_outputs.items()}
+        # An output port can carry several tensor names (e.g. after `reshape()` or when the IR was re-saved), and
+        # `port.names` is an unordered set, so register every name instead of picking an arbitrary one.
+        named = {name: torch.from_numpy(v) for k, v in ov_outputs.items() for name in k.names}
         return tuple(named[name] for name in output_names)
 
 
