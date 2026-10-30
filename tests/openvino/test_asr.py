@@ -166,9 +166,7 @@ class OVASRTest(unittest.TestCase):
         # Number of audio feature frames produced by the exported encoder.
         encoder_outputs = ov_model.encoder(input_ids=input_features)
         enc_hidden = (
-            encoder_outputs.last_hidden_state
-            if hasattr(encoder_outputs, "last_hidden_state")
-            else encoder_outputs[0]
+            encoder_outputs.last_hidden_state if hasattr(encoder_outputs, "last_hidden_state") else encoder_outputs[0]
         )
         num_encoder_features = enc_hidden.shape[1]
         self.assertGreater(num_encoder_features, 1)
@@ -213,9 +211,8 @@ class OVASRTest(unittest.TestCase):
         del ov_model
         gc.collect()
 
-
     @pytest.mark.skipif(
-    is_transformers_version("<", "4.57") or is_transformers_version(">=", "4.58"),
+        is_transformers_version("<", "4.57") or is_transformers_version(">=", "4.58"),
         reason="Currently, we support FunASR only for transformers==4.57 since it is a trust-remote-code model.",
     )
     def test_fun_asr_activations_scale_factor(self):
