@@ -891,6 +891,13 @@ def _main_quantize(
             model_cls_name = _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
             if library_name == "sentence_transformers":
                 model_cls_name = "OVSentenceTransformer"
+            elif (
+                library_name == "transformers"
+                and task == "text-classification"
+                and model_type in MULTI_MODAL_TEXT_GENERATION_MODELS
+            ):
+                # a VLM with a sequence classification head is exported as VLM parts
+                model_cls_name = "OVModelForVisualSequenceClassification"
             model_cls = getattr(__import__("optimum.intel", fromlist=[model_cls_name]), model_cls_name)
         except (AttributeError, ImportError, KeyError) as e:
             raise RuntimeError(f"Wasn't able to locate OpenVINO class for task {original_task} ({task}).") from e

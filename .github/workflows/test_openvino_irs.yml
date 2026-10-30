@@ -65,4 +65,4 @@ jobs:
 
       - name: Test with Pytest
         run: |
-          pytest tests/openvino/test_irs.py --durations=0 -rs
+          pytest tests/openvino/test_irs.py --durations=0 --tb=line -rf

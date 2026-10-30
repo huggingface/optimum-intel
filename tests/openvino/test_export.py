@@ -40,6 +40,7 @@ from optimum.exporters.openvino.model_configs import (
     Qwen3OmniMoeConfigBehavior,
 )
 from optimum.exporters.openvino.model_patcher import LTX2TextEncoderPatcher
+from optimum.exporters.openvino.utils import LTX2_ROPE_INPUTS
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import (
     OVFlux2KleinPipeline,
@@ -144,6 +145,7 @@ class ExportModelTest(unittest.TestCase):
         "qwen3_5_mtp": OVModelForVisualCausalLM,
         "qwen3_5_moe": OVModelForVisualCausalLM,
         "qwen3_5_moe_mtp": OVModelForVisualCausalLM,
+        "qwen3_5_moe_mtp_legacy_weights": OVModelForVisualCausalLM,
         "gemma4_unified": OVModelForVisualCausalLM,
         "gemma3n": OVModelForVisualCausalLM,
         "mistral3": OVModelForVisualCausalLM,
@@ -154,6 +156,7 @@ class ExportModelTest(unittest.TestCase):
         "muse_glimmer": OVModelForVisualCausalLM,
         "deepseek_ocr2": OVModelForVisualCausalLM,
         "minicpmv4_7": OVModelForVisualCausalLM,
+        "minicpm_ocr": OVModelForVisualCausalLM,
     }
 
     if is_diffusers_version(">=", "0.41.0.dev0"):
@@ -280,7 +283,7 @@ class ExportModelTest(unittest.TestCase):
 
                 # Models with a Multi-Token Prediction head export it as a separate submodel;
                 # make sure the openvino_mtp_model.xml file is actually produced.
-                if model_type in ("qwen3_5_mtp", "qwen3_5_moe_mtp"):
+                if model_type in ("qwen3_5_mtp", "qwen3_5_moe_mtp", "qwen3_5_moe_mtp_legacy_weights"):
                     self.assertTrue(
                         (Path(tmpdirname) / "openvino_mtp_model.xml").is_file(),
                         "openvino_mtp_model.xml was not created during export",
@@ -514,6 +517,40 @@ class LTX2ExportContractTest(unittest.TestCase):
             ov.Type.f32 if is_ltx2_3 else ov.Type.i64,
         )
 
+        # Both versions take RoPE as host-computed (cos, sin) rather than coordinates: fp16 cannot
+        # resolve the rotary angles, so no Sin/Cos may be left on the RoPE path in the graph.
+        rope_inputs = {name for names in LTX2_ROPE_INPUTS.values() for name in names}
+        self.assertTrue(rope_inputs.issubset(transformer_inputs))
+        # The positions enter only through cos/sin, so neither the coordinates nor the frame/size
+        # arguments they are built from are graph inputs.
+        unused_inputs = {"video_coords", "audio_coords", "num_frames", "height", "width", "fps", "audio_num_frames"}
+        self.assertFalse(unused_inputs & set(transformer_inputs))
+        for op in transformer.get_ops():
+            if op.get_type_name() not in ("Sin", "Cos"):
+                continue
+            sources, stack, seen = set(), [op], set()
+            while stack:
+                node = stack.pop()
+                if node.get_friendly_name() in seen:
+                    continue
+                seen.add(node.get_friendly_name())
+                if node.get_type_name() == "Parameter":
+                    sources.add(node.get_friendly_name())
+                stack.extend(inp.get_source_output().get_node() for inp in node.inputs())
+            self.assertTrue(sources.issubset({"timestep", "audio_timestep"}), f"{op.get_friendly_name()}: {sources}")
+
+        # The connectors take their RoPE the same way, one (cos, sin) pair per connector, so their
+        # graph has no Sin/Cos at all.
+        connectors = ov.Core().read_model(pipeline.connectors.model_save_dir / "openvino_model.xml")
+        connectors_inputs = {name for inp in connectors.inputs for name in inp.names}
+        connectors_rope_inputs = {
+            f"{connector}_rotary_{part}"
+            for connector in ("video_connector", "audio_connector")
+            for part in ("cos", "sin")
+        }
+        self.assertTrue(connectors_rope_inputs.issubset(connectors_inputs))
+        self.assertFalse(any(op.get_type_name() in ("Sin", "Cos") for op in connectors.get_ops()))
+
     def test_text_encoder_packs_hidden_states(self):
         # One contract for both LTX-2 versions: nothing in the text encoder config tells them apart,
         # and the per-layer layout the config used to offer loses the text tower's final norm on
@@ -556,7 +593,7 @@ class LTXVideoExportContractTest(unittest.TestCase):
             decoder_config = LTXVaeDecoderOpenVINOConfig(config)
             decoder_inputs = decoder_config.generate_dummy_inputs(framework="pt")
             self.assertEqual(tuple(encoder_inputs["sample"].shape[2:]), (encoder_frames, 64, 64))
-            self.assertEqual(tuple(decoder_inputs["latent_sample"].shape[2:]), (2, 64, 64))
+            self.assertEqual(tuple(decoder_inputs["latent_sample"].shape[2:]), (2, 8, 8))
             self.assertEqual("timestep" in decoder_inputs, config.timestep_conditioning)
             if config.timestep_conditioning:
                 self.assertEqual(tuple(decoder_inputs["timestep"].shape), (2,))

@@ -213,6 +213,24 @@ class OVASRTest(unittest.TestCase):
         del ov_model
         gc.collect()
 
+
+    @pytest.mark.skipif(
+    is_transformers_version("<", "4.57") or is_transformers_version(">=", "4.58"),
+        reason="Currently, we support FunASR only for transformers==4.57 since it is a trust-remote-code model.",
+    )
+    def test_fun_asr_activations_scale_factor(self):
+        # The Fun-ASR-Nano decoder overflows fp16 on GPU without activation scaling, and the GPU plugin
+        # ignores the default 8.0 for LLM-like models, so the decoder must carry a non-default value.
+        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
+            MODEL_NAMES["fun_asr"], export=True, trust_remote_code=True, compile=False
+        )
+        decoder_rt_info = ov_model.decoder.model.get_rt_info()
+        self.assertEqual(decoder_rt_info["runtime_options"]["ACTIVATIONS_SCALE_FACTOR"].value, "4.0")
+        self.assertFalse(ov_model.encoder.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"]))
+
+        del ov_model
+        gc.collect()
+
     def _get_pt_reference(self, model_arch):
         if model_arch == "fun_asr":
             return self._get_pt_reference_funasr()

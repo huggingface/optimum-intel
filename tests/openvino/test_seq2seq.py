@@ -15,6 +15,7 @@
 import copy
 import gc
 import os
+import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -33,8 +34,8 @@ from transformers import (
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
     AutoModelForSeq2SeqLM,
+    AutoModelForSequenceClassification,
     AutoModelForSpeechSeq2Seq,
-    AutoModelForTextToSpectrogram,
     AutoProcessor,
     AutoTokenizer,
     GenerationConfig,
@@ -54,7 +55,9 @@ from utils_tests import (
     TEST_IMAGE_URL,
     TEST_NAME_TO_MODEL_TYPE,
     Timer,
+    get_num_quantized_nodes,
     get_supported_model_for_library,
+    is_model_type_transformers_compatible,
 )
 
 from optimum.exporters.openvino.stateful import model_has_state
@@ -65,26 +68,20 @@ from optimum.intel import (
     OVModelForMultimodalLM,
     OVModelForSeq2SeqLM,
     OVModelForSpeechSeq2Seq,
-    OVModelForTextToSpeechSeq2Seq,
     OVModelForVisualCausalLM,
+    OVModelForVisualSequenceClassification,
 )
 from optimum.intel.openvino.modeling_seq2seq import OVDecoder, OVEncoder
-from optimum.intel.openvino.modeling_text2speech import (
-    OVTextToSpeechDecoder,
-    OVTextToSpeechEncoder,
-    OVTextToSpeechPostNet,
-    OVTextToSpeechVocoder,
-)
 from optimum.intel.openvino.modeling_visual_language import (
     MODEL_PARTS_CLS_MAPPING,
     MODEL_TYPE_TO_CLS_MAPPING,
+    SEQUENCE_CLASSIFICATION_MODEL_TYPE_TO_CLS_MAPPING,
     _OVQwen3OmniMoeForCausalLM,
 )
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import (
     is_compressed_tensors_available,
     is_openvino_version,
-    is_qwen_tts_available,
     is_transformers_version,
 )
 
@@ -605,12 +602,14 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "qwen3_5_mtp",
         "qwen3_5_moe",
         "qwen3_5_moe_mtp",
+        "qwen3_5_moe_mtp_legacy_weights",
         "qwen3_omni_moe",
         "mistral3",
         "ministral3",
         "muse_glimmer",
         "deepseek_ocr2",
         "minicpmv4_7",
+        "minicpm_ocr",
     ]
     if is_openvino_version(">=", "2026.3") and is_compressed_tensors_available():
         SUPPORTED_ARCHITECTURES.append("qwen3_5_compressed_tensors")
@@ -626,6 +625,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "gemma4_unified",
         "gemma4_unified-it",
         "minicpmv4_7",
+        "minicpm_ocr",
     ]
     SUPPORT_AUDIO = ["gemma4", "gemma4_unified-it", "qwen3_omni_moe"]
     # "llama" is registered for image-text-to-text
@@ -679,10 +679,12 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "qwen3_5_mtp",
             "qwen3_5_moe",
             "qwen3_5_moe_mtp",
+            "qwen3_5_moe_mtp_legacy_weights",
             "gemma4_unified",
             "gemma4_unified-it",
             "muse_glimmer",
             "minicpmv4_7",
+            "minicpm_ocr",
         ]:
             from transformers import AutoModelForImageTextToText
 
@@ -1260,6 +1262,112 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             self.assertIsInstance(ov_restored_model, type(ov_model))
 
 
+class OVModelForVisualSequenceClassificationIntegrationTest(unittest.TestCase):
+    TASK = "text-classification"
+    # the version range is the one of the model type's text-classification export config
+    SUPPORTED_ARCHITECTURES = [
+        arch
+        for arch in ["qwen3_5_seq_cls"]
+        if is_model_type_transformers_compatible(TEST_NAME_TO_MODEL_TYPE.get(arch, arch), task="text-classification")
+    ]
+    # int8 weight nodes of the tiny model parts after `--weight-format int8`
+    EXPECTED_INT8_NODES = {
+        "qwen3_5_seq_cls": {
+            "openvino_language_model": 70,
+            "openvino_text_embeddings_model": 1,
+            "openvino_vision_embeddings_model": 1,
+            "openvino_vision_embeddings_merger_model": 10,
+            "openvino_vision_embeddings_pos_model": 1,
+        }
+    }
+
+    @staticmethod
+    def _get_inputs(processor, padding_side="left"):
+        image = Image.open(requests.get(TEST_IMAGE_URL, stream=True).raw).resize((320, 240))
+        conversations = {
+            "image": [
+                [{"role": "user", "content": [{"type": "image", "image": image}, {"type": "text", "text": "A cat?"}]}]
+            ],
+            "text": [[{"role": "user", "content": [{"type": "text", "text": "Is this a question?"}]}]],
+            # rows of different lengths: the last non-pad token is found on either padding side
+            "batch": [
+                [{"role": "user", "content": [{"type": "text", "text": "Short."}]}],
+                [
+                    {
+                        "role": "user",
+                        "content": [{"type": "image", "image": image}, {"type": "text", "text": "A longer prompt."}],
+                    }
+                ],
+            ],
+        }
+        return {
+            name: processor.apply_chat_template(
+                conversation,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt",
+                padding=True,
+                padding_side=padding_side,
+            )
+            for name, conversation in conversations.items()
+        }
+
+    def _compare(self, ov_model, transformers_model, processor):
+        for padding_side in ("left", "right"):
+            for name, inputs in self._get_inputs(processor, padding_side).items():
+                with torch.no_grad():
+                    expected = transformers_model(**inputs).logits
+                logits = ov_model(**inputs).logits
+                self.assertEqual(logits.shape, (inputs["input_ids"].shape[0], transformers_model.config.num_labels))
+                self.assertTrue(
+                    torch.allclose(logits, expected, atol=1e-4),
+                    f"{name}, {padding_side} padding: max abs diff {(logits - expected).abs().max()}",
+                )
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
+    def test_compare_to_transformers(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        processor = AutoProcessor.from_pretrained(model_id)
+        transformers_model = AutoModelForSequenceClassification.from_pretrained(model_id).eval()
+        ov_model = OVModelForVisualSequenceClassification.from_pretrained(
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+        self.assertIsInstance(ov_model, SEQUENCE_CLASSIFICATION_MODEL_TYPE_TO_CLS_MAPPING[ov_model.config.model_type])
+        self.assertEqual(ov_model.config.id2label, transformers_model.config.id2label)
+        self.assertEqual(ov_model.config.architectures, [type(transformers_model).__name__])
+        self._compare(ov_model, transformers_model, processor)
+
+        with TemporaryDirectory() as save_dir:
+            ov_model.save_pretrained(save_dir)
+            # a classifier does not draft tokens: the MTP head of the checkpoint is not exported
+            self.assertFalse((Path(save_dir) / "openvino_mtp_model.xml").exists())
+            restored_model = OVModelForVisualSequenceClassification.from_pretrained(
+                save_dir, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+            )
+            self.assertIsInstance(restored_model, type(ov_model))
+            self._compare(restored_model, transformers_model, processor)
+        del ov_model, restored_model
+        gc.collect()
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
+    def test_exporters_cli_int8(self, model_arch):
+        with TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_arch]} --task {self.TASK} "
+                f"--weight-format int8 {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            for part, expected in self.EXPECTED_INT8_NODES[model_arch].items():
+                model = openvino.Core().read_model(Path(tmpdir) / f"{part}.xml")
+                self.assertEqual(get_num_quantized_nodes(model)[1]["int8"], expected, part)
+            ov_model = OVModelForVisualSequenceClassification.from_pretrained(tmpdir, device=OPENVINO_DEVICE)
+            inputs = self._get_inputs(AutoProcessor.from_pretrained(tmpdir))["batch"]
+            self.assertEqual(ov_model(**inputs).logits.shape, (2, ov_model.config.num_labels))
+            del ov_model
+            gc.collect()
+
+
 @pytest.mark.skipif(is_transformers_version("<", "5.0"), reason="OVModelForMultimodalLM requires transformers >= 5.0")
 class OVModelForMultimodalLMIntegrationTest(unittest.TestCase):
     def _generate_random_audio_data(self):
@@ -1375,229 +1483,6 @@ class OVModelForMultimodalLMIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES["llava"]
         with self.assertRaises(ValueError):
             OVModelForMultimodalLM.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
-
-
-class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
-    SUPPORTED_ARCHITECTURES = ("speecht5",)
-    OVMODEL_CLASS = OVModelForTextToSpeechSeq2Seq
-    AUTOMODEL_CLASS = AutoModelForTextToSpectrogram
-
-    def _generate_text(self):
-        return [
-            "This text is converted to speech using OpenVINO backend",
-            "The sun was shining brightly as people walked through the quiet park.",
-        ]
-
-    def _generate_speaker_embedding(self):
-        np.random.seed(42)
-        speaker_embedding = np.random.randn(2, 512).astype(np.float32)
-        return torch.tensor(speaker_embedding)
-
-    def _get_processor(self, model_id, model_arch):
-        if model_arch == "speecht5":
-            return AutoProcessor.from_pretrained(model_id)
-        else:
-            raise Exception("{} unknown processor for text-to-speech".format(model_arch))
-
-    def _get_vocoder(self, vocoder_id, model_arch):
-        if model_arch == "speecht5":
-            from transformers import SpeechT5HifiGan
-
-            vocoder = SpeechT5HifiGan.from_pretrained(vocoder_id)
-            return vocoder
-        else:
-            raise Exception("{} unknown model for text-to-speech".format(model_arch))
-
-    def _check_openvino_model_attributes(self, openvino_model, use_cache: bool = True):
-        self.assertIsInstance(openvino_model, self.OVMODEL_CLASS)
-        self.assertIsInstance(openvino_model.config, PretrainedConfig)
-        self.assertIsInstance(openvino_model.generation_config, GenerationConfig)
-
-        self.assertIsInstance(openvino_model.encoder, OVTextToSpeechEncoder)
-        self.assertIsInstance(openvino_model.decoder, OVTextToSpeechDecoder)
-        self.assertIsInstance(openvino_model.postnet, OVTextToSpeechPostNet)
-        self.assertIsInstance(openvino_model.vocoder, OVTextToSpeechVocoder)
-        self.assertIsInstance(openvino_model.encoder.model, openvino.Model)
-        self.assertIsInstance(openvino_model.decoder.model, openvino.Model)
-        self.assertIsInstance(openvino_model.postnet.model, openvino.Model)
-        self.assertIsInstance(openvino_model.vocoder.model, openvino.Model)
-
-        self.assertEqual(openvino_model.use_cache, use_cache)
-        self.assertEqual(model_has_state(openvino_model.decoder.model), use_cache)
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
-    def test_compare_to_transformers(self, model_arch):
-        set_seed(SEED)
-        text_data = self._generate_text()
-        speaker_embeddings = self._generate_speaker_embedding()
-        model_id = MODEL_NAMES[model_arch]
-
-        # since Auto class for text-to-audio is not implemented in optimum
-        # generate model classes for reference generation
-        vocoder_id = "fxmarty/speecht5-hifigan-tiny"
-        processor = self._get_processor(model_id, model_arch)
-        vocoder = self._get_vocoder(vocoder_id, model_arch)
-        model = self.AUTOMODEL_CLASS.from_pretrained(model_id)
-        inputs = processor(text=text_data, padding=True, return_tensors="pt")
-        ref_speech = model.generate_speech(inputs["input_ids"], speaker_embeddings, vocoder=vocoder)
-        ref_speech = ref_speech.unsqueeze(0) if ref_speech.dim() == 1 else ref_speech
-        ov_model = self.OVMODEL_CLASS.from_pretrained(model_id, vocoder=vocoder_id, device=OPENVINO_DEVICE)
-        ov_speech = ov_model.generate(input_ids=inputs["input_ids"], speaker_embeddings=speaker_embeddings)
-        self._check_openvino_model_attributes(ov_model, use_cache=True)
-        self.assertTrue(torch.allclose(ov_speech, ref_speech, atol=1e-3))
-
-        del vocoder
-        del model
-        del processor
-        gc.collect()
-
-    @unittest.skipUnless(is_qwen_tts_available(), "qwen_tts package is not installed")
-    def test_compare_to_qwen3_tts(self):
-        """Export Qwen3-TTS and check every component runs from OpenVINO and matches PyTorch.
-
-        The pipeline is exported component-wise and the exported directory carries no PyTorch
-        weights at all, so this also covers the weightless runtime path: if any component
-        failed to load from its IR, generation would run on empty tensors rather than fall
-        back silently.
-        """
-        from qwen_tts import Qwen3TTSModel
-
-        from optimum.exporters.openvino import export_from_model
-        from optimum.intel.openvino.modeling_text2speech import _OVModelForQwen3TTS
-        from optimum.intel.utils.modeling_utils import _Qwen3TTSForTextToSpeech
-
-        set_seed(SEED)
-        model_id = MODEL_NAMES["qwen3_tts"]
-
-        ref_pipeline = Qwen3TTSModel.from_pretrained(model_id, dtype=torch.float32)
-        ref_pipeline.model.eval()
-
-        sampling_rate = ref_pipeline.model.speaker_encoder_sample_rate
-        ref_audio = (np.random.default_rng(SEED).standard_normal(3 * sampling_rate) * 0.05).astype(np.float32)
-        ref_text = "reference transcript"
-        text = "a short sentence"
-
-        ref_model = _Qwen3TTSForTextToSpeech.from_pretrained(model_id)
-
-        with TemporaryDirectory() as tmpdir:
-            # The checkpoint is bfloat16 and the loader keeps that precision, so tracing needs the
-            # 16-bit patch that ``main_export`` would otherwise derive from the loaded model.
-            export_from_model(
-                model=ref_model, output=tmpdir, task="text-to-audio", stateful=True, patch_16bit_model=True
-            )
-
-            # Every neural component must be exported; the runtime has no weights to fall back on.
-            for name in (
-                "talker_model",
-                "code_predictor_model",
-                "text_embeddings",
-                "talker_embeddings",
-                "code_predictor_embeddings",
-                "speaker_encoder",
-                "codec_encoder",
-                "codec_decoder",
-            ):
-                self.assertTrue(Path(tmpdir, f"openvino_{name}.xml").is_file(), f"missing IR for {name}")
-            self.assertFalse(list(Path(tmpdir).glob("*.safetensors")), "export should not ship PyTorch weights")
-            self.assertFalse(
-                list(Path(tmpdir, "speech_tokenizer").glob("*.safetensors")),
-                "export should not ship codec weights",
-            )
-
-            # f32, as the speaker encoder is compared to PyTorch: a bf16/f16 default inference precision (e.g. CPUs
-            # with AMX) moves its output by ~2e-3, past the tolerance below.
-            ov_model = self.OVMODEL_CLASS.from_pretrained(tmpdir, ov_config=F32_CONFIG, device=OPENVINO_DEVICE)
-            self.assertIsInstance(ov_model, _OVModelForQwen3TTS)
-            self.assertEqual(getattr(ov_model.config, "model_type", None), "qwen3_tts")
-            self.assertEqual(sum(p.numel() for p in ov_model.model.parameters()), 0)
-            # The stateful decoder stacks overflow f16 on GPU without the activations scale.
-            for name, component in ov_model.components.items():
-                has_scale = component.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"])
-                self.assertEqual(has_scale, name in ("talker_model", "code_predictor_model"), name)
-
-            inputs = ov_model.preprocess_input(
-                text=text, language="English", ref_audio=(ref_audio, sampling_rate), ref_text=ref_text
-            )
-            set_seed(SEED)
-            ov_waveform = ov_model.generate(**inputs, max_new_tokens=16)
-
-            # The speaker encoder and the codec are deterministic given the same reference audio,
-            # so they are compared directly; the talker's sampled codes are not.
-            with torch.no_grad():
-                ref_speaker_embedding = ref_pipeline.model.extract_speaker_embedding(ref_audio, sr=sampling_rate)
-            ov_speaker_embedding = inputs["voice_clone_prompt"][0].ref_spk_embedding
-            self.assertEqual(ov_speaker_embedding.shape, ref_speaker_embedding.shape)
-            self.assertTrue(
-                torch.allclose(ov_speaker_embedding.float(), ref_speaker_embedding.float(), atol=1e-3),
-                "speaker encoder output diverged from PyTorch",
-            )
-
-            self.assertGreater(ov_waveform.numel(), 0)
-            self.assertTrue(torch.isfinite(ov_waveform).all(), "generated waveform contains NaN/inf")
-            self.assertGreater(float(ov_waveform.abs().max()), 1e-4, "generated waveform is silent")
-
-        del ref_model
-        del ref_pipeline
-        del ov_model
-        gc.collect()
-
-    def test_compare_to_kokoro(self):
-        from optimum.exporters.openvino import export_from_model
-        from optimum.exporters.tasks import TasksManager
-        from optimum.intel.openvino.modeling_text2speech import _OVModelForKokoroTextToSpeech
-
-        set_seed(SEED)
-        model_id = MODEL_NAMES["kokoro"]
-
-        ref_model = TasksManager.get_model_from_task(
-            task="text-to-audio",
-            model_name_or_path=model_id,
-            framework="pt",
-            library_name="kokoro",
-        )
-        ref_model.eval()
-
-        input_ids = torch.tensor([[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0]], dtype=torch.long)
-        ref_s = torch.randn(1, 256, dtype=torch.float32)
-
-        with torch.no_grad():
-            ref_waveform, ref_phonemes = ref_model.forward_with_tokens(input_ids, ref_s, 1.0)
-
-        with TemporaryDirectory() as tmpdir:
-            export_from_model(model=ref_model, output=tmpdir, task="text-to-audio", stateful=True)
-
-            # Verify that local voice .pt files were converted to .bin (regression for local export bug)
-            source_voices = sorted(Path(model_id).glob("voices/*.pt"))
-            self.assertGreater(len(source_voices), 0, "Test fixture has no source voice .pt files")
-            exported_voices = sorted(Path(tmpdir).glob("voices/*.bin"))
-            self.assertEqual(
-                len(exported_voices),
-                len(source_voices),
-                f"Expected {len(source_voices)} voice .bin files, found {len(exported_voices)}",
-            )
-            for bin_path in exported_voices:
-                self.assertGreater(bin_path.stat().st_size, 0, f"{bin_path.name} is empty")
-
-            ov_model = self.OVMODEL_CLASS.from_pretrained(tmpdir, device=OPENVINO_DEVICE)
-
-            self.assertIsInstance(ov_model, _OVModelForKokoroTextToSpeech)
-            self.assertIsInstance(ov_model.config, PretrainedConfig)
-            self.assertEqual(getattr(ov_model.config, "model_type", None), "kokoro")
-            self.assertIsInstance(ov_model.model, openvino.Model)
-
-            ov_outputs = ov_model.forward(input_ids=input_ids, ref_s=ref_s, speed=1.0)
-            self.assertTrue(hasattr(ov_outputs, "waveform"))
-            self.assertTrue(hasattr(ov_outputs, "phonemes"))
-            self.assertEqual(ov_outputs.waveform.shape, ref_waveform.shape)
-            self.assertEqual(ov_outputs.phonemes.shape, ref_phonemes.shape)
-            self.assertTrue(torch.equal(ov_outputs.phonemes, ref_phonemes))
-
-            ov_generated = ov_model.generate(input_ids=input_ids, ref_s=ref_s, speed=1.0)
-            self.assertEqual(ov_generated.shape, ref_waveform.shape)
-
-        del ref_model
-        del ov_model
-        gc.collect()
 
 
 class OVModelForPix2StructIntegrationTest(OVSeq2SeqTestMixin):
