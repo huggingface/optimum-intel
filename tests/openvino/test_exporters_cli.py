@@ -168,6 +168,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-to-image", "z-image"),
         ("image-text-to-text", "muse_glimmer"),
         ("image-text-to-text", "minicpmv4_7"),
+        ("image-text-to-text", "lfm2_vl"),
         ("image-text-to-text", "minicpm_ocr"),
     ]
     # filter architectures depending on min/max transformers supported versions
@@ -240,6 +241,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "qwen3_vl_embedding": 2,
         "muse_glimmer": 2,
         "minicpmv4_7": 2,
+        "lfm2_vl": 2,
         "minicpm_ocr": 2,
     }
 

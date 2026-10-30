@@ -6407,6 +6407,124 @@ class _OVSmolVLForCasualLM(_OVIdefics3ForCausalLM):
         return inputs_embeds, attention_mask, position_ids
 
 
+class _OVLfm2VlForCausalLM(_OVIdefics3ForCausalLM):
+    additional_parts = ["vision_embeddings_pos", "multi_modal_projector"]
+
+    def get_vision_embeddings(self, pixel_values, input_ids=None, **kwargs):
+        # Skip vision during decode steps (single new token, cache already populated).
+        if input_ids is not None and input_ids.shape[1] == 1 and kwargs.get("past_key_values") is not None:
+            return None
+
+        spatial_shapes = kwargs.get("spatial_shapes")
+        pixel_attention_mask = kwargs.get("pixel_attention_mask")
+
+        vision_config = self.config.vision_config
+        num_patches = vision_config.num_patches
+        position_embedding_size = int(num_patches**0.5)
+        embed_dim = vision_config.hidden_size
+
+        # Query the static position-embedding table from its dedicated submodel and lay it out as a
+        # (1, embed_dim, grid, grid) image so it can be resized per image (see below).
+        idx = torch.arange(num_patches).unsqueeze(0)
+        position_weight = self.vision_embeddings_pos(idx)
+        position_weight = (
+            torch.from_numpy(position_weight) if isinstance(position_weight, np.ndarray) else position_weight
+        )
+        position_weight = position_weight.reshape(position_embedding_size, position_embedding_size, embed_dim)
+        position_grid = position_weight.permute(2, 0, 1).unsqueeze(0).to(torch.float32)
+
+        img_feature_lengths = pixel_attention_mask.sum(dim=1)
+        image_features = []
+        for img_idx in range(pixel_values.shape[0]):
+            height, width = int(spatial_shapes[img_idx][0]), int(spatial_shapes[img_idx][1])
+            valid_length = int(img_feature_lengths[img_idx])
+            patches = pixel_values[img_idx : img_idx + 1, :valid_length]
+
+            # Resize the positional embeddings to the image patch grid. The transformers reference does
+            # this inside the vision tower via a data-dependent `F.interpolate`, which is not traceable,
+            # so it is reproduced here and passed into the exported vision submodel as `pos_embeds`.
+            resized = torch.nn.functional.interpolate(
+                position_grid, size=(height, width), mode="bilinear", align_corners=False, antialias=True
+            )
+            resized = resized.reshape(embed_dim, height * width).transpose(0, 1).unsqueeze(0)
+
+            last_hidden_state = self.vision_embeddings(pixel_values=patches, pos_embeds=resized).last_hidden_state
+            last_hidden_state = (
+                torch.from_numpy(last_hidden_state) if isinstance(last_hidden_state, np.ndarray) else last_hidden_state
+            )
+            feature = last_hidden_state.reshape(1, height, width, -1)
+            projected = self.multi_modal_projector(feature)
+            projected = torch.from_numpy(projected) if isinstance(projected, np.ndarray) else projected
+            image_features.append(projected.reshape(-1, projected.shape[-1]))
+
+        # (1, total_image_tokens, text_hidden_size); the leading axis keeps the 3D layout that the
+        # inherited `_OVIdefics3ForCausalLM.merge_vision_text_embeddings` expects.
+        return torch.cat(image_features, dim=0).unsqueeze(0)
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        inputs_embeds=None,
+        pixel_values=None,
+        attention_mask=None,
+        **kwargs,
+    ):
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+        # Images are only consumed on the first (prefill) step; afterwards the merged embeddings live in
+        # the KV/conv cache, so drop the vision inputs to avoid recomputing them.
+        if past_key_values is not None:
+            model_inputs["pixel_values"] = None
+            model_inputs["spatial_shapes"] = None
+            model_inputs["pixel_attention_mask"] = None
+        else:
+            model_inputs["spatial_shapes"] = kwargs.get("spatial_shapes")
+        return model_inputs
+
+    def _validate_model_kwargs(self, model_kwargs):
+        # `spatial_shapes` is consumed through **kwargs by `get_vision_embeddings` rather than being a
+        # named `forward` argument, so exclude it from the unused-kwarg validation.
+        model_kwargs.pop("spatial_shapes", None)
+        super()._validate_model_kwargs(model_kwargs)
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if video is not None:
+            raise ValueError("video input is not supported")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+
+        content = [{"type": "text", "text": text}]
+        if image is not None:
+            content.insert(0, {"type": "image", "image": image})
+        conversation = [{"role": "user", "content": content}]
+        inputs = processor.apply_chat_template(
+            conversation,
+            add_generation_prompt=True,
+            tokenize=True,
+            return_dict=True,
+            return_tensors="pt",
+        )
+        return inputs
+
+
 class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
     additional_parts = [
         "vision_projection",
@@ -8489,6 +8607,7 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "gemma4_unified": _OVGemma4UnifiedForCausalLM,
     "idefics3": _OVIdefics3ForCausalLM,
     "smolvlm": _OVSmolVLForCasualLM,
+    "lfm2_vl": _OVLfm2VlForCausalLM,
     "phi4mm": _OVPhi4MMForCausalLM,
     "phi4_multimodal": _OVPhi4MMForCausalLM,
     "llama4": _OVLlama4ForCausalLM,

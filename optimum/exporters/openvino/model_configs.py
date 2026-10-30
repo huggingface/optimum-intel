@@ -52,6 +52,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyGemma4UnifiedVisionInputGenerator,
     DummyGemma4VisionInputGenerator,
     DummyKokoroInputGenerator,
+    DummyLfm2VlVisionEmbedInputGenerator,
     DummyLLavaMultiModalProjectorInputGenerator,
     DummyMiniCPMV4_7LMInputGenerator,
     DummyMiniCPMV4_7VisionInputGenerator,
@@ -164,6 +165,7 @@ from optimum.exporters.openvino.model_patcher import (
     KokoroModelPatcher,
     Lfm2ModelPatcher,
     Lfm2MoeModelPatcher,
+    Lfm2VlVisionEmbeddingsModelPatcher,
     Llama4ImageEmbeddingsModelPatcher,
     Llama4TextModelPatcher,
     LlavaImageEmbeddingModelPatcher,
@@ -6234,6 +6236,140 @@ class SmolVLMOpenVINOConfig(Idefics3OpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "4.57.6"
 
 
+class Lfm2VlConfigBehavior(str, enum.Enum):
+    LANGUAGE = "language"
+    TEXT_EMBEDDINGS = "text_embeddings"
+    VISION_EMBEDDINGS = "vision_embeddings"
+    VISION_EMBEDDINGS_POS = "vision_embeddings_pos"
+    MULTI_MODAL_PROJECTOR = "multi_modal_projector"
+
+
+@register_in_tasks_manager("lfm2_vl", *["image-text-to-text"], library_name="transformers")
+class Lfm2VlOpenVINOConfig(BaseVLMOpenVINOConfig):
+    # LFM2-VL (Lfm2 hybrid conv/attention text backbone + Siglip2 naflex vision tower + downsample
+    # projector) was added to transformers in 5.8.0.
+    MIN_TRANSFORMERS_VERSION = "5.8.0"
+    SUPPORTED_BEHAVIORS = [behavior.value for behavior in Lfm2VlConfigBehavior]
+    NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyLfm2VlVisionEmbedInputGenerator,)
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: Lfm2VlConfigBehavior = Lfm2VlConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            behavior=behavior,
+            preprocessors=preprocessors,
+        )
+        self._orig_config = config
+        if self._behavior in (
+            Lfm2VlConfigBehavior.VISION_EMBEDDINGS,
+            Lfm2VlConfigBehavior.VISION_EMBEDDINGS_POS,
+            Lfm2VlConfigBehavior.MULTI_MODAL_PROJECTOR,
+        ) and hasattr(config, "vision_config"):
+            self._config = config.vision_config
+            self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == Lfm2VlConfigBehavior.VISION_EMBEDDINGS:
+            return {
+                "pixel_values": {0: "batch_size", 1: "num_patches"},
+                "pos_embeds": {0: "batch_size", 1: "num_patches"},
+            }
+        if self._behavior == Lfm2VlConfigBehavior.VISION_EMBEDDINGS_POS:
+            return {"input": {0: "batch_size", 1: "sequence_length"}}
+        if self._behavior == Lfm2VlConfigBehavior.MULTI_MODAL_PROJECTOR:
+            return {"image_features": {0: "batch_size", 1: "height", 2: "width"}}
+        return {}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == Lfm2VlConfigBehavior.VISION_EMBEDDINGS:
+            return {"last_hidden_state": {0: "batch_size", 1: "num_patches"}}
+        if self._behavior == Lfm2VlConfigBehavior.VISION_EMBEDDINGS_POS:
+            return {"last_hidden_state": {0: "batch_size", 1: "sequence_length"}}
+        if self._behavior == Lfm2VlConfigBehavior.MULTI_MODAL_PROJECTOR:
+            return {"last_hidden_state": {0: "batch_size", 1: "height", 2: "width"}}
+        return {}
+
+    def with_behavior(self, behavior: Union[str, Lfm2VlConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, Lfm2VlConfigBehavior):
+            behavior = Lfm2VlConfigBehavior(behavior)
+
+        if behavior == Lfm2VlConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config(
+                self._orig_config.text_config.model_type,
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+            )
+
+        if behavior == Lfm2VlConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                self._orig_config.text_config.model_type,
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=Lfm2ModelPatcher,
+                task=self.task,
+            )
+
+        return self.__class__(
+            self._orig_config,
+            task=self.task,
+            int_dtype=self.int_dtype,
+            float_dtype=self.float_dtype,
+            behavior=behavior,
+            preprocessors=self._preprocessors,
+        )
+
+    def get_model_for_behavior(self, model, behavior: Union[str, Lfm2VlConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, Lfm2VlConfigBehavior):
+            behavior = Lfm2VlConfigBehavior(behavior)
+
+        if behavior == Lfm2VlConfigBehavior.LANGUAGE:
+            return model
+
+        if behavior == Lfm2VlConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.get_input_embeddings()
+            text_embedding.config = model.model.language_model.config
+            return text_embedding
+
+        if behavior == Lfm2VlConfigBehavior.VISION_EMBEDDINGS:
+            return model.model.vision_tower
+
+        if behavior == Lfm2VlConfigBehavior.VISION_EMBEDDINGS_POS:
+            vision_emb_pos = model.model.vision_tower.embeddings.position_embedding
+            vision_emb_pos.config = model.config.vision_config
+            return vision_emb_pos
+
+        if behavior == Lfm2VlConfigBehavior.MULTI_MODAL_PROJECTOR:
+            projector = model.model.multi_modal_projector
+            projector.config = model.config.vision_config
+            return projector
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior == Lfm2VlConfigBehavior.VISION_EMBEDDINGS:
+            return Lfm2VlVisionEmbeddingsModelPatcher(self, model, model_kwargs)
+        if self._behavior == Lfm2VlConfigBehavior.VISION_EMBEDDINGS_POS:
+            return InputEmbeddingPatcher(self, model, model_kwargs)
+        if self._behavior == Lfm2VlConfigBehavior.MULTI_MODAL_PROJECTOR:
+            return ModelPatcher(self, model, model_kwargs=model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
+
+
 @register_in_tasks_manager(
     "blenderbot",
     *[
@@ -6676,7 +6812,7 @@ class Zamba2OpenVINOConfig(MambaOpenVINOConfig):
     library_name="transformers",
 )
 class LFM2OpenVINOConfig(MambaOpenVINOConfig):
-    MAX_TRANSFORMERS_VERSION = "5.4.0"
+    MAX_TRANSFORMERS_VERSION = "5.10.99"
     _MODEL_PATCHER = Lfm2ModelPatcher
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Lfm2DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = Lfm2DummyPastKeyValuesGenerator
