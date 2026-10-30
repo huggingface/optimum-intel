@@ -411,14 +411,21 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             try:
                 model = core.read_model(xml_path, bin_path)
             except RuntimeError as e:
-                sizes = ", ".join(
-                    f"{p.name} ({p.stat().st_size} bytes)" if p.exists() else f"{p.name} (missing)"
-                    for p in (xml_path, bin_path)
-                )
-                free = shutil.disk_usage(xml_path.parent).free
+                # Diagnostics only: an OSError here must not hide the OpenVINO error.
+                try:
+                    sizes = ", ".join(
+                        f"{p.name} ({p.stat().st_size} bytes)" if p.exists() else f"{p.name} (missing)"
+                        for p in (xml_path, bin_path)
+                    )
+                except OSError:
+                    sizes = "file sizes unavailable"
+                try:
+                    free = f"{shutil.disk_usage(xml_path.parent).free} bytes free on this disk"
+                except OSError:
+                    free = "free space unavailable"
                 raise RuntimeError(
                     f"Unable to read the OpenVINO model {xml_path}. The IR files may be truncated or corrupt, "
-                    f"for example if the export ran out of disk space: {sizes}, {free} bytes free on this disk."
+                    f"for example if the export ran out of disk space: {sizes}, {free}."
                 ) from e
         if file_name.suffix == ".onnx":
             model = fix_op_names_duplicates(model)  # should be called during model conversion to IR
