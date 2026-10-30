@@ -346,6 +346,84 @@ def register_ov_batched_mm(patcher):
     patcher._model.set_experts_implementation("ov_batched_mm")
 
 
+# Patched version of grouped_mm_experts_forward from transformers.integrations.moe.
+# Original code: https://github.com/huggingface/transformers/blob/d557ef55b6df9fc28bc1df49309ffb56d5789992/src/transformers/integrations/moe.py#L380-L385
+# Replaces torch.histc / torch.bincount with scatter_add_ to count tokens per expert.
+# Neither torch.histc nor torch.bincount is supported by the OV TorchScript frontend;
+# scatter_add_ on a zeros buffer is semantically equivalent and traces cleanly.
+def ov_grouped_mm_experts_forward(
+    self: torch.nn.Module,
+    hidden_states: torch.Tensor,
+    top_k_index: torch.Tensor,
+    top_k_weights: torch.Tensor,
+) -> torch.Tensor:
+    import transformers.integrations.moe as _moe_module
+
+    device = hidden_states.device
+    num_top_k = top_k_index.size(-1)
+    num_tokens = hidden_states.size(0)
+    hidden_dim = hidden_states.size(-1)
+
+    token_idx = torch.arange(num_tokens, device=device).unsqueeze(1).expand(-1, num_top_k).reshape(-1)
+    sample_weights = top_k_weights.reshape(-1)
+    expert_ids = top_k_index.reshape(-1)
+
+    perm = torch.argsort(expert_ids)
+    inv_perm = torch.argsort(perm)
+    expert_ids_g = expert_ids[perm]
+    selected_hidden_states_g = hidden_states[token_idx[perm]]
+
+    # Experts without gating (e.g. NemotronH) only have `up_proj`/`up_proj_bias` and apply the
+    # activation alone. Older transformers versions do not set `has_gate`; their experts are gated.
+    has_gate = getattr(self, "has_gate", True)
+    gate_up_proj = self.gate_up_proj if has_gate else self.up_proj
+    gate_up_proj_bias = (self.gate_up_proj_bias if has_gate else self.up_proj_bias) if self.has_bias else None
+
+    if self.is_transposed:
+        selected_gate_up = gate_up_proj.contiguous()
+        selected_down = self.down_proj.contiguous()
+    else:
+        selected_gate_up = gate_up_proj.transpose(-2, -1).contiguous()
+        selected_down = self.down_proj.transpose(-2, -1).contiguous()
+    selected_gate_up_bias = gate_up_proj_bias[expert_ids_g] if self.has_bias else None
+    selected_down_bias = self.down_proj_bias[expert_ids_g] if self.has_bias else None
+
+    # PATCH: scatter_add_ instead of histc/bincount - OV TorchScript supports scatter_add_
+    tokens_per_expert = torch.zeros(self.num_experts, dtype=torch.int32, device=device)
+    ones = torch.ones(expert_ids_g.size(0), dtype=torch.int32, device=device)
+    tokens_per_expert.scatter_add_(0, expert_ids_g, ones)
+    offsets = torch.cumsum(tokens_per_expert, dim=0, dtype=torch.int32)
+
+    gate_up_out = _moe_module._grouped_linear(
+        selected_hidden_states_g, selected_gate_up, offsets, selected_gate_up_bias, is_transposed=True
+    )
+
+    # Gated experts apply the custom/default gating mechanism; non-gated experts apply the activation.
+    gated_out = self._apply_gate(gate_up_out) if has_gate else self.act_fn(gate_up_out)
+
+    out_per_sample_g = _moe_module._grouped_linear(
+        gated_out, selected_down, offsets, selected_down_bias, is_transposed=True
+    )
+
+    out_per_sample = out_per_sample_g[inv_perm] * sample_weights.unsqueeze(-1)
+    final_hidden_states = out_per_sample.view(num_tokens, num_top_k, hidden_dim).sum(dim=1)
+
+    return final_hidden_states.to(hidden_states.dtype)
+
+
+def register_ov_grouped_mm(patcher):
+    """Patch grouped_mm_experts_forward to use scatter_add_ instead of torch.histc/bincount.
+    The stock implementation uses torch.histc (or torch.bincount) to compute per-expert token
+    counts, which the OV TorchScript frontend does not support. This helper swaps in the
+    OV-compatible scatter_add_ variant while keeping the grouped_mm dispatch key so that
+    hardware-accelerated grouped GEMM paths remain available on supported devices.
+    """
+    from transformers.integrations.moe import ALL_EXPERTS_FUNCTIONS
+
+    ALL_EXPERTS_FUNCTIONS._global_mapping["ov_grouped_mm"] = ov_grouped_mm_experts_forward
+    patcher._model.set_experts_implementation("ov_grouped_mm")
+
+
 def patch_update_causal_mask(
     model, transformers_version, inner_model_name="model", patch_fn=None, patch_extrnal_model=False
 ):
@@ -891,6 +969,15 @@ class MistralModelPatcher(OVDecoderModelPatcher):
 
 
 SUPPORT_SDPA = is_torch_version(">", "2.1.0")
+SUPPORT_GROUPED_MM = is_torch_version(">=", "2.10.0")
+
+
+def grouped_mm_warning():
+    logger.warning(
+        "The current version of torch doesn't support grouped torch.nn.functional.grouped_mm,"
+        "which results in a non optimized MoE block in the exported model."
+        "Install torch >= 2.10.0 for the better model performance."
+    )
 
 
 # TODO: why
@@ -5411,6 +5498,60 @@ def _granite_moe_parallel_experts_forward(self, inputs, expert_size):
     return results
 
 
+# Original code: https://github.com/huggingface/transformers/blob/v5.5.0/src/transformers/models/granitemoe/modeling_granitemoe.py#L250
+def _granite_moe_experts_forward(self, layer_input):
+    bsz, length, emb_size = layer_input.size()
+    layer_input = layer_input.reshape(-1, emb_size)
+
+    _, batch_index, batch_gates, expert_size, _ = self.router(layer_input)
+
+    expert_size = torch.tensor(expert_size, dtype=torch.int32)
+
+    offs = torch.cumsum(
+        expert_size,
+        dim=0,
+        dtype=torch.int32,
+    )
+
+    expert_inputs = layer_input[batch_index]
+
+    hidden_states = torch._grouped_mm(
+        expert_inputs,
+        self.input_linear.weight.transpose(1, 2),
+        offs=offs,
+    )
+
+    x, gate = hidden_states.chunk(2, dim=-1)
+    hidden_states = self.activation(x) * gate
+
+    expert_outputs = torch._grouped_mm(
+        hidden_states,
+        self.output_linear.weight.transpose(1, 2),
+        offs=offs,
+    )
+    expert_outputs = expert_outputs * batch_gates[:, None]
+
+    layer_output = torch.zeros(
+        (bsz * length, self.input_size),
+        dtype=expert_outputs.dtype,
+        device=expert_outputs.device,
+    )
+
+    layer_output.index_add_(
+        0,
+        batch_index,
+        expert_outputs,
+    )
+
+    layer_output = layer_output.view(
+        bsz,
+        length,
+        self.input_size,
+    )
+
+    return layer_output
+
+
 class GraniteMoEModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
@@ -8500,6 +8641,12 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
                 _granite_moe_parallel_experts_forward, sparse_moe_layer.output_linear
             )
 
+            if SUPPORT_GROUPED_MM:
+                sparse_moe_layer._orig_forward = sparse_moe_layer.forward
+                sparse_moe_layer.forward = types.MethodType(_granite_moe_experts_forward, sparse_moe_layer)
+            else:
+                grouped_mm_warning()
+
         super().__enter__()
         setattr(self._model, self.orig_forward_name, self.patched_forward)
 
@@ -8534,13 +8681,18 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
                 mamba_layer.forward = make_mamba_forward(mamba_layer)
 
         if is_transformers_version(">=", "5.13"):
-            register_ov_batched_mm(self)
+            if SUPPORT_GROUPED_MM:
+                register_ov_grouped_mm(self)
+            else:
+                register_ov_batched_mm(self)
 
     def __exit__(self, exc_type, exc_value, traceback):
         def unpatch_sparse_moe(sparse_moe_layer):
             sparse_moe_layer.router.forward = sparse_moe_layer.router._orig_forward
             sparse_moe_layer.input_linear.forward = sparse_moe_layer.input_linear._orig_forward
             sparse_moe_layer.output_linear.forward = sparse_moe_layer.output_linear._orig_forward
+            if SUPPORT_GROUPED_MM:
+                sparse_moe_layer.forward = sparse_moe_layer._orig_forward
 
         super().__exit__(exc_type, exc_value, traceback)
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
