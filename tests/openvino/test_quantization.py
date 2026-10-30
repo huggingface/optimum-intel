@@ -423,7 +423,7 @@ class OVQuantizerTest(unittest.TestCase):
                 "lm_model": {"f8e4m3": 8, "int4": 14},
                 "text_embeddings_model": {"int8": 1},
                 "vision_embeddings_model": {"f8e4m3": 1},
-                "vision_embeddings_merger_model": {"f8e4m3": 5, "int4": 10},
+                "vision_embeddings_merger_model": {"f8e4m3": 2, "int4": 16},
             },
         ),
         (
@@ -1087,7 +1087,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 num_samples=1,
             ),
             {
-                "lm_model": {"int8": 50, "int4": 52}
+                "lm_model": {"int8": 52, "int4": 50}
                 if is_transformers_version(">=", "4.57")
                 else {"int8": 46, "int4": 56},
                 "text_embeddings_model": {"int8": 1},
@@ -1900,6 +1900,30 @@ class OVWeightCompressionTest(unittest.TestCase):
                 }
             ),
         )
+
+
+class CalibrationDatasetLoadingTest(unittest.TestCase):
+    def test_visual_dataset_uses_streaming_metadata(self):
+        for dataset_name, dataset_id, streaming in (
+            ("textvqa", "lmms-lab/textvqa", True),
+            ("gsm8k", "openai/gsm8k", False),
+        ):
+            for num_samples in (None, 3):
+                with self.subTest(dataset=dataset_name, num_samples=num_samples):
+                    builder = OVCalibrationDatasetBuilder(unittest.mock.Mock(spec=OVModelForVisualCausalLM))
+                    config = OVWeightQuantizationConfig(
+                        bits=4,
+                        dataset=dataset_name,
+                        processor="processor",
+                        num_samples=num_samples,
+                        scale_estimation=True,
+                    )
+                    with unittest.mock.patch.object(builder, "build_from_dataset_name") as build:
+                        builder.build_from_quantization_config(config)
+
+                    self.assertEqual(build.call_args.args[1], dataset_id)
+                    self.assertEqual(build.call_args.kwargs["streaming"], streaming)
+                    self.assertEqual(build.call_args.kwargs["num_samples"], num_samples)
 
 
 class OVPipelineQuantizationTest(unittest.TestCase):
