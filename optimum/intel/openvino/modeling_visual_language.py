@@ -1296,6 +1296,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             audio_embed_sizes=audio_embed_sizes,
             audio_attention_mask=audio_attention_mask,
             input_mode=input_mode,
+            temporal_ids=temporal_ids,
             **kwargs,
         )
 
@@ -1648,6 +1649,7 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
         video: Optional["VideoInput"] = None,
+        video_temporal_ids: Optional[List[List[int]]] = None,
         audio: Optional[np.ndarray] = None,
     ):
         if processor is None:
@@ -2572,6 +2574,7 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         if input_ids is not None and input_ids.shape[1] == 1:
             return None
         tgt_sizes = kwargs["tgt_sizes"]
+        temporal_ids = kwargs.get("temporal_ids")
         pixel_values_list = pixel_values
         vision_hidden_states = []
         all_pixel_values = []
@@ -2607,14 +2610,17 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
                     pixel_values=all_pixel_values, patch_attention_mask=patch_attn_mask, position_ids=position_ids
                 )[0]
             )
-            vision_embedding = self.resampling(vision_embedding, tgt_sizes)
+            temporal_groups = None
+            if temporal_ids is not None:
+                temporal_groups = [group for sample_groups in temporal_ids for group in sample_groups]
+            vision_embedding = self.resampling(vision_embedding, tgt_sizes, temporal_groups)
 
             start = 0
-            for pixel_value in pixel_values_list:
-                img_cnt = len(pixel_value)
-                if img_cnt > 0:
-                    vision_hidden_states.append(vision_embedding[start : start + img_cnt])
-                    start += img_cnt
+            for sample_idx, pixel_value in enumerate(pixel_values_list):
+                output_count = len(temporal_ids[sample_idx]) if temporal_ids is not None else len(pixel_value)
+                if output_count > 0:
+                    vision_hidden_states.append(vision_embedding[start : start + output_count])
+                    start += output_count
                 else:
                     vision_hidden_states.append([])
         else:  # no image
@@ -2623,7 +2629,7 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
                 vision_hidden_states.append(dummy_feature)
         return vision_hidden_states
 
-    def resampling(self, x, tgt_sizes):
+    def resampling(self, x, tgt_sizes, temporal_groups=None):
         bs = x.shape[0]
 
         patch_len = tgt_sizes[:, 0] * tgt_sizes[:, 1]
@@ -2642,6 +2648,50 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         pos_embed = torch.nn.utils.rnn.pad_sequence(pos_embed, batch_first=True, padding_value=0.0).permute(
             1, 0, 2
         )  # BLD => L * B * D
+        # A temporal group is represented by one fixed set of resampler query tokens, so concatenate
+        # its frame features and positions before inference instead of producing tokens for every frame.
+        if temporal_groups is not None:
+            group_features = []
+            group_positions = []
+            group_masks = []
+            frame_start = 0
+            for group in temporal_groups:
+                group_ids = [int(temporal_id) for temporal_id in group]
+                if not group_ids:
+                    raise ValueError("Temporal groups must not be empty")
+                frame_end = frame_start + len(group_ids)
+                if frame_end > bs:
+                    raise ValueError("Temporal groups contain more frames than were encoded")
+
+                group_pos_embed = pos_embed[:, frame_start:frame_end].permute(1, 0, 2)
+                temporal_positions = np.asarray([max(temporal_id, 0) for temporal_id in group_ids], dtype=np.float32)
+                temporal_embed = self._get_1d_sincos_pos_embed_from_grid_new(
+                    self.embed_dim, temporal_positions[:, None]
+                ).squeeze(1)
+                temporal_embed[np.asarray(group_ids) < 0] = 0
+                group_pos_embed += torch.from_numpy(temporal_embed).to(group_pos_embed.dtype).unsqueeze(1)
+
+                group_features.append(x[frame_start:frame_end].reshape(-1, x.shape[-1]))
+                group_positions.append(group_pos_embed.reshape(-1, self.embed_dim))
+                group_masks.append(key_padding_mask[frame_start:frame_end].reshape(-1))
+                frame_start = frame_end
+
+            if frame_start != bs:
+                raise ValueError(f"Temporal groups cover {frame_start} frames, but {bs} were encoded")
+
+            image_feature = torch.nn.utils.rnn.pad_sequence(group_features, batch_first=True, padding_value=0.0)
+            pos_embed = torch.nn.utils.rnn.pad_sequence(group_positions, batch_first=True, padding_value=0.0).permute(
+                1, 0, 2
+            )
+            key_padding_mask = torch.nn.utils.rnn.pad_sequence(group_masks, batch_first=True, padding_value=True)
+            return torch.from_numpy(
+                self.resampler(
+                    image_feature=image_feature,
+                    pos_embed=pos_embed,
+                    key_padding_mask=key_padding_mask,
+                )
+            )
+
         res = torch.from_numpy(self.resampler(image_feature=x, pos_embed=pos_embed, key_padding_mask=key_padding_mask))
         return res
 
@@ -2761,14 +2811,57 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
         video: Optional["VideoInput"] = None,
+        video_temporal_ids: Optional[List[List[int]]] = None,
         audio: Optional[np.ndarray] = None,
     ):
         if processor is None:
             raise ValueError("Processor is required.")
-        if video is not None:
-            raise ValueError("Video input is not supported")
         if audio is not None:
             raise ValueError("Audio input is not supported")
+        if video is not None and (getattr(config, "version", 0) or 0) >= 4.5:
+            from PIL import Image as PILImage
+
+            video_frames = [
+                frame if isinstance(frame, PILImage.Image) else PILImage.fromarray(np.asarray(frame))
+                for frame in video
+            ]
+            if len(video_frames) == 0:
+                raise ValueError("Video input must contain at least one frame")
+
+            image_inputs = [] if image is None else image if isinstance(image, list) else [image]
+            visual_inputs = image_inputs + video_frames
+            temporal_ids = [[-1] for _ in image_inputs]
+            if video_temporal_ids is None:
+                temporal_ids.extend(
+                    list(range(group_start, min(group_start + 6, len(video_frames))))
+                    for group_start in range(0, len(video_frames), 6)
+                )
+            else:
+                if sum(len(group) for group in video_temporal_ids) != len(video_frames):
+                    raise ValueError("video_temporal_ids must contain one ID for every video frame")
+                temporal_ids.extend(video_temporal_ids)
+            messages = [
+                {
+                    "role": "user",
+                    "content": "(<image>./</image>)" * len(visual_inputs) + "\n" + text,
+                }
+            ]
+            chat_template_processor = (
+                processor if getattr(processor, "chat_template", None) is not None else processor.tokenizer
+            )
+            prompt = chat_template_processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            inputs = processor(
+                prompt,
+                visual_inputs,
+                temporal_ids=temporal_ids,
+                max_slice_nums=1,
+                use_image_id=False,
+                return_tensors="pt",
+            )
+            inputs.pop("image_sizes", None)
+            return inputs
+        if video is not None:
+            raise ValueError("Video input is not supported")
         if getattr(processor, "chat_template", None) is not None:
             messages = [{"role": "user", "content": text if image is None else "(<image>./</image>)\n" + text}]
             prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
