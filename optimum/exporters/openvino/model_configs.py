@@ -38,6 +38,15 @@ from optimum.exporters.openvino.config import (
     TextSeq2SeqOpenVINOConfig,
     VisionOpenVINOConfig,
 )
+from optimum.exporters.openvino.dflash_utils import (
+    DFLASH2_MARKOV_HEAD_TYPE,
+    DFLASH_ARCHITECTURES,
+    MarkovHeadSpec,
+    config_architecture,
+    dflash_candidate_position_offset,
+    markov_head_spec,
+    parse_and_validate_dflash_config,
+)
 from optimum.exporters.openvino.input_generators import (
     AquilaDummyPastKeyValuesGenerator,
     ChatGLM2DummyPastKeyValuesGenerator,
@@ -502,27 +511,16 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
             use_past_in_inputs=use_past_in_inputs,
             preprocessors=preprocessors,
         )
-        archs = getattr(config, "architectures", None)
-        self.dflash = False
-        if isinstance(archs, list) and len(archs) > 0:
-            if "dflash" in archs[0].lower():
-                self.dflash = True
-                self.candidate_position_offset = 1
-            elif archs[0] == "Qwen3DSparkModel":
-                if getattr(config, "markov_rank", 0) != 0:
-                    raise ValueError(
-                        "Exporting Qwen3DSparkModel is only supported for DFlash mode (markov_rank == 0). "
-                        "DSpark export is not supported yet (got markov_rank != 0)."
-                    )
-                self.dflash = True
-                self.candidate_position_offset = 0
+        self.dflash = config_architecture(config) in DFLASH_ARCHITECTURES
+        self.dflash2 = False
+        self.markov_head = None
         if self.dflash:
-            model_type = getattr(config, "model_type", "")
-            if model_type != "qwen3":
-                raise ValueError(f"DFlash export supports only Qwen3-based draft models, got model_type={model_type}.")
-            dflash_config = getattr(config, "dflash_config", None) or config.to_dict()
-            if not dflash_config.get("target_layer_ids", []):
-                raise ValueError("DFlash export requires non-empty target_layer_ids in dflash_config or config.")
+            self.dflash2 = parse_and_validate_dflash_config(config).version == 2
+            self.candidate_position_offset = dflash_candidate_position_offset(config)
+            self.markov_head = markov_head_spec(config)
+            if self.markov_head is not None:
+                # The Markov head is exported as a separate model next to the draft backbone.
+                self.SUPPORTED_BEHAVIORS = ["markov_head"]
             # DFlash draft checkpoints still advertise model_type="qwen3"; the
             # architecture and dflash_config fields identify the draft variant.
             self.DUMMY_INPUT_GENERATOR_CLASSES = (
@@ -531,20 +529,20 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
                 Eagle3DummyGenerator,
                 GemmaDummyPastKeyValuesGenerator,
             )
-            self.PAD_ATTENTION_MASK_TO_PAST = False
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         if self.dflash:
             common_inputs = super().inputs
             common_inputs.pop("input_ids", None)
-            common_inputs["inputs_embeds"] = {0: "batch_size", 1: "block_size"}
-            common_inputs["hidden_states"] = {0: "batch_size", 1: "context_length"}
-            common_inputs["position_ids"] = {0: "batch_size", 1: "context_length + block_size"}
+            # Every per-token input covers the new rows [context; block]: hidden_states is read in the context
+            # rows and inputs_embeds in the block rows, as token_type_ids (0 context, 1 block) tells.
+            for name in ("inputs_embeds", "hidden_states", "position_ids", "token_type_ids"):
+                common_inputs[name] = {0: "batch_size", 1: "sequence_length"}
             if self.use_past_in_inputs:
-                mask_length = "past_sequence_length + context_length + block_size"
+                mask_length = "past_sequence_length + sequence_length"
             else:
-                mask_length = "context_length + block_size"
+                mask_length = "sequence_length"
             common_inputs["attention_mask"] = {0: "batch_size", 1: mask_length}
             return common_inputs
         if self.task in ["feature-extraction"]:
@@ -562,42 +560,86 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
             common_outputs = super().outputs
             common_outputs.pop("logits", None)
             return {
-                "last_hidden_state": {0: "batch_size", 1: "draft_sequence_length"},
+                "last_hidden_state": {0: "batch_size", 1: "sequence_length"},
                 **common_outputs,
             }
         return super().outputs
 
-    def overwrite_shape_and_generate_input(
-        self, dummy_input_gen: DummyInputGenerator, input_name: str, framework: str, input_shapes: dict
-    ):
-        if self.dflash and input_name in {"inputs_embeds", "hidden_states", "position_ids", "attention_mask"}:
-            sequence_length = dummy_input_gen.sequence_length
-            block_length = sequence_length + 1
-            if input_name == "inputs_embeds":
-                dummy_input_gen.sequence_length = block_length
-            elif input_name == "hidden_states":
-                dummy_input_gen.sequence_length = sequence_length
-            elif input_name == "position_ids":
-                dummy_input_gen.sequence_length = sequence_length + block_length
-            else:
-                if self.use_past_in_inputs:
-                    dummy_input_gen.sequence_length = sequence_length * 2 + block_length
-                else:
-                    dummy_input_gen.sequence_length = sequence_length + block_length
-            dummy_input = dummy_input_gen.generate(
-                input_name, framework=framework, int_dtype=self.int_dtype, float_dtype=self.float_dtype
+    def with_behavior(self, behavior: str):
+        if behavior == "markov_head" and self.markov_head is not None:
+            return MarkovHeadOpenVINOConfig(
+                self._config,
+                self.markov_head,
+                task="feature-extraction",
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                preprocessors=self._preprocessors,
             )
-            dummy_input_gen.sequence_length = sequence_length
-            return dummy_input
-        return super().overwrite_shape_and_generate_input(dummy_input_gen, input_name, framework, input_shapes)
+        raise ValueError(f"Unsupported behavior {behavior} for {type(self).__name__}.")
 
-    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
-        super().add_past_key_values(inputs_or_outputs, direction)
-        if self.dflash and direction == "outputs":
-            for axes in inputs_or_outputs.values():
-                for axis, name in axes.items():
-                    if name == "past_sequence_length + sequence_length":
-                        axes[axis] = "past_sequence_length + context_length"
+    def get_model_for_behavior(self, model, behavior: str):
+        if behavior == "markov_head" and self.markov_head is not None:
+            return model.markov_head_for_export(self.markov_head.top_k)
+        raise ValueError(f"Unsupported behavior {behavior} for {type(self).__name__}.")
+
+
+class MarkovHeadOpenVINOConfig(OpenVINOConfig):
+    """The Markov-head model of a DFlash draft (a DSpark draft or a DFlash-2 draft), exported next to its backbone.
+
+    The Top-K candidate scorer takes the draft rows of several blocks packed back to back (see
+    `MarkovHeadForExport`). edge_scores already include each candidate's unary score, so the runtime must not add
+    the draft logit again. A DSpark head also holds the dense Markov step over the same weights; the DFlash-2 head has no dense
+    step and gates its transitions by the draft hidden states of the scored rows.
+    """
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (Eagle3DummyGenerator,)
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    # Tells `convert.py` to stamp the DFlash RT-info block onto the exported graph,
+    # the Markov head block rather than the draft one, and to skip the decoder runtime options.
+    dflash = True
+    markov_head_model = True
+
+    def __init__(
+        self,
+        config: PretrainedConfig,
+        markov_head: MarkovHeadSpec,
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        preprocessors: list[Any] | None = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self.markov_head = markov_head
+        self.gated = markov_head.markov_head_type == DFLASH2_MARKOV_HEAD_TYPE
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        inputs = {
+            "draft_logits": {0: "num_draft_rows"},
+            "anchor_token_ids": {0: "num_draft_blocks"},
+            "subsequence_begins": {0: "num_draft_blocks + 1"},
+        }
+        if self.gated:
+            inputs["draft_hidden_states"] = {0: "num_draft_rows"}
+        else:
+            inputs["prev_token_ids"] = {0: "num_prev_tokens"}
+        return inputs
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        outputs = {
+            "edge_scores": {0: "num_draft_rows"},
+            "candidate_ids": {0: "num_draft_rows"},
+        }
+        if not self.gated:
+            outputs = {"markov_bias": {0: "num_prev_tokens"}, **outputs}
+        return outputs
 
 
 @register_in_tasks_manager(

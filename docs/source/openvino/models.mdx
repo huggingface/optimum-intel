@@ -234,9 +234,18 @@ Here is the list of the supported architectures :
 - Qwen3.6-*-DFlash
 - Qwen3-Coder-30B-A3B-DFlash
 - gemma-4-31B-it-DFlash
+- Qwen3.8-27B-DFlash2
+
+DFlash export produces `openvino_model.xml` for the draft backbone.
+DFlash v2 export also produces `openvino_markov_head_model.xml`, its candidate selector exported as a Markov head
+(the same model a DeepSpec DSpark draft with a Markov head gets), which OpenVINO GenAI loads with the draft.
 
 ## [DeepSpec DFlash](https://github.com/deepseek-ai/DeepSpec)
 - dflash_qwen3_*
+
+## [MiniCPM-V 4.7 DSpark](https://huggingface.co/openbmb/MiniCPM-V-4.7-1B-DSpark)
+- MiniCPM-V-4.7-1B-DSpark
+- MiniCPM-V-4.7-35B-A3B-DSpark
 
 ## [Ouro](https://huggingface.co/ByteDance/Ouro-1.4B)
 - Ouro-1.4B

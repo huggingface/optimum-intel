@@ -75,21 +75,29 @@ jobs:
           uv pip install "transformers>=5.18"
           pytest tests/openvino/${{ matrix.test-pattern }} -k "minicpmv4_7" --durations=0
 
-      # test_quantization and test_cb_compatible are not matched by the matrix test-pattern glob, so run them
-      # explicitly and only once (the export job).
-      - name: MiniCPM-V-4.7 Quantization and Continuous Batching Validation
+      # test_quantization, test_cb_compatible and test_dflash are not matched by the matrix test-pattern glob, so run
+      # them explicitly and only once (the export job).
+      - name: MiniCPM-V-4.7 Quantization, Continuous Batching and DFlash Validation
         if: ${{ matrix.test-pattern == '*export*' }}
         run: |
           uv pip install "transformers>=5.18"
-          pytest tests/openvino/test_quantization.py tests/openvino/test_cb_compatible.py -k "minicpmv4_7" --durations=0
+          pytest tests/openvino/test_quantization.py tests/openvino/test_cb_compatible.py tests/openvino/test_dflash.py -k "minicpmv4_7" --durations=0
 
       - name: MiniCPM-OCR Validation
         run: |
           uv pip install "transformers>=5.21"
           pytest tests/openvino/${{ matrix.test-pattern }} -k "minicpm_ocr" --durations=0
 
-      - name: MiniCPM-OCR Quantization and Continuous Batching Validation
+      - name: MiniCPM-OCR Quantization, Continuous Batching and DFlash Validation
         if: ${{ matrix.test-pattern == '*export*' }}
         run: |
           uv pip install "transformers>=5.21"
-          pytest tests/openvino/test_quantization.py tests/openvino/test_cb_compatible.py -k "minicpm_ocr" --durations=0
+          pytest tests/openvino/test_quantization.py tests/openvino/test_cb_compatible.py tests/openvino/test_dflash.py -k "minicpm_ocr" --durations=0
+
+      # The DSpark tests use a tiny Qwen3 DSpark draft. test_genai runs single-request speculative decoding with it
+      # against the nightly GenAI installed above, which runs it as a plain DFlash draft until it supports DSpark.
+      - name: DSpark Export and GenAI Speculative Decoding Validation
+        if: ${{ matrix.test-pattern == '*export*' }}
+        run: |
+          uv pip install "transformers>=5.18"
+          pytest tests/openvino/test_exporters_cli.py tests/openvino/test_dflash.py tests/openvino/test_genai.py -k dspark --durations=0
