@@ -519,6 +519,20 @@ if is_diffusers_version(">=", "0.38.0"):
         ],
     }
 
+if is_diffusers_version(">=", "0.40.0"):
+    _ltx2 = ARCH_TO_EXPECTED_TRANSFORMATIONS["ltx2"]
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["ltx2.3"] = {
+        "model_class": "OVLTX2Pipeline",
+        "convert": list(_ltx2["convert"]),
+        "compile": list(_ltx2["compile"]),
+    }
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["ltx2.5"] = {
+        "model_class": "OVLTX2Pipeline",
+        # TransposeConvert has nothing to match in the LTX-2.5 export
+        "convert": [t for t in _ltx2["convert"] if t != "TransposeConvert"],
+        "compile": list(_ltx2["compile"]),
+    }
+
 
 if is_diffusers_version(">=", "0.33.0"):
     ARCH_TO_EXPECTED_TRANSFORMATIONS["ltx-video-0.9.5"] = {
