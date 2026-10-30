@@ -2061,6 +2061,45 @@ class Zamba2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         return past_key_values
 
 
+class NemotronHDummyPastKeyValuesGenerator(Zamba2DummyPastKeyValuesGenerator):
+    """
+    Generates dummy cache_params inputs for NemotronH architectures, with the GraniteMoeHybrid layout:
+    conv and SSM states for each Mamba2 layer, followed by keys and values for each attention layer.
+    """
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        # `Zamba2DummyPastKeyValuesGenerator.__init__` reads Zamba2 and GraniteMoeHybrid config attributes,
+        # so only the base initialization is reused and the cache dimensions are set from the NemotronH config.
+        DummyPastKeyValuesGenerator.__init__(
+            self,
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            **kwargs,
+        )
+
+        config = normalized_config.config
+        self.intermediate_size = config.mamba_num_heads * config.mamba_head_dim
+        self.conv_kernel_size = config.conv_kernel
+        self.mamba_d_state = config.ssm_state_size
+        self.n_mamba_heads = config.mamba_num_heads
+        self.mamba_ngroups = config.n_groups
+        self.mamba_headdim = config.mamba_head_dim
+        self.head_dim = config.head_dim
+        self.num_attention_heads = config.num_key_value_heads
+        self.num_attention_layers = config.layer_types.count(GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE)
+        self.num_mamba_layers = config.layer_types.count(GRANITEMOEHYBRID_MAMBA_LAYER_TYPE)
+        self.sequence_length = 0
+
+
 class Lfm2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     """
     Generates dummy past_key_values inputs for Lfm2 architectures.

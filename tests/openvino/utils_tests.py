@@ -144,6 +144,63 @@ def _create_tiny_kokoro_model():
     return str(output_dir)
 
 
+def _create_tiny_nemotron_h_model():
+    """Generate a tiny random NemotronH model with every block type (Mamba2, MoE, attention, MLP) and return its path.
+
+    Returns `None` for transformers < 5.6, which has no native NemotronH MLP layers. The model is cached under the
+    system temp dir and rebuilt when the transformers version changes, since the saved layer type names depend on it.
+    """
+    if is_transformers_version("<", "5.6"):
+        return None
+
+    from transformers import AutoModelForCausalLM, AutoTokenizer, NemotronHConfig
+    from transformers import __version__ as transformers_version
+
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_nemotron_h"
+    config_file = output_dir / "config.json"
+    if config_file.exists() and (output_dir / "model.safetensors").exists():
+        with open(config_file, encoding="utf-8") as f:
+            if json.load(f).get("transformers_version") == transformers_version:
+                return str(output_dir)
+
+    tokenizer = AutoTokenizer.from_pretrained("nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16")
+    config = NemotronHConfig(
+        vocab_size=len(tokenizer),
+        hidden_size=64,
+        # Mamba2, MoE, attention, Mamba2, MLP, attention
+        hybrid_override_pattern="ME*M-*",
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        # differs from hidden_size // num_attention_heads, as in NVIDIA-Nemotron-3-Nano-4B
+        head_dim=32,
+        intermediate_size=128,
+        mamba_num_heads=8,
+        mamba_head_dim=8,
+        n_groups=2,
+        ssm_state_size=16,
+        conv_kernel=4,
+        # several chunks for the reference SSD scan of the prompts used in tests
+        chunk_size=8,
+        n_routed_experts=8,
+        num_experts_per_tok=2,
+        moe_intermediate_size=32,
+        moe_shared_expert_intermediate_size=64,
+        routed_scaling_factor=2.5,
+        n_group=1,
+        topk_group=1,
+        tie_word_embeddings=False,
+    )
+    config.dtype = "float32"
+    torch.manual_seed(SEED)
+    model = AutoModelForCausalLM.from_config(config).float().eval()
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    model.save_pretrained(output_dir)
+    tokenizer.save_pretrained(output_dir)
+
+    return str(output_dir)
+
+
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -286,6 +343,7 @@ HUB_MODEL_NAMES = {
     "mt5": "optimum-intel-internal-testing/mt5-tiny-random",
     "llava-qwen2": "optimum-intel-internal-testing/tiny-random-nanollava",
     "nanollava_vision_tower": "optimum-intel-internal-testing/tiny-random-siglip",
+    "nemotron_h": _create_tiny_nemotron_h_model(),
     "nystromformer": "optimum-intel-internal-testing/tiny-random-NystromformerModel",
     "olmo": "optimum-intel-internal-testing/tiny-random-olmo-hf",
     "orion": "optimum-intel-internal-testing/tiny-random-orion",
@@ -466,6 +524,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "cohere2": {"model": 32},
     "gpt2": {"model": 44},
     "granitemoehybrid": {"model": 70 if is_transformers_version(">=", "5.13") else 118},
+    "nemotron_h": {"model": 46},
     "wav2vec2": {"model": 34},
     "distilbert": {"model": 66},
     "t5": {

@@ -123,6 +123,7 @@ class ExportModelTest(unittest.TestCase):
         "qwen3_tts": OVModelForTextToSpeechSeq2Seq,
         "cohere2": OVModelForCausalLM,
         "granitemoehybrid": OVModelForCausalLM,
+        "nemotron_h": OVModelForCausalLM,
         "smollm3": OVModelForCausalLM,
         "hunyuan_v1_dense": OVModelForCausalLM,
         "qwen3": OVModelForFeatureExtraction,
