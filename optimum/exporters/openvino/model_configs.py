@@ -52,6 +52,8 @@ from optimum.exporters.openvino.input_generators import (
     DummyGemma4UnifiedVisionInputGenerator,
     DummyGemma4VisionInputGenerator,
     DummyKokoroInputGenerator,
+    DummyLfm3OmniInputGenerator,
+    DummyLfm3VlVisionInputGenerator,
     DummyLLavaMultiModalProjectorInputGenerator,
     DummyMiniCPMV4_7LMInputGenerator,
     DummyMiniCPMV4_7VisionInputGenerator,
@@ -100,6 +102,7 @@ from optimum.exporters.openvino.input_generators import (
     Gemma4DummyPastKeyValuesGenerator,
     GPTBigCodeDummyPastKeyValuesGenerator,
     Lfm2DummyPastKeyValuesGenerator,
+    Lfm3DummyPastKeyValuesGenerator,
     LTX2AudioVaeDecoderDummyInputGenerator,
     LTX2ConnectorsDummyInputGenerator,
     LTX2TransformerDummyInputGenerator,
@@ -164,6 +167,16 @@ from optimum.exporters.openvino.model_patcher import (
     KokoroModelPatcher,
     Lfm2ModelPatcher,
     Lfm2MoeModelPatcher,
+    Lfm3ModelPatcher,
+    Lfm3OmniAudioDecoderPatcher,
+    Lfm3OmniAudioEncoderPatcher,
+    Lfm3OmniAudioOutEmbeddingsPatcher,
+    Lfm3OmniDepthDecoderPatcher,
+    Lfm3OmniLanguageModelPatcher,
+    Lfm3OmniVisionEmbeddingsPatcher,
+    Lfm3VlLanguageModelPatcher,
+    Lfm3VlNestedLanguageModelPatcher,
+    Lfm3VlVisionEmbeddingsPatcher,
     Llama4ImageEmbeddingsModelPatcher,
     Llama4TextModelPatcher,
     LlavaImageEmbeddingModelPatcher,
@@ -7702,6 +7715,297 @@ class LFM2MoeOpenVINOConfig(LFM2OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "5.0"
     MAX_TRANSFORMERS_VERSION = "5.4.0"
     _MODEL_PATCHER = Lfm2MoeModelPatcher
+
+
+@register_in_tasks_manager(
+    "lfm3",
+    *[
+        "text-generation",
+        "text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class LFM3OpenVINOConfig(LFM2OpenVINOConfig):
+    # LFM3 is available as remote code only (LiquidAI/LFM3-1.7B-RL), validated with transformers 5.20
+    MIN_TRANSFORMERS_VERSION = "5.12.0"
+    MAX_TRANSFORMERS_VERSION = None
+    _MODEL_PATCHER = Lfm3ModelPatcher
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Lfm3DummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = Lfm3DummyPastKeyValuesGenerator
+
+    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        if direction not in ["inputs", "outputs"]:
+            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+
+        if direction == "inputs":
+            decoder_sequence_name = "past_sequence_length"
+            cache_name_prefix = "cache_params.past"
+        else:
+            decoder_sequence_name = "past_sequence_length + sequence_length"
+            cache_name_prefix = "cache_params.present"
+
+        layer_types = self._normalized_config.layer_types
+        num_conv_layers = layer_types.count("conv")
+        # both full_attention and sliding_attention layers keep a full KV cache
+        attention_layer_types = [layer_type for layer_type in layer_types if layer_type != "conv"]
+
+        for i in range(num_conv_layers):
+            inputs_or_outputs[f"{cache_name_prefix}.conv.{i}"] = {0: "batch_size"}
+
+        for i, layer_type in enumerate(attention_layer_types):
+            # The KV caches of sliding_attention layers get a distinct sequence dimension name: same-named dimensions
+            # share one symbol and the per-layer-type RoPE positions computed from them would be merged into a
+            # single Range, which SDPAToPagedAttention cannot rewire for both RoPE tables.
+            sequence_name = decoder_sequence_name
+            if layer_type == "sliding_attention":
+                sequence_name = decoder_sequence_name.replace("past_sequence_length", "past_sliding_sequence_length")
+            inputs_or_outputs[f"{cache_name_prefix}.key.{i}"] = {0: "batch_size", 2: sequence_name}
+            inputs_or_outputs[f"{cache_name_prefix}.value.{i}"] = {0: "batch_size", 2: sequence_name}
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            # a distinct dimension name: same-named dimensions share one symbol in the converted model, and the mask
+            # is longer than input_ids at decoding steps
+            "attention_mask": {0: "batch_size", 1: "past_sequence_length + sequence_length"},
+        }
+        if self.use_past_in_inputs:
+            self.add_past_key_values(common_inputs, direction="inputs")
+        return common_inputs
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        dummy_inputs = super().generate_dummy_inputs(framework, **kwargs)
+        # the attention mask covers both the past and the new tokens, as passed by OVModelWithMambaForCausalLM
+        if self.use_past_in_inputs and "attention_mask" in dummy_inputs:
+            num_conv_layers = self._normalized_config.layer_types.count("conv")
+            past_length = dummy_inputs["cache_params"][num_conv_layers].shape[-2]
+            attention_mask = dummy_inputs["attention_mask"]
+            past_mask = torch.ones((attention_mask.shape[0], past_length), dtype=attention_mask.dtype)
+            dummy_inputs["attention_mask"] = torch.cat([past_mask, attention_mask], dim=-1)
+        return dummy_inputs
+
+
+@register_in_tasks_manager("lfm3_vl", *["image-text-to-text"], library_name="transformers")
+class LFM3VlOpenVINOConfig(BaseVLMOpenVINOConfig):
+    # LFM3-VL is available as remote code only (LiquidAI/lfm3-vl-1.9b-rl), validated with transformers 5.20
+    MIN_TRANSFORMERS_VERSION = "5.12.0"
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyLfm3VlVisionInputGenerator,)
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            behavior=behavior,
+            preprocessors=preprocessors,
+        )
+        self._orig_config = config
+        self._is_nested = getattr(config, "text_config", None) is not None
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {"pixel_values": {0: "num_images", 1: "grid_height", 2: "grid_width"}}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {"last_hidden_state": {0: "num_images", 1: "num_image_tokens"}}
+
+    def with_behavior(
+        self,
+        behavior: Union[str, VLMConfigBehavior],
+    ):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        # the LFM3-VL partner checkpoint (lfm3-vl-1.9b-rl) keeps the language model config at the top level of the
+        # config, the released LFM3-VL (LiquidAI/LFM3-VL-2B) in a nested text_config, with the LFM3-Omni module layout
+        text_config = self._orig_config.text_config if self._is_nested else self._orig_config
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config("lfm3", text_config, self.int_dtype, self.float_dtype)
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                "lfm3",
+                text_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=Lfm3VlNestedLanguageModelPatcher if self._is_nested else Lfm3VlLanguageModelPatcher,
+            )
+
+        return super().with_behavior(behavior)
+
+    def get_model_for_behavior(self, model, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.get_input_embeddings()
+            text_embedding.config = model.config
+            return text_embedding
+
+        # the language model patcher uses the tied text embeddings of the full model as lm_head
+        return model
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+        if self._is_nested:
+            return Lfm3OmniVisionEmbeddingsPatcher(self, model, model_kwargs)
+        return Lfm3VlVisionEmbeddingsPatcher(self, model, model_kwargs)
+
+
+class Lfm3OmniConfigBehavior(str, enum.Enum):
+    """
+    Sub-graphs LFM3-Omni is split into for export, paths are relative to `Lfm3OmniForConditionalGeneration`.
+    """
+
+    LANGUAGE = "language"  # model.language_model + lm_head, also returns the hidden states for the depth decoder
+    TEXT_EMBEDDINGS = "text_embeddings"  # model.language_model.embed_tokens
+    VISION_EMBEDDINGS = "vision_embeddings"  # model.vision_tower + model.multi_modal_projector
+    AUDIO_ENCODER = "audio_encoder"  # model.audio_encoder + model.audio_projector
+    AUDIO_OUT_EMBEDDINGS = "audio_out_embeddings"  # model.codebook_embedding, the embedding of speech frames
+    DEPTH_DECODER = "depth_decoder"  # model.depth_decoder, one MaskGIT pass over the codebooks of a speech frame
+    AUDIO_DECODER = "audio_decoder"  # the decoder of the Liquid Codec in the audio_tokenizer subfolder
+
+
+class Lfm3OmniLMConfigHelper(LMInputEmbedsConfigHelper):
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return _append_hidden_states_output(self.orig_export_config.outputs)
+
+
+@register_in_tasks_manager("lfm3_omni", *["image-text-to-text"], library_name="transformers")
+class LFM3OmniOpenVINOConfig(BaseVLMOpenVINOConfig):
+    # LFM3-Omni is available as remote code only (LiquidAI/LFM3-Omni-2.2B), validated with transformers 5.20
+    MIN_TRANSFORMERS_VERSION = "5.12.0"
+    SUPPORTED_BEHAVIORS = [behavior.value for behavior in Lfm3OmniConfigBehavior]
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyLfm3OmniInputGenerator,)
+
+    _INPUTS = {
+        Lfm3OmniConfigBehavior.VISION_EMBEDDINGS: {
+            "pixel_values": {0: "num_images", 1: "grid_height", 2: "grid_width"}
+        },
+        Lfm3OmniConfigBehavior.AUDIO_ENCODER: {"input_features": {0: "batch_size", 2: "num_frames"}},
+        Lfm3OmniConfigBehavior.AUDIO_OUT_EMBEDDINGS: {"codes": {0: "num_frames"}},
+        Lfm3OmniConfigBehavior.DEPTH_DECODER: {
+            "hidden_states": {0: "batch_size"},
+            "codes": {0: "batch_size"},
+            "masked": {0: "batch_size"},
+        },
+        Lfm3OmniConfigBehavior.AUDIO_DECODER: {"audio_codes": {0: "batch_size", 2: "num_frames"}},
+    }
+    _OUTPUTS = {
+        Lfm3OmniConfigBehavior.VISION_EMBEDDINGS: {"last_hidden_state": {0: "num_images", 1: "num_image_tokens"}},
+        Lfm3OmniConfigBehavior.AUDIO_ENCODER: {"last_hidden_state": {0: "batch_size", 1: "num_audio_tokens"}},
+        Lfm3OmniConfigBehavior.AUDIO_OUT_EMBEDDINGS: {"inputs_embeds": {0: "num_frames"}},
+        Lfm3OmniConfigBehavior.DEPTH_DECODER: {"logits": {0: "batch_size"}},
+        Lfm3OmniConfigBehavior.AUDIO_DECODER: {"audio_values": {0: "batch_size", 1: "num_samples"}},
+    }
+    _PATCHERS = {
+        Lfm3OmniConfigBehavior.VISION_EMBEDDINGS: Lfm3OmniVisionEmbeddingsPatcher,
+        Lfm3OmniConfigBehavior.AUDIO_ENCODER: Lfm3OmniAudioEncoderPatcher,
+        Lfm3OmniConfigBehavior.AUDIO_OUT_EMBEDDINGS: Lfm3OmniAudioOutEmbeddingsPatcher,
+        Lfm3OmniConfigBehavior.DEPTH_DECODER: Lfm3OmniDepthDecoderPatcher,
+        Lfm3OmniConfigBehavior.AUDIO_DECODER: Lfm3OmniAudioDecoderPatcher,
+    }
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: Lfm3OmniConfigBehavior = Lfm3OmniConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        if isinstance(behavior, str) and not isinstance(behavior, Lfm3OmniConfigBehavior):
+            behavior = Lfm3OmniConfigBehavior(behavior)
+        self._behavior = behavior
+        self._orig_config = config
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return copy.deepcopy(self._INPUTS.get(self._behavior, {}))
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return copy.deepcopy(self._OUTPUTS.get(self._behavior, {}))
+
+    def with_behavior(self, behavior: Union[str, Lfm3OmniConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, Lfm3OmniConfigBehavior):
+            behavior = Lfm3OmniConfigBehavior(behavior)
+
+        text_config = self._orig_config.text_config
+        if behavior == Lfm3OmniConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config("lfm3", text_config, self.int_dtype, self.float_dtype)
+
+        if behavior == Lfm3OmniConfigBehavior.LANGUAGE:
+            internal_config = get_vlm_internal_text_generation_config(
+                "lfm3", text_config, self.int_dtype, self.float_dtype
+            )
+            config = Lfm3OmniLMConfigHelper(internal_config, patcher_cls=Lfm3OmniLanguageModelPatcher)
+            config._normalized_config = internal_config._normalized_config
+            return config
+
+        return self.__class__(
+            self._orig_config,
+            task=self.task,
+            int_dtype=self.int_dtype,
+            float_dtype=self.float_dtype,
+            behavior=behavior,
+            preprocessors=self._preprocessors,
+        )
+
+    def get_model_for_behavior(self, model, behavior: Union[str, Lfm3OmniConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, Lfm3OmniConfigBehavior):
+            behavior = Lfm3OmniConfigBehavior(behavior)
+
+        if behavior == Lfm3OmniConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.get_input_embeddings()
+            text_embedding.config = model.config
+            return text_embedding
+
+        if behavior == Lfm3OmniConfigBehavior.AUDIO_DECODER:
+            # the Liquid Codec is a separate remote code model bundled in the audio_tokenizer subfolder
+            from transformers.dynamic_module_utils import get_class_from_dynamic_module
+
+            model_dir = model.config._name_or_path
+            codec_cls = get_class_from_dynamic_module("modeling_liquid_codec.LiquidCodecModel", model_dir)
+            return codec_cls.from_pretrained(model_dir, subfolder="audio_tokenizer", dtype=model.dtype).eval()
+
+        # the other parts are traced from the full model, the patchers pick their submodules
+        return model
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        patcher_cls = self._PATCHERS.get(self._behavior)
+        if patcher_cls is None:
+            return super().patch_model_for_export(model, model_kwargs)
+        return patcher_cls(self, model, model_kwargs)
 
 
 @register_in_tasks_manager(

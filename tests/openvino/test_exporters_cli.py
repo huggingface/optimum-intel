@@ -160,6 +160,10 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "qwen3_next"),
         ("text-generation", "lfm2_moe"),
         ("text-generation-with-past", "lfm2_moe"),
+        ("text-generation", "lfm3"),
+        ("text-generation-with-past", "lfm3"),
+        ("image-text-to-text", "lfm3_vl"),
+        ("image-text-to-text", "lfm3_omni"),
         ("text-generation-with-past", "mamba"),
         ("text-generation-with-past", "falcon_mamba"),
         ("text-to-image", "flux.2-klein"),
@@ -213,6 +217,9 @@ class OVCLIExportTestCase(unittest.TestCase):
             2 if is_openvino_version(">=", "2026.0") else 0
         ),  # Tokenizers fail to convert on 2025.4, ticket: CVS-176880
         "lfm2_moe": 2,
+        "lfm3": 2,
+        "lfm3_vl": 2,
+        "lfm3_omni": 2,
         "llava": 2,
         "mistral3": 2,
         "ministral3": 2,

@@ -464,7 +464,7 @@ def main_export(
 
         if original_task == "auto" and model_type in {"phi4mm", "phi4_multimodal"}:
             task = "image-text-to-text"
-        elif model_type == "qwen3_omni_moe":
+        elif model_type in ("qwen3_omni_moe", "lfm3_omni"):
             task = "image-text-to-text"
 
         if model_type not in TasksManager._SUPPORTED_MODEL_TYPE:
@@ -521,6 +521,12 @@ def main_export(
         if dtype == "auto":
             dtype = getattr(config, "torch_dtype")
 
+        config_dtype = getattr(config, "torch_dtype", torch.float32)
+        if config_dtype is None:
+            # composite configs (e.g. LFM3-Omni) may keep the checkpoint dtype in some of their sub-configs only
+            sub_configs = [getattr(config, key, None) for key in getattr(config, "sub_configs", {})]
+            sub_dtypes = [getattr(sub_config, "torch_dtype", None) for sub_config in sub_configs]
+            config_dtype = next((sub_dtype for sub_dtype in sub_dtypes if sub_dtype is not None), None)
         if (
             dtype is None
             and framework == "pt"
@@ -528,13 +534,13 @@ def main_export(
                 task.startswith("text-generation")
                 or getattr(config, "model_type", "") in MULTI_MODAL_TEXT_GENERATION_MODELS
             )
-            and getattr(config, "torch_dtype", torch.float32) in [torch.float16, torch.bfloat16]
+            and config_dtype in [torch.float16, torch.bfloat16]
         ):
             if ov_config is not None and ov_config.dtype in {"fp16", "fp32"}:
                 dtype = torch.float16 if ov_config.dtype == "fp16" else torch.float32
-            elif config.torch_dtype == torch.float16:
+            elif config_dtype == torch.float16:
                 dtype = torch.float16
-            elif config.torch_dtype == torch.bfloat16:
+            elif config_dtype == torch.bfloat16:
                 dtype = torch.bfloat16
 
         if dtype is not None:
@@ -677,8 +683,15 @@ def main_export(
             # TODO: use config.auto_map to load remote code models instead (for other models we can directly use config.architectures)
             task_model_loading = task
             if library_name == "transformers":
-                has_remote_code = hasattr(config, "auto_map")
-                if has_remote_code and trust_remote_code and task == "image-text-to-text":
+                auto_map = getattr(config, "auto_map", None)
+                has_remote_code = auto_map is not None
+                # remote code that registers only AutoModelForImageTextToText (e.g. LFM3-Omni) is loaded with it
+                image_text_only = (
+                    isinstance(auto_map, dict)
+                    and "AutoModelForImageTextToText" in auto_map
+                    and "AutoModelForCausalLM" not in auto_map
+                )
+                if has_remote_code and trust_remote_code and task == "image-text-to-text" and not image_text_only:
                     task_model_loading = "text-generation"
 
             model = TasksManager.get_model_from_task(
@@ -869,7 +882,7 @@ def _main_quantize(
         # phi4mm is only misrouted by task inference, so keep its redirect limited to the auto case.
         if original_task == "auto" and model_type in ["phi4mm", "phi4_multimodal"]:
             task = "image-text-to-text"
-        elif model_type == "qwen3_omni_moe":
+        elif model_type in ("qwen3_omni_moe", "lfm3_omni"):
             task = "image-text-to-text"
 
     # Step 1. Obtain the correct OpenVINO model class

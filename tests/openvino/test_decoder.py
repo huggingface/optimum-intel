@@ -139,6 +139,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "zamba2",
         "lfm2",
         "lfm2_moe",
+        "lfm3",
         "qwen3_next",
     )
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
@@ -179,6 +180,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_neox": 5,
         "lfm2": 1,
         "lfm2_moe": 2,
+        "lfm3": 3,
         "llama": 2,
         "llama4": 5,
         "marian": 2,
@@ -371,7 +373,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 self.assertIsInstance(ov_outputs.cache_params.conv_states, list)
                 self.assertIsInstance(ov_outputs.cache_params.ssm_states, list)
                 self.assertTrue(len(ov_outputs.cache_params.conv_states) > 0)
-                if model_arch not in ["lfm2", "lfm2_moe"]:
+                if model_arch not in ["lfm2", "lfm2_moe", "lfm3"]:
                     self.assertTrue(len(ov_outputs.cache_params.ssm_states) > 0)
         else:
             self.assertTrue("past_key_values" in ov_outputs)
@@ -450,7 +452,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             # LFM2 fails with beam search, issue link: https://github.com/huggingface/transformers/issues/42257
             # CVS-177964 GraniteMoeHybrid, Qwen3-Next fail due to lack of support for beam search for hybrid models in OpenVINO
             # For this support, we expect changes in IRs to have connected beam_idx with Mamba/Linear attention states
-            num_beams=1 if model_arch in ["chatglm4", "lfm2", "granitemoehybrid", "qwen3_next"] else 2,
+            num_beams=1 if model_arch in ["chatglm4", "lfm2", "lfm3", "granitemoehybrid", "qwen3_next"] else 2,
             do_sample=False,
         )
 
@@ -697,7 +699,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         # LFM2, LFM2-MoE and GraniteMoeHybrid generate wrong output with beam search, ticket: CVS-185664
         # Hybrid recurrent/attention models lack beam search support in OpenVINO (beam_idx not connected
         # to the Mamba/recurrent states), see CVS-177964.
-        if model_arch in ["lfm2", "lfm2_moe", "granitemoehybrid"]:
+        if model_arch in ["lfm2", "lfm2_moe", "lfm3", "granitemoehybrid"]:
             return
 
         # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current modeling incompatible with transformers >= v4.49
@@ -920,7 +922,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         gc.collect()
 
     # not including zamba2 - the Mamba mixer's torch_forward crashes on the second chunk
-    HYBRID_ARCHITECTURES = ["granitemoehybrid", "lfm2", "qwen3_next"]
+    HYBRID_ARCHITECTURES = ["granitemoehybrid", "lfm2", "lfm3", "qwen3_next"]
 
     # filter architectures depending on min/max transformers supported versions
     HYBRID_ARCHITECTURES = [
@@ -937,14 +939,15 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         """
         model_id = MODEL_NAMES[model_arch]
         tokenizer = self.get_tokenizer(model_arch)
+        trust_remote_code = model_arch in REMOTE_CODE_MODELS
 
         ov_model = OVModelForCausalLM.from_pretrained(
-            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, trust_remote_code=trust_remote_code
         )
         self.assertTrue(ov_model.stateful, "Hybrid model should be exported as stateful")
 
         set_seed(SEED)
-        transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=trust_remote_code)
 
         ov_model.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
