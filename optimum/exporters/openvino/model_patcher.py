@@ -373,8 +373,12 @@ def ov_grouped_mm_experts_forward(
     expert_ids_g = expert_ids[perm]
     selected_hidden_states_g = hidden_states[token_idx[perm]]
 
-    selected_gate_up = self.gate_up_proj
-    selected_down = self.down_proj
+    if self.is_transposed:
+        selected_gate_up = self.gate_up_proj.contiguous()
+        selected_down = self.down_proj.contiguous()
+    else:
+        selected_gate_up = self.gate_up_proj.transpose(-2, -1).contiguous()
+        selected_down = self.down_proj.transpose(-2, -1).contiguous()
     selected_gate_up_bias = self.gate_up_proj_bias[expert_ids_g] if self.has_bias else None
     selected_down_bias = self.down_proj_bias[expert_ids_g] if self.has_bias else None
 
@@ -385,13 +389,13 @@ def ov_grouped_mm_experts_forward(
     offsets = torch.cumsum(tokens_per_expert, dim=0, dtype=torch.int32)
 
     gate_up_out = _moe_module._grouped_linear(
-        selected_hidden_states_g, selected_gate_up, offsets, selected_gate_up_bias, is_transposed=self.is_transposed
+        selected_hidden_states_g, selected_gate_up, offsets, selected_gate_up_bias, is_transposed=True
     )
 
     gated_out = self._apply_gate(gate_up_out)
 
     out_per_sample_g = _moe_module._grouped_linear(
-        gated_out, selected_down, offsets, selected_down_bias, is_transposed=self.is_transposed
+        gated_out, selected_down, offsets, selected_down_bias, is_transposed=True
     )
 
     out_per_sample = out_per_sample_g[inv_perm] * sample_weights.unsqueeze(-1)
