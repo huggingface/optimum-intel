@@ -1278,6 +1278,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 "vae_decoder": {},
                 "audio_vae_decoder": {},
                 "vocoder": {},
+                "duration_head": {},
             },
         ),
         (
