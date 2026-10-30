@@ -373,13 +373,19 @@ def ov_grouped_mm_experts_forward(
     expert_ids_g = expert_ids[perm]
     selected_hidden_states_g = hidden_states[token_idx[perm]]
 
+    # Experts without gating (e.g. NemotronH) only have `up_proj`/`up_proj_bias` and apply the
+    # activation alone. Older transformers versions do not set `has_gate`; their experts are gated.
+    has_gate = getattr(self, "has_gate", True)
+    gate_up_proj = self.gate_up_proj if has_gate else self.up_proj
+    gate_up_proj_bias = (self.gate_up_proj_bias if has_gate else self.up_proj_bias) if self.has_bias else None
+
     if self.is_transposed:
-        selected_gate_up = self.gate_up_proj.contiguous()
+        selected_gate_up = gate_up_proj.contiguous()
         selected_down = self.down_proj.contiguous()
     else:
-        selected_gate_up = self.gate_up_proj.transpose(-2, -1).contiguous()
+        selected_gate_up = gate_up_proj.transpose(-2, -1).contiguous()
         selected_down = self.down_proj.transpose(-2, -1).contiguous()
-    selected_gate_up_bias = self.gate_up_proj_bias[expert_ids_g] if self.has_bias else None
+    selected_gate_up_bias = gate_up_proj_bias[expert_ids_g] if self.has_bias else None
     selected_down_bias = self.down_proj_bias[expert_ids_g] if self.has_bias else None
 
     # PATCH: scatter_add_ instead of histc/bincount - OV TorchScript supports scatter_add_
@@ -392,7 +398,8 @@ def ov_grouped_mm_experts_forward(
         selected_hidden_states_g, selected_gate_up, offsets, selected_gate_up_bias, is_transposed=True
     )
 
-    gated_out = self._apply_gate(gate_up_out)
+    # Gated experts apply the custom/default gating mechanism; non-gated experts apply the activation.
+    gated_out = self._apply_gate(gate_up_out) if has_gate else self.act_fn(gate_up_out)
 
     out_per_sample_g = _moe_module._grouped_linear(
         gated_out, selected_down, offsets, selected_down_bias, is_transposed=True
