@@ -228,9 +228,18 @@ class Eagle3DummyGenerator(DummyInputGenerator):
     This generator produces synthetic `hidden_states` tensors that mimic the
     intermediate hidden-state outputs of a *main (target) model*, which are
     required by the Eagle-3 draft model during speculative decoding.
+
+    It also produces the inputs of the DSpark Markov head model: the dense step and the Top-K lattice
+    over `batch_size` draft blocks of `sequence_length` rows each, packed back to back.
     """
 
-    SUPPORTED_INPUT_NAMES = ("hidden_states",)
+    SUPPORTED_INPUT_NAMES = (
+        "hidden_states",
+        "prev_token_ids",
+        "draft_logits",
+        "anchor_token_ids",
+        "subsequence_begins",
+    )
 
     def __init__(
         self,
@@ -243,10 +252,20 @@ class Eagle3DummyGenerator(DummyInputGenerator):
         self.batch_size = batch_size
         self.sequence_length = sequence_length
         self.hidden_size = normalized_config.hidden_size
+        self.vocab_size = getattr(normalized_config, "vocab_size", None)
         dflash_config = getattr(normalized_config.config, "dflash_config", None) or normalized_config.config.to_dict()
         self.num_hidden_state_layers = len(dflash_config.get("target_layer_ids", [])) or 3
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name in ("prev_token_ids", "anchor_token_ids"):
+            return self.random_int_tensor(
+                (self.batch_size,), max_value=self.vocab_size, framework=framework, dtype=int_dtype
+            )
+        if input_name == "draft_logits":
+            shape = (self.batch_size * self.sequence_length, self.vocab_size)
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "subsequence_begins":
+            return torch.arange(self.batch_size + 1, dtype=DTYPE_MAPPER.pt(int_dtype)) * self.sequence_length
         # hidden_states is provided as a concatenation of hidden-layer outputs from the main model
         shape = (
             self.batch_size,

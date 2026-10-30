@@ -57,6 +57,7 @@ from transformers.utils import ModelOutput
 
 from optimum.exporters.openvino._ov_ops import convert_recurrent_attention_cell, convert_recurrent_selective_ssm_cell
 from optimum.exporters.openvino.base import OpenVINOConfig
+from optimum.exporters.openvino.dflash_utils import parse_and_validate_dspark_config
 from optimum.exporters.openvino.patching_utils import (
     ModelPatcher,
     eager_mask_without_vmap,
@@ -9225,7 +9226,12 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
         self.fc = nn.Linear(len(self.target_layer_ids) * config.hidden_size, config.hidden_size, bias=False)
         self.hidden_norm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.mask_token_id = dflash_config.get("mask_token_id", None)
+        self._init_dflash_variant(config)
         self.post_init()
+
+    def _init_dflash_variant(self, config) -> None:
+        # Called before post_init(), so that the modules a variant adds are weight-initialized and loaded too.
+        pass
 
     def forward(
         self,
@@ -9322,12 +9328,35 @@ class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
         )
 
 
+# adopted from https://github.com/deepseek-ai/DeepSpec/blob/main/deepspec/modeling/dspark/markov_head.py
+class DSparkVanillaMarkovHead(nn.Module):
+    """DeepSpec vanilla Markov head: the next-token logit bias is ``markov_w2(markov_w1[previous token])``."""
+
+    def __init__(self, vocab_size: int, markov_rank: int):
+        super().__init__()
+        self.markov_w1 = nn.Embedding(vocab_size, markov_rank)
+        self.markov_w2 = nn.Linear(markov_rank, vocab_size, bias=False)
+
+    def forward(self, prev_token_ids: torch.LongTensor) -> torch.Tensor:
+        return self.markov_w2(self.markov_w1(prev_token_ids))
+
+
 # adopted from https://github.com/deepseek-ai/DeepSpec/blob/main/deepspec/modeling/dspark/qwen3/modeling.py#L201
 class Qwen3DSparkForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
     """DeepSpec Qwen3 DSpark draft head exported as embeddings-in / hidden-states-out.
 
-    Unlike z-lab DFlash, DeepSpec does not prune the first (seed) hidden state.
+    Unlike z-lab DFlash, DeepSpec does not prune the first (seed) hidden state: the anchor row
+    predicts the first draft token. Drafts with ``sample_from_anchor=False`` use the DFlash
+    [anchor ; masks] layout and drop the anchor row. The Markov head, when present, is exported
+    as a separate model and is not part of this backbone graph.
     """
+
+    def _init_dflash_variant(self, config) -> None:
+        dspark_config = parse_and_validate_dspark_config(config)
+        self.sample_from_anchor = dspark_config.sample_from_anchor
+        self.markov_head = None
+        if dspark_config.markov_rank > 0:
+            self.markov_head = DSparkVanillaMarkovHead(config.vocab_size, dspark_config.markov_rank)
 
     def forward(
         self,
@@ -9349,14 +9378,103 @@ class Qwen3DSparkForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
             use_cache=use_cache,
             **kwargs,
         )
-        if logits_to_keep is None:
-            last_hidden_state = outputs.last_hidden_state
-        else:
-            last_hidden_state = outputs.last_hidden_state[:, -logits_to_keep:, :]
+        last_hidden_state = outputs.last_hidden_state
+        if not self.sample_from_anchor:
+            last_hidden_state = last_hidden_state[:, 1:, :]
+        if logits_to_keep is not None:
+            last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]
         return BaseModelOutputWithPast(
             last_hidden_state=last_hidden_state,
             past_key_values=outputs.past_key_values,
         )
+
+
+class MarkovHeadForExport(nn.Module):
+    """Export-only first-order Markov head with two independent computations over the same weights.
+
+    - Dense step: ``prev_token_ids`` [N] -> ``markov_bias`` [N, vocab], one full-vocabulary bias row per
+      previous token. The runtime calls it once per draft position.
+    - Top-K lattice: ``draft_logits`` [T, vocab], ``anchor_token_ids`` [N], ``subsequence_begins`` [N + 1] ->
+      ``candidate_ids`` [T, K], ``edge_scores`` [T, K, K]. The rows of N draft blocks are packed back to back,
+      and block n spans rows ``subsequence_begins[n]`` to ``subsequence_begins[n + 1]``. Every row keeps the
+      Top-K draft candidates. ``edge_scores[t, i, j]`` is the draft logit of candidate j plus the Markov
+      transition score from predecessor i to j, where the predecessors are the candidates of row t - 1, or
+      the block's anchor token on the first row of a block, so blocks never mix. ``subsequence_begins`` must
+      start at 0, increase strictly and end at T; the graph does not check it.
+
+    Subclasses define the head through ``markov_bias`` and ``transition_scores``. Runtimes keep the computation
+    they use and may replace the K of the TopK.
+    """
+
+    def __init__(self, top_k: int):
+        super().__init__()
+        self.top_k = top_k
+
+    def markov_bias(self, prev_token_ids: torch.LongTensor) -> torch.Tensor:
+        raise NotImplementedError
+
+    def transition_scores(self, predecessor_ids: torch.LongTensor, candidate_ids: torch.LongTensor) -> torch.Tensor:
+        """Maps predecessor and candidate ids [T, K] to FP32 transition scores [T, K, K]."""
+        raise NotImplementedError
+
+    @staticmethod
+    def predecessor_ids(
+        candidate_ids: torch.LongTensor, anchor_token_ids: torch.LongTensor, subsequence_begins: torch.LongTensor
+    ) -> torch.LongTensor:
+        block_begins = subsequence_begins[:-1]
+        is_block_begin = torch.zeros_like(candidate_ids[:, 0]).scatter(0, block_begins, torch.ones_like(block_begins))
+        row_anchor_ids = anchor_token_ids[torch.cumsum(is_block_begin, dim=0) - 1]
+        # Row 0 always begins a block, so its filler predecessors are never used.
+        previous_candidate_ids = torch.cat([candidate_ids[:1], candidate_ids[:-1]], dim=0)
+        # Shapes follow the TopK output rather than top_k, so the TopK is the only node that holds K.
+        return torch.where(is_block_begin.unsqueeze(-1) > 0, row_anchor_ids.unsqueeze(-1), previous_candidate_ids)
+
+    def score_candidates(
+        self,
+        draft_logits: torch.Tensor,
+        anchor_token_ids: torch.LongTensor,
+        subsequence_begins: torch.LongTensor,
+        top_k: int,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        unary_logits, candidate_ids = torch.topk(draft_logits, top_k, dim=-1)
+        candidate_ids = candidate_ids.to(torch.int64)
+        predecessor_ids = self.predecessor_ids(candidate_ids, anchor_token_ids, subsequence_begins)
+        edge_scores = self.transition_scores(predecessor_ids, candidate_ids)
+        edge_scores = edge_scores + unary_logits.to(torch.float32).unsqueeze(-2)
+        return edge_scores, candidate_ids
+
+    def forward(
+        self,
+        prev_token_ids: torch.LongTensor,
+        draft_logits: torch.Tensor,
+        anchor_token_ids: torch.LongTensor,
+        subsequence_begins: torch.LongTensor,
+    ) -> ModelOutput:
+        edge_scores, candidate_ids = self.score_candidates(
+            draft_logits, anchor_token_ids, subsequence_begins, self.top_k
+        )
+        return ModelOutput(
+            markov_bias=self.markov_bias(prev_token_ids), edge_scores=edge_scores, candidate_ids=candidate_ids
+        )
+
+
+class DSparkVanillaMarkovHeadForExport(MarkovHeadForExport):
+    """DSpark vanilla Markov head: the transition score from token i to token j is ``markov_w1[i] . markov_w2[j]``."""
+
+    def __init__(self, markov_head: DSparkVanillaMarkovHead, config: "Qwen3Config", top_k: int):
+        super().__init__(top_k)
+        self.markov_head = markov_head
+        self.config = config
+        # Weights must be read through modules: 16-bit export hides raw `.weight` tensors behind placeholders.
+        self.markov_w2_rows = nn.Embedding.from_pretrained(markov_head.markov_w2.weight, freeze=True)
+
+    def markov_bias(self, prev_token_ids: torch.LongTensor) -> torch.Tensor:
+        return self.markov_head(prev_token_ids).to(torch.float32)
+
+    def transition_scores(self, predecessor_ids: torch.LongTensor, candidate_ids: torch.LongTensor) -> torch.Tensor:
+        predecessor_codes = self.markov_head.markov_w1(predecessor_ids).to(torch.float32)
+        successor_rows = self.markov_w2_rows(candidate_ids).to(torch.float32)
+        return torch.matmul(predecessor_codes, successor_rows.transpose(-1, -2))
 
 
 # Patched implementation of the gated delta rule in recurrent form.

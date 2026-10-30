@@ -36,6 +36,7 @@ from utils_tests import (
     REMOTE_CODE_MODELS,
     TEST_NAME_TO_MODEL_TYPE,
     check_compression_state_per_model,
+    get_dspark_model_path,
     get_num_quantized_nodes,
     get_supported_model_for_library,
     is_model_type_transformers_compatible,
@@ -107,6 +108,11 @@ def _task_and_model_type_name(testcase_func, param_num, params):
     return f"{testcase_func.__name__}_{param_num}_{safe_name(task)}_{safe_name(model_type)}"
 
 
+def _model_name_or_path(model_type: str) -> str:
+    # The tiny DSpark draft has no Hub checkpoint; it is created locally.
+    return get_dspark_model_path() if model_type == "qwen3_dspark" else MODEL_NAMES[model_type]
+
+
 class OVCLIExportTestCase(unittest.TestCase):
     """
     Integration tests ensuring supported models are correctly exported.
@@ -153,6 +159,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "qwen3_eagle3"),
         ("text-generation-with-past", "qwen3_dflash"),
         ("text-generation-with-past", "qwen3_deepspec_dflash"),
+        ("text-generation-with-past", "qwen3_dspark"),
         ("text-generation-with-past", "zamba2"),
         ("text-generation-with-past", "exaone4"),
         ("text-generation-with-past", "ouro"),
@@ -1061,7 +1068,9 @@ class OVCLIExportTestCase(unittest.TestCase):
         if model_type in REMOTE_CODE_MODELS:
             loading_kwargs["trust_remote_code"] = True
 
-        self._openvino_export(MODEL_NAMES[model_type], task, model_kwargs=model_kwargs, loading_kwargs=loading_kwargs)
+        self._openvino_export(
+            _model_name_or_path(model_type), task, model_kwargs=model_kwargs, loading_kwargs=loading_kwargs
+        )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES, name_func=_task_and_model_type_name)
     def test_exporters_cli(self, task: str, model_type: str):
@@ -1074,7 +1083,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 add_ops = "--trust-remote-code"
 
             subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {add_ops} {tmpdir}",
+                f"optimum-cli export openvino --model {_model_name_or_path(model_type)} --task {task} {add_ops} {tmpdir}",
                 shell=True,
                 check=True,
             )
@@ -1281,7 +1290,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 add_ops = "--trust-remote-code"
 
             subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {add_ops} --weight-format fp16 {tmpdir}",
+                f"optimum-cli export openvino --model {_model_name_or_path(model_type)} --task {task} {add_ops} --weight-format fp16 {tmpdir}",
                 shell=True,
                 check=True,
             )
@@ -1302,7 +1311,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 add_ops = "--trust-remote-code"
 
             subprocess.run(
-                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {add_ops} --weight-format int8 {tmpdir}",
+                f"optimum-cli export openvino --model {_model_name_or_path(model_type)} --task {task} {add_ops} --weight-format int8 {tmpdir}",
                 shell=True,
                 check=True,
             )
@@ -1734,3 +1743,85 @@ class OVCLIExportTestCase(unittest.TestCase):
             model = eval(_HEAD_TO_AUTOMODELS["stable-diffusion"]).from_pretrained(tmpdir, compile=False)
             for component in ["text_encoder", "tokenizer", "unet", "vae_encoder", "vae_decoder"]:
                 self.assertIsNotNone(getattr(model, component))
+
+    def test_exporters_cli_dspark_markov_package(self):
+        import openvino as ov
+
+        def markov_table_types(model, config):
+            return {
+                op.get_output_element_type(0)
+                for op in model.get_ops()
+                if op.get_type_name() == "Constant"
+                and list(op.get_output_shape(0)) == [config["vocab_size"], config["markov_rank"]]
+            }
+
+        model_path = get_dspark_model_path()
+        config = json.loads((Path(model_path) / "config.json").read_text())
+        float_types = {ov.Type.f32, ov.Type.bf16, ov.Type.f16}
+        cases = (
+            [],
+            ["--weight-format", "int8"],
+            ["--weight-format", "int4", "--group-size", "16"],
+            ["--weight-format", "fp16"],
+        )
+        checkpoint_types = None
+        for weight_args in cases:
+            with self.subTest(weight_args=weight_args), TemporaryDirectory() as tmpdir:
+                command = [
+                    "optimum-cli",
+                    "export",
+                    "openvino",
+                    "--model",
+                    model_path,
+                    "--task",
+                    "text-generation-with-past",
+                    "--trust-remote-code",
+                    *weight_args,
+                ]
+                subprocess.run([*command, tmpdir], check=True)
+
+                core = ov.Core()
+                draft_model = core.read_model(Path(tmpdir) / "openvino_model.xml")
+                self.assertEqual(draft_model.get_rt_info()["dflash"]["markov_rank"].value, "8")
+                weight_format = weight_args[1] if weight_args else None
+                self.assertEqual(draft_model.has_rt_info(["nncf"]), weight_format in ("int8", "int4"))
+
+                self.assertEqual(
+                    sorted(path.name for path in Path(tmpdir).glob("openvino_*model.xml")),
+                    ["openvino_markov_head_model.xml", "openvino_model.xml"],
+                )
+                markov_model = core.read_model(Path(tmpdir) / "openvino_markov_head_model.xml")
+                markov_rt_info = markov_model.get_rt_info()["dflash"]
+                self.assertEqual(markov_rt_info["interface"].value, "markov_head_v1")
+                self.assertEqual(markov_rt_info["top_k"].value, "64")
+                self.assertFalse(markov_model.has_rt_info(["runtime_options"]))
+                # The Markov head model is never weight-compressed; a floating-point weight format still applies.
+                self.assertFalse(markov_model.has_rt_info(["nncf"]))
+                markov_types = markov_table_types(markov_model, config)
+                if weight_format == "fp16":
+                    self.assertEqual(markov_types, {ov.Type.f16})
+                else:
+                    self.assertLessEqual(markov_types, float_types)
+                    checkpoint_types = checkpoint_types or markov_types
+                    self.assertEqual(markov_types, checkpoint_types)
+
+    def test_exporters_cli_dspark_does_not_export_tokenizer(self):
+        for with_tokenizer in (True, False):
+            model_path = get_dspark_model_path(with_tokenizer=with_tokenizer)
+            with self.subTest(with_tokenizer=with_tokenizer), TemporaryDirectory() as tmpdir:
+                subprocess.run(
+                    [
+                        "optimum-cli",
+                        "export",
+                        "openvino",
+                        "--model",
+                        model_path,
+                        "--task",
+                        "text-generation-with-past",
+                        "--trust-remote-code",
+                        tmpdir,
+                    ],
+                    check=True,
+                )
+                self.assertTrue((Path(tmpdir) / "openvino_markov_head_model.xml").exists())
+                self.assertEqual(sorted(path.name for path in Path(tmpdir).glob("*tokenizer*")), [])
