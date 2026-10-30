@@ -1483,7 +1483,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                     advanced_parameters, group_size_fallback_mode=nncf.GroupSizeFallbackMode(self.group_size_fallback)
                 )
             kwargs["advanced_parameters"] = advanced_parameters
-        scoped_configs = _get_scoped_config_instances(self.scoped_configs)
+        if self.scoped_configs is not None:
+            kwargs["scoped_configs"] = _get_scoped_config_instances(self.scoped_configs)
         result = {
             "mode": mode,
             "ratio": self.ratio,
@@ -1497,7 +1498,6 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             "gptq": self.gptq,
             "lora_correction": self.lora_correction,
             "backup_mode": backup_mode,
-            "scoped_configs": scoped_configs,
             **kwargs,
         }
         return result
