@@ -36,6 +36,7 @@ jobs:
             "*genai*",
             "*export*",
             "*decoder*",
+            "*guard*",
             "*seq2seq*",
             "*tts*",
             "*modeling*",

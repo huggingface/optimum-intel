@@ -247,6 +247,7 @@ from optimum.exporters.openvino.model_patcher import (
     _get_model_attribute,
 )
 from optimum.exporters.openvino.utils import (
+    get_multi_head_token_classification_spec,
     GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE,
     GRANITEMOEHYBRID_MAMBA_LAYER_TYPE,
     LTX2_ROPE_INPUTS,
@@ -474,6 +475,8 @@ class Qwen2MoEOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
         "feature-extraction",
         "feature-extraction-with-past",
         "text-classification",
+        "token-classification",
+        "token-classification-with-past",
     ],
     library_name="transformers",
 )
@@ -502,6 +505,12 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
             use_past_in_inputs=use_past_in_inputs,
             preprocessors=preprocessors,
         )
+        self.multi_head_spec = None
+        if self.task.startswith("token-classification"):
+            self.multi_head_spec = get_multi_head_token_classification_spec(config)
+            if self.multi_head_spec is not None and use_past:
+                self.use_past_in_inputs = True
+                self.stateful = True
         archs = getattr(config, "architectures", None)
         self.dflash = False
         if isinstance(archs, list) and len(archs) > 0:
@@ -547,6 +556,12 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
                 mask_length = "context_length + block_size"
             common_inputs["attention_mask"] = {0: "batch_size", 1: mask_length}
             return common_inputs
+        if self.multi_head_spec is not None:
+            # TextDecoderWithPositionIdsOpenVINOConfig only adds position_ids for generative tasks,
+            # but a streaming token classifier decodes incrementally and needs them just the same.
+            common_inputs = TextDecoderOpenVINOConfig.inputs.fget(self)
+            common_inputs["position_ids"] = {0: "batch_size", 1: "sequence_length"}
+            return common_inputs
         if self.task in ["feature-extraction"]:
             common_inputs = {
                 "input_ids": {0: "batch_size", 1: "sequence_length"},
@@ -565,6 +580,13 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
                 "last_hidden_state": {0: "batch_size", 1: "draft_sequence_length"},
                 **common_outputs,
             }
+        if self.multi_head_spec is not None:
+            common_outputs = OrderedDict(
+                (name, {0: "batch_size", 1: "sequence_length"}) for name in self.multi_head_spec.head_names
+            )
+            if self.use_past:
+                self.add_past_key_values(common_outputs, direction="outputs")
+            return common_outputs
         return super().outputs
 
     def overwrite_shape_and_generate_input(

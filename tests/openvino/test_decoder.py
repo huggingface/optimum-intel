@@ -32,7 +32,10 @@ from utils_tests import (
 from optimum.exporters.openvino.model_patcher import patch_update_causal_mask
 from optimum.exporters.openvino.utils import ONNX_SUPPORTED_ARCHITECTURES
 from optimum.exporters.tasks import TasksManager
-from optimum.intel import OVModelForCausalLM, OVModelForSequenceClassification
+from optimum.intel import (
+    OVModelForCausalLM,
+    OVModelForSequenceClassification,
+)
 from optimum.intel.openvino.utils import _print_compiled_model_properties
 from optimum.intel.pipelines import pipeline as optimum_pipeline
 from optimum.intel.utils.import_utils import (
