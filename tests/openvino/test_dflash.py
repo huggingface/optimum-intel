@@ -153,7 +153,7 @@ class DFlashExportTest(unittest.TestCase):
             model_type, AutoModelForCausalLM, "text-generation", "openvino_model.xml"
         )
 
-    @parameterized.expand(("qwen3_5", "qwen3_5_moe", "gemma4", "minicpmv4_7"))
+    @parameterized.expand(("qwen3_5", "qwen3_5_moe", "gemma4", "minicpmv4_7", "minicpm_ocr"))
     def test_export_hidden_state_locators_for_representative_multi_modal_models(self, model_type):
         if model_type in {"qwen3_5", "qwen3_5_moe"} and not (
             is_transformers_version(">=", "5.2.0") and is_transformers_version("<=", "5.2.99")
@@ -163,6 +163,8 @@ class DFlashExportTest(unittest.TestCase):
             self.skipTest("Gemma 4 hidden-state locator coverage requires Transformers >= 5.5.0")
         if model_type == "minicpmv4_7" and not is_transformers_version(">=", "5.18.0"):
             self.skipTest("MiniCPM-V 4.7 hidden-state locator coverage requires Transformers >= 5.18.0")
+        if model_type == "minicpm_ocr" and not is_transformers_version(">=", "5.21.0"):
+            self.skipTest("MiniCPM-OCR hidden-state locator coverage requires Transformers >= 5.21.0")
 
         self._export_and_assert_hidden_state_locators(
             model_type, AutoModelForImageTextToText, "image-text-to-text", "openvino_language_model.xml"
