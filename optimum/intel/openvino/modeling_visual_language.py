@@ -56,6 +56,7 @@ from optimum.exporters.openvino.utils import save_config
 from optimum.intel.openvino.configuration import OVConfig, OVQuantizationConfigBase, OVWeightQuantizationConfig
 from optimum.intel.openvino.modeling_base import OVBaseModel, OVModelPart
 from optimum.intel.openvino.modeling_decoder import CausalLMOutputWithPast, OVModelForCausalLM
+from optimum.intel.openvino.modeling_dflash import OVDFlashTargetMixin, OVStatefulCacheProxy
 from optimum.intel.openvino.utils import (
     OV_LANGUAGE_MODEL_NAME,
     OV_TEXT_EMBEDDINGS_MODEL_NAME,
@@ -311,6 +312,18 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
         past_key_values = ((),)
         self._past_length += inputs["inputs_embeds"].shape[1]
 
+        # DFlash speculative decoding needs two things a plain forward does not provide:
+        # the target's hidden states at the drafter's `target_layer_ids`, and a cache the
+        # verifier can roll back after a rejected block.
+        dflash_hidden_states = None
+        if getattr(self, "_dflash_hidden_state_names", None):
+            # Keyed like transformers' `hidden_states` tuple (entry 0 is the embeddings), so layer `i` is at `i + 1`.
+            dflash_hidden_states = {
+                layer_id + 1: torch.from_numpy(self.request.get_tensor(name).data).clone().to(self.device)
+                for layer_id, name in zip(self._dflash_layer_ids, self._dflash_hidden_state_names)
+            }
+            past_key_values = OVStatefulCacheProxy(self)
+
         collecting = getattr(self, "_collecting_hidden_states", False)
         hidden_states_out = None
         if collecting and "hidden_states" in self.output_names:
@@ -321,7 +334,10 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
             ihs = self.request.get_tensor("intermediate_hidden_states").data
             intermediate_hidden = torch.from_numpy(ihs).clone().to(self.device)
 
-        result = CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
+        # transformers' `DFlashTokenCandidateGenerator` reads the target's hidden states from `hidden_states`. it is None outside DFlash
+        result = CausalLMOutputWithPast(
+            logits=logits, past_key_values=past_key_values, hidden_states=dflash_hidden_states
+        )
         result.last_hidden_state = hidden_states_out
         result.intermediate_hidden_state = intermediate_hidden
         return result
@@ -847,7 +863,7 @@ MODEL_PARTS_CLS_MAPPING = {
 }
 
 
-class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
+class OVModelForVisualCausalLM(OVBaseModel, OVDFlashTargetMixin, GenerationMixin):
     export_feature = "image-text-to-text"
     additional_parts = []
     auto_model_class = AutoModelForImageTextToText
@@ -8080,9 +8096,10 @@ class _OVMuseGlimmerForCausalLM(OVModelForVisualCausalLM):
     The vision stack is exported as a single graph that consumes flattened patches
     ``pixel_values`` ``[num_patches, patch_dim]`` plus ``image_grid_thw``
     ``[num_images, 3]`` and returns the projected per-token features
-    ``[num_out_tokens, text_hidden]`` (vision tower -> adapter -> projection ->
-    perception norm, with the 2x2 patch merge). Features are scattered into the
-    positions of the ``<image>`` / ``<video>`` tokens in the prompt.
+    ``[num_out_tokens, text_hidden]`` (vision tower -> adapter -> projection, with
+    the 2x2 patch merge). Both embedding IRs return raw features; this class scatters
+    vision features into text features and the language-model IR applies their shared
+    RMS normalization.
     """
 
     def get_experts_implementation(self):
@@ -8125,9 +8142,13 @@ class _OVMuseGlimmerForCausalLM(OVModelForVisualCausalLM):
     ):
         inputs_embeds = self.get_text_embeddings(input_ids)
         inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
-        is_prefill = input_ids is not None and input_ids.shape[1] != 1
-        # Images and videos share the same vision graph (video_grid_thw plays the role
-        # of image_grid_thw); each modality is scattered into its own placeholder token.
+        # An empty KV cache identifies the prefill. The token count does not: under
+        # speculative decoding a continuation step verifies a whole block at once.
+        past_key_values = kwargs.get("past_key_values")
+        is_prefill = past_key_values is None or self.language_model._get_past_length(past_key_values) == 0
+        # Both component IRs return raw features. Images and videos share the same vision
+        # graph (video_grid_thw plays the role of image_grid_thw); each modality is
+        # scattered into its placeholder token before the language model normalizes rows.
         if is_prefill and pixel_values is not None:
             image_embeds = self.get_vision_embeddings(pixel_values, input_ids=input_ids, image_grid_thw=image_grid_thw)
             if image_embeds is not None:
@@ -8165,10 +8186,12 @@ class _OVMuseGlimmerForCausalLM(OVModelForVisualCausalLM):
         content.append({"type": "text", "text": text})
         messages = [{"role": "user", "content": content}]
         prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        # The chat template already starts with BOS; the tokenizer would add a second one.
         inputs = processor(
             text=prompt,
             images=[image] if image is not None else None,
             videos=[video] if video is not None else None,
+            add_special_tokens=False,
             return_tensors="pt",
         )
         return inputs
