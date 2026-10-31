@@ -316,6 +316,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "qwen3_omni_moe_talker_text",
             "muse_glimmer_text",
         }
+        # muse_glimmer_assistant is a DFlash drafter without an lm_head, tested in test_dflash.py and test_genai.py
+        supported_architectures.discard("muse_glimmer_assistant")
 
         supported_architectures -= ONNX_SUPPORTED_ARCHITECTURES
         untested_architectures = supported_architectures - tested_architectures

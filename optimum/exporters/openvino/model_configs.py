@@ -2589,7 +2589,7 @@ class MuseGlimmerOpenVINOConfig(BaseVLMOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "5.15.0"
     # TODO: transformers 5.16+ changed the MuseGlimmer vision RoPE and attention shapes that the vision-embeddings
     # patcher replicates; port the patcher, then drop this cap
-    MAX_TRANSFORMERS_VERSION = "5.15.99"
+    MAX_TRANSFORMERS_VERSION = "5.15.1"
 
     def __init__(
         self,
