@@ -989,6 +989,7 @@ ARCH_TO_MODEL_CLASS = {
     "ltx-video": "OVLTXPipeline",
     "ltx2": "OVLTX2Pipeline",
     "ltx2.3": "OVLTX2Pipeline",
+    "ltx2.5": "OVLTX2Pipeline",
     "qwenimage": "OVQwenImagePipeline",
     "sana": "OVSanaPipeline",
     "sana-sprint": "OVSanaPipeline",
