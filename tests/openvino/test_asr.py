@@ -482,10 +482,23 @@ class OVASRTest(unittest.TestCase):
         short_audio = long_audio[: 16000 * 4]
 
         generate_kwargs = {"max_new_tokens": 8, "do_sample": False, "num_beams": 2}
+
+        # Noise audio can yield identical tokens even with a misaligned mask, so also check the shapes the decoder gets
+        mismatched_shapes = []
+        decoder_forward = model.decoder.forward
+
+        def checked_decoder_forward(*args, **kwargs):
+            states, encoder_mask = kwargs["encoder_hidden_states"], kwargs.get("encoder_attention_mask")
+            if encoder_mask is not None and encoder_mask.shape[0] != states.shape[0]:
+                mismatched_shapes.append((tuple(states.shape), tuple(encoder_mask.shape)))
+            return decoder_forward(*args, **kwargs)
+
+        model.decoder.forward = checked_decoder_forward
         batched_inputs = processor([long_audio, short_audio], language="en", sampling_rate=16000, return_tensors="pt")
         batched_inputs.pop("audio_chunk_index", None)
         batched_tokens = model.generate(**batched_inputs, **generate_kwargs)
         self.assertEqual(batched_tokens.shape[0], 2)
+        self.assertEqual(mismatched_shapes, [])
 
         for row, audio in enumerate([long_audio, short_audio]):
             single_inputs = processor(audio, language="en", sampling_rate=16000, return_tensors="pt")
