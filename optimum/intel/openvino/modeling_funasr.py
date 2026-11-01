@@ -480,11 +480,26 @@ class _OVModelForFunAsr(OVModelForSpeechSeq2Seq):
                 num_encoder_features = enc_hidden.shape[1]
                 current_audio_count = (decoder_input_ids == audio_token_id).sum(dim=-1).max().item()
                 if current_audio_count > 0 and current_audio_count != num_encoder_features:
-                    decoder_input_ids = self._adjust_audio_tokens(
-                        decoder_input_ids, audio_token_id, num_encoder_features
-                    )
-                    if decoder_attention_mask is not None:
-                        decoder_attention_mask = torch.ones_like(decoder_input_ids)
+                    if num_encoder_features > current_audio_count:
+                        # Native FunASR splices only the first `fake_token_len` adaptor frames
+                        # (== the number of audio placeholder tokens in the prompt) into the LLM
+                        # input embeddings. The exported encoder emits the full (longer) feature
+                        # sequence, so truncate it to the placeholder count to match native; feeding
+                        # the extra frames misaligns the audio conditioning and can make the decoder
+                        # run away into repetition loops on some utterances.
+                        enc_hidden = enc_hidden[:, :current_audio_count]
+                        if hasattr(encoder_outputs, "last_hidden_state"):
+                            encoder_outputs.last_hidden_state = enc_hidden
+                        else:
+                            encoder_outputs = (enc_hidden, *tuple(encoder_outputs[1:]))
+                    else:
+                        # Fewer encoder features than placeholders: shrink the placeholder run to
+                        # match the available audio features.
+                        decoder_input_ids = self._adjust_audio_tokens(
+                            decoder_input_ids, audio_token_id, num_encoder_features
+                        )
+                        if decoder_attention_mask is not None:
+                            decoder_attention_mask = torch.ones_like(decoder_input_ids)
 
         return super().forward(
             input_features=input_features,

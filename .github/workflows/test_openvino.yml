@@ -37,6 +37,7 @@ jobs:
             "*export*",
             "*decoder*",
             "*seq2seq*",
+            "*tts*",
             "*modeling*",
             "*diffusion*",
             "*quantization*",

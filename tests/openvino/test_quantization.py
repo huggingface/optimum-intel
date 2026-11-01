@@ -79,6 +79,7 @@ from optimum.intel.openvino.configuration import (
     _DEFAULT_8BIT_WQ_CONFIGS,
     _quantization_config_from_dict,
     _GPTOSSQuantizationConfig,
+    _MiniCPMOCRQuantizationConfig,
 )
 from optimum.intel.openvino.modeling_visual_language import _OVNanoLlavaForCausalLM
 from optimum.intel.openvino.utils import TemporaryDirectory
@@ -1200,6 +1201,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForVisualCausalLM, "mistral3", False),
         (OVModelForVisualCausalLM, "ministral3", False),
         (OVModelForVisualCausalLM, "minicpmv4_7", False),
+        (OVModelForVisualCausalLM, "minicpm_ocr", False),
     ]
 
     # gemma3n openvino>=2026.2.0 because it needs erfinv operation,
@@ -2384,6 +2386,12 @@ class OVQuantizationConfigTest(unittest.TestCase):
                 quantization_config2=OVWeightQuantizationConfig(bits=8),
             ),
         ),
+        (
+            _MiniCPMOCRQuantizationConfig(
+                first_stage=OVWeightQuantizationConfig(bits=4, group_size=16, dataset="wikitext2", num_samples=2),
+                second_stage=OVWeightQuantizationConfig(bits=8, weight_only=True),
+            ),
+        ),
     )
 
     QUANTIZATION_CONFIG_DICTS = (
@@ -2487,6 +2495,16 @@ class OVQuantizationConfigTest(unittest.TestCase):
             _GPTOSSQuantizationConfig,
             None,
         ),
+        (
+            dict(
+                config_class="minicpm_ocr",
+                first_stage=dict(bits=4, group_size=16, dataset="wikitext2"),
+                second_stage=dict(bits=8, weight_only=True),
+            ),
+            _MiniCPMOCRQuantizationConfig,
+            None,
+        ),
+        (dict(config_class="minicpm_ocr"), _MiniCPMOCRQuantizationConfig, None),
     )
 
     QUANTIZATION_CONFIGS_WITH_KWARGS = (

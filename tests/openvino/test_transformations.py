@@ -346,6 +346,30 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "ConvertToSwishCPU",
         ],
     },
+    "minicpm_ocr": {
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+            "CommonFusions",
+            "TransposeConvert",
+        ],
+        "compile": [
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "CommonDecompositions",
+            "MultiplyFusions",
+            "ConvertSoftMax8ToSoftMax1",
+            "ConvertBroadcast3",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "RMSFusion",
+            "GatedDeltaNetFusion",
+            "ConvertMatMulToFC",
+            "ConvertToSwishCPU",
+        ],
+    },
     "deepseek_ocr2": {
         "model_class": "OVModelForVisualCausalLM",
         "convert": [

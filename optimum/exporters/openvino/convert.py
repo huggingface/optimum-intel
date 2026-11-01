@@ -138,6 +138,15 @@ def _set_runtime_options(
         # misses them. Without the scale the code predictor logits overflow fp16 on GPU.
         if library_name == "qwen3_tts" and model_name in ("talker_model", "code_predictor_model"):
             sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "8.0"
+        # The Fun-ASR-Nano decoder overflows fp16 on GPU and only emits token 0 without activation
+        # scaling. The GPU plugin ignores the default 8.0 written above for LLM-like (KV-cache) models,
+        # so use a non-default value that the plugin applies (openvinotoolkit/openvino#39233).
+        if (
+            library_name == "funasr"
+            and model_name == DECODER_NAME
+            and getattr(getattr(sub_export_config, "_config", None), "export_model_type", None) == "fun_asr"
+        ):
+            sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "4.0"
 
 
 def _save_model(
@@ -1124,6 +1133,11 @@ def _get_multi_modal_submodels_and_export_configs(
         model.config.glb_GN = model.model.embed_tokens_extend.image_embed.global_img_feature_extensor.tolist()
         model.config.sub_GN = model.model.embed_tokens_extend.image_embed.sub_img_feature_extensor.tolist()
         model.config.num_img_tokens = model.model.embed_tokens_extend.image_embed.num_img_tokens
+
+    if task == "text-classification":
+        # the checkpoint config can name the generative class (e.g. ms-swift seq_cls checkpoints of Qwen3.5), while the
+        # exported language model ends in the classification head
+        model.config.architectures = [model.__class__.__name__]
 
     if hasattr(model, "image_newline"):
         model.config.image_newline = model.image_newline.tolist()
