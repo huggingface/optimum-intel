@@ -21,12 +21,14 @@ import pytest
 import torch
 from parameterized import parameterized
 from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, set_seed
+from transformers.generation import GenerationMixin
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
 from transformers.testing_utils import slow
 from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, REMOTE_CODE_MODELS, SEED
 
 from optimum.exporters.openvino.stateful import model_has_state
 from optimum.intel import OVModelForSpeechSeq2Seq
+from optimum.intel.openvino.modeling_seq2seq import OVEncoderOutput, _OVModelForCohereAsr, _register_for_asr_pipeline
 from optimum.intel.utils.import_utils import is_transformers_version
 
 
@@ -324,6 +326,62 @@ class OVASRTest(unittest.TestCase):
 
         del model
         gc.collect()
+
+    @pytest.mark.run_slow
+    @slow
+    @pytest.mark.skipif("cohere_asr" not in CONFIG_MAPPING_NAMES, reason="cohere_asr requires a newer transformers")
+    def test_cohere_asr_beam_search_padded_batch_matches_single(self):
+        # Beam search repeats the encoder states for every beam, so the subsampled mask has to be repeated
+        # with them or cross attention sees a mask of the wrong batch size
+        model_id = MODEL_NAMES["cohere_asr"]
+        model = OVModelForSpeechSeq2Seq.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
+        processor = AutoProcessor.from_pretrained(model_id)
+
+        np.random.seed(SEED)
+        long_audio = (np.random.randn(16000 * 9).astype(np.float32)) * 0.01
+        short_audio = long_audio[: 16000 * 4]
+
+        generate_kwargs = {"max_new_tokens": 8, "do_sample": False, "num_beams": 2}
+        batched_inputs = processor([long_audio, short_audio], language="en", sampling_rate=16000, return_tensors="pt")
+        batched_inputs.pop("audio_chunk_index", None)
+        batched_tokens = model.generate(**batched_inputs, **generate_kwargs)
+        self.assertEqual(batched_tokens.shape[0], 2)
+
+        for row, audio in enumerate([long_audio, short_audio]):
+            single_inputs = processor(audio, language="en", sampling_rate=16000, return_tensors="pt")
+            single_inputs.pop("audio_chunk_index", None)
+            single_tokens = model.generate(**single_inputs, **generate_kwargs)
+            common_length = min(batched_tokens.shape[1], single_tokens.shape[1])
+            self.assertTrue(
+                torch.equal(batched_tokens[row : row + 1, :common_length], single_tokens[:, :common_length])
+            )
+
+        del model
+        gc.collect()
+
+    def test_encoder_output_attention_mask_is_expanded_for_beam_search(self):
+        batch_size, num_beams, num_frames = 2, 2, 5
+        encoder_outputs = OVEncoderOutput(
+            last_hidden_state=torch.randn(batch_size, num_frames, 4),
+            attention_mask=torch.ones(batch_size, num_frames, dtype=torch.long),
+        )
+        _, model_kwargs = GenerationMixin._expand_inputs_for_generation(
+            expand_size=num_beams,
+            is_encoder_decoder=True,
+            input_ids=torch.zeros(batch_size, 1, dtype=torch.long),
+            encoder_outputs=encoder_outputs,
+        )
+        expanded = model_kwargs["encoder_outputs"]
+        self.assertEqual(expanded.last_hidden_state.shape[0], batch_size * num_beams)
+        self.assertEqual(expanded.attention_mask.shape[0], batch_size * num_beams)
+
+    def test_asr_pipeline_registration_is_limited_to_cohere_asr_class(self):
+        from transformers.models.auto.modeling_auto import MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES
+
+        _register_for_asr_pipeline(_OVModelForCohereAsr)
+        registered_names = set(MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES.values())
+        self.assertIn(_OVModelForCohereAsr.__name__, registered_names)
+        self.assertNotIn(OVModelForSpeechSeq2Seq.__name__, registered_names)
 
     @pytest.mark.run_slow
     @slow

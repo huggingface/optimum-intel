@@ -14,6 +14,7 @@
 import logging
 import os
 import warnings
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -868,6 +869,17 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         return quantization_config
 
 
+@dataclass
+class OVEncoderOutput(BaseModelOutput):
+    """
+    `BaseModelOutput` that also carries the attention mask matching `last_hidden_state`, for encoders that change
+    the sequence length. It is a dataclass field rather than a plain attribute so that `generate()` expands it
+    together with `last_hidden_state` for beam search.
+    """
+
+    attention_mask: Optional[torch.Tensor] = None
+
+
 class OVEncoder(OVModelPart):
     def __init__(
         self,
@@ -962,16 +974,14 @@ class OVEncoder(OVModelPart):
         # Run inference
         request_outputs = self.request(inputs, share_inputs=True, share_outputs=True)
         last_hidden_state = torch.from_numpy(request_outputs["last_hidden_state"]).to(self.device)
-        encoder_outputs = BaseModelOutput(last_hidden_state=last_hidden_state)
 
         # Encoders that subsample the time axis hand back the mask that goes with the shortened
         # states, which is the one cross attention needs rather than the one that came in
         if "encoder_attention_mask" in self.output_names:
-            encoder_outputs.attention_mask = torch.from_numpy(request_outputs["encoder_attention_mask"]).to(
-                self.device
-            )
+            encoder_attention_mask = torch.from_numpy(request_outputs["encoder_attention_mask"]).to(self.device)
+            return OVEncoderOutput(last_hidden_state=last_hidden_state, attention_mask=encoder_attention_mask)
 
-        return encoder_outputs
+        return BaseModelOutput(last_hidden_state=last_hidden_state)
 
 
 class OVDecoder(OVModelPart):
@@ -1540,6 +1550,8 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
 
             config.is_encoder_decoder = True
             return _OVModelForFunAsr._from_pretrained(model_id, config, **kwargs)
+        if getattr(config, "model_type", None) == "cohere_asr":
+            return _OVModelForCohereAsr._from_pretrained(model_id, config, **kwargs)
         if getattr(config, "model_type", None) == "qwen3_asr":
             config.is_encoder_decoder = True
         return super()._from_pretrained(model_id, config, **kwargs)
@@ -1654,19 +1666,32 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
         return logits_processor
 
 
-def _register_ov_speech_seq2seq_for_pipeline_autodetection():
-    """Let transformers pipelines recognise `OVModelForSpeechSeq2Seq` as a seq2seq ASR model.
+class _OVModelForCohereAsr(OVModelForSpeechSeq2Seq):
+    @classmethod
+    def _from_pretrained(
+        cls,
+        model_id: Union[str, Path],
+        config: "PretrainedConfig",
+        **kwargs,
+    ):
+        _register_for_asr_pipeline(cls)
+        return super(OVModelForSpeechSeq2Seq, cls)._from_pretrained(model_id, config, **kwargs)
 
-    `AutomaticSpeechRecognitionPipeline` classifies models by class name and treats anything it
-    does not know as CTC, which calls the model directly instead of going through generate()."""
+
+def _register_for_asr_pipeline(model_class):
+    """
+    `AutomaticSpeechRecognitionPipeline` picks the seq2seq path from the class name of the model and treats any other
+    class as CTC, which calls the model directly instead of `generate()`. Only the name of `model_class` is added, so
+    other OpenVINO ASR models are not affected.
+    """
     try:
         from transformers.models.auto.modeling_auto import MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES
     except ImportError:
+        logger.warning(
+            f"Could not register {model_class.__name__} for transformers ASR pipelines, "
+            "call `generate()` on the model directly instead."
+        )
         return
 
-    # Whisper is matched on model_type instead, so only the other architectures need this entry
-    if OVModelForSpeechSeq2Seq.__name__ not in MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES.values():
-        MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES["_optimum_intel_ov_speech_seq2seq"] = OVModelForSpeechSeq2Seq.__name__
-
-
-_register_ov_speech_seq2seq_for_pipeline_autodetection()
+    if model_class.__name__ not in MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES.values():
+        MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES[f"_optimum_intel_{model_class.__name__}"] = model_class.__name__
