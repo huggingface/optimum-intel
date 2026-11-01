@@ -53,7 +53,11 @@ class OVQuantizationMethod(str, Enum):
     AWQ = "awq"
 
 
-# Default configs for 4-bit weight quantization
+# Default configs for {2,3,4}-bit weight quantization
+_DEFAULT_2BIT_WQ_CONFIGS = {}
+
+_DEFAULT_3BIT_WQ_CONFIGS = {}
+
 _DEFAULT_4BIT_WQ_CONFIGS = {
     "databricks/dolly-v2-3b": {
         "bits": 4,
@@ -470,12 +474,40 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "group_size_fallback": "adjust",
     },
     "google/gemma-4-E4B-it": {
-        "bits": 4,
-        "sym": False,
-        "group_size": 64,
-        "dataset": "textvqa",
-        "quant_method": OVQuantizationMethod.AWQ,
-        "scale_estimation": True,
+        "quantization_configs": {
+            "lm_model": {
+                "bits": 4,
+                "sym": False,
+                "group_size": 64,
+                "dataset": "textvqa",
+                "quant_method": OVQuantizationMethod.AWQ,
+                "scale_estimation": True,
+            },
+            "audio_embeddings_model": {
+                "bits": 4,
+                "sym": False,
+                "group_size": 64,
+            },
+        },
+        "default_config": {"bits": 8, "sym": True, "weight_only": True},
+    },
+    "google/gemma-4-E2B-it": {
+        "quantization_configs": {
+            "lm_model": {
+                "bits": 4,
+                "sym": False,
+                "group_size": 64,
+                "dataset": "textvqa",
+                "quant_method": OVQuantizationMethod.AWQ,
+                "scale_estimation": True,
+            },
+            "audio_embeddings_model": {
+                "bits": 4,
+                "sym": False,
+                "group_size": 64,
+            },
+        },
+        "default_config": {"bits": 8, "sym": True, "weight_only": True},
     },
     "Qwen/Qwen3.5-35B-A3B": {
         "quantization_configs": {
@@ -534,6 +566,36 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
             "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
         },
     },
+    "openbmb/MiniCPM-V-4.7-1B": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 1.0,
+        "dataset": "gsm8k",
+        "scale_estimation": True,
+    },
+    # Teacher-forced top-1 agreement with the bf16 model on text-only / image / video answers: 93.8% vs 93.0% with the
+    # generic int4 config (group size 128); int8 reaches 97.8%.
+    "openbmb/MiniCPM-V-4.7-35B-A3B": {
+        "quantization_configs": {
+            "lm_model": {
+                "bits": 4,
+                "sym": False,
+                "backup_precision": "int8_sym",
+                "group_size": 64,
+            },
+            "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
+            "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
+        },
+    },
+    "openbmb/MiniCPM-OCR-1.0": {
+        "quantization_configs": {
+            # Two-stage int4 + int8 compression, see `_MiniCPMOCRQuantizationConfig`
+            "lm_model": {"config_class": "minicpm_ocr"},
+            "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
+            "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
+        },
+    },
     "openbmb/MiniCPM5-2B": {
         "bits": 4,
         "sym": False,
@@ -542,10 +604,22 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "dataset": "gsm8k",
         "scale_estimation": True,
     },
+    "BAAI/bge-reranker-v2-m3": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 32,
+        "ratio": 0.9,
+    },
 }
 
 _DEFAULT_8BIT_WQ_CONFIGS = {
     "Qwen/Qwen2.5-Coder-3B-Instruct": {"bits": 8, "sym": False, "dq_group_size": 128},
+    "diffusers/LTX-2.3-Diffusers": {
+        "quantization_configs": {
+            "transformer": {"bits": 8, "sym": False, "weight_only": True},
+            "text_encoder": {"bits": 8, "sym": False, "weight_only": True},
+        },
+    },
 }
 
 # Add configs for model id aliases
@@ -557,12 +631,34 @@ model_id_aliases = [
 for m_id_1, m_id_2 in model_id_aliases:
     _DEFAULT_4BIT_WQ_CONFIGS[m_id_2] = _DEFAULT_4BIT_WQ_CONFIGS[m_id_1]
 
+
+_DEFAULT_2BIT_WQ_CONFIG = {
+    "bits": 2,
+    "ratio": 1.0,
+    "sym": True,  # only sym is supported
+    "group_size": 64,
+    "all_layers": None,
+    "group_size_fallback": "ignore",
+}
+
+
+_DEFAULT_3BIT_WQ_CONFIG = {
+    "bits": 3,
+    "ratio": 1.0,
+    "sym": True,  # only sym is supported
+    "group_size": 64,
+    "all_layers": None,
+    "group_size_fallback": "ignore",
+}
+
+
 _DEFAULT_4BIT_WQ_CONFIG = {
     "bits": 4,
     "ratio": 1.0,
     "sym": False,
     "group_size": 128,
     "all_layers": None,
+    "group_size_fallback": "ignore",
 }
 
 
@@ -724,7 +820,11 @@ def get_default_quantization_config(
     if weight_format is None and quant_mode is None:
         raise ValueError("Either `weight_format` or `quant_mode` must be provided.")
 
-    if weight_format == "int4":
+    if weight_format == "int2":
+        default_configs_dict = _DEFAULT_2BIT_WQ_CONFIGS
+    elif weight_format == "int3":
+        default_configs_dict = _DEFAULT_3BIT_WQ_CONFIGS
+    elif weight_format == "int4":
         default_configs_dict = _DEFAULT_4BIT_WQ_CONFIGS
     elif weight_format == "int8":
         default_configs_dict = _DEFAULT_8BIT_WQ_CONFIGS
@@ -998,7 +1098,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             Indicates whether to apply a scale estimation algorithm that minimizes the L2 error between the original and
             compressed layers. Providing a dataset is required to run scale estimation.
         dtype (`str`, *optional*):
-            Data type weights are compressed to. Possible values: ['int4', 'int8', 'mxfp4', 'nf4', 'cb4'].
+            Data type weights are compressed to. Possible values: ['int2', 'int3', 'int4', 'int8', 'mxfp4', 'nf4', 'cb4'].
             Option 'cb4' represents a codebook with 16 fixed fp8 values in E4M3 format.
         qptq (`bool`, *optional*):
             Whether to apply GPTQ algorithm. GPTQ optimizes compressed weights in a layer-wise fashion to minimize the
@@ -1027,8 +1127,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             the statistics path to avoid confusion.
         group_size_fallback (`str`, *optional*):
             Defines the behavior when the specified group size is not compatible with the weight shape. Possible values:
-            - "error": raises an error if the group size is not compatible with the weight shape (default);
-            - "ignore": skips quantization for the layers where the group size is not compatible with the weight shape;
+            - "error": raises an error if the group size is not compatible with the weight shape;
+            - "ignore": skips quantization for the layers where the group size is not compatible with the weight shape (default);
             - "adjust": automatically adjusts the group size to the maximum compatible value for each weight tensor,
                 if there is no valid value greater than or equal to 32, then the node is quantized to the backup precision
                 which is int8_asym by default.
@@ -1145,16 +1245,17 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                 "quantization algorithm is selected and compression ratio is 1.0."
             )
 
-        if self.dtype in ["int4", "int8"]:
-            bits = 4 if self.dtype == "int4" else 8
+        if self.dtype in ["int2", "int3", "int4", "int8"]:
+            bits = {"int2": 2, "int3": 3, "int4": 4, "int8": 8}[self.dtype]
+
             if self.bits is not None and self.bits != bits:
                 logger.warning(
                     f"Overriding `bits` parameter to the value `bits`={bits} to match the given {self.dtype} `dtype`."
                 )
             self.bits = bits
 
-        if self.bits not in [4, 8]:
-            raise ValueError(f"Only support quantization to [4,8] bits but found {self.bits}")
+        if self.bits not in [2, 3, 4, 8]:
+            raise ValueError(f"Only support quantization to [2,3,4,8] bits but found {self.bits}")
 
         if self.bits == 8 and self.dtype:
             if self.ratio != 1:
@@ -1203,11 +1304,12 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             raise ValueError(f"Processor is expected to be a string, but found {self.processor}")
 
         if self.dtype is None:
-            self.dtype = "int4" if self.bits == 4 else "int8"
-        if self.dtype not in ["int4", "int8", "mxfp4", "nf4", "cb4"]:
+            self.dtype = {2: "int2", 3: "int3", 4: "int4", 8: "int8"}[self.bits]
+
+        if self.dtype not in ["int2", "int3", "int4", "int8", "mxfp4", "nf4", "cb4"]:
             raise ValueError(
                 "Weights quantization data type must be one of the following: "
-                f"['int4', 'int8', 'mxfp4', 'nf4', 'cb4'], but found: {self.dtype}."
+                f"['int2', 'int3', 'int4', 'int8', 'mxfp4', 'nf4', 'cb4'], but found: {self.dtype}."
             )
         if self.dtype in ["mxfp4", "nf4", "cb4"]:
             if self.bits != 4:
@@ -1238,7 +1340,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         Returns a dictionary with the variables that are ready to use for nncf.quantize() call.
         """
 
-        signed_bitness = {4: "int4", 8: "int8"}
+        signed_bitness = {2: "int2", 3: "int3", 4: "int4", 8: "int8"}
         mode = self.dtype if self.dtype else signed_bitness[self.bits]
         if mode in signed_bitness.values():
             mode += "_sym" if self.sym else "_asym"
@@ -1505,6 +1607,8 @@ class OVConfig(BaseConfig):
             dtype = "_".join(dtypes)
         elif isinstance(quantization_config, _GPTOSSQuantizationConfig):
             dtype = "int4"
+        elif isinstance(quantization_config, _MiniCPMOCRQuantizationConfig):
+            dtype = quantization_config.first_stage.dtype
         else:
             raise ValueError(f"Unsupported type of quantization config: {type(quantization_config)}")
         return dtype
@@ -1744,6 +1848,52 @@ class _GPTOSSQuantizationConfig(QuantizationConfigMixin):
         return result
 
 
+class _MiniCPMOCRQuantizationConfig(OVQuantizationConfigBase):
+    CONFIG_CLASS = "minicpm_ocr"
+
+    # Settings of the two compression passes for the language model of openbmb/MiniCPM-OCR-1.0
+    DEFAULT_FIRST_STAGE = {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 1.0,
+        "dataset": "textvqa",
+        "num_samples": 32,
+        "quant_method": OVQuantizationMethod.AWQ,
+        "scale_estimation": True,
+        # MLP weights are kept in original precision at the first stage and quantized to int8 at the second
+        "ignored_scope": {"patterns": [".*mlp\\.(gate_proj|up_proj|down_proj)/.*"]},
+    }
+    DEFAULT_SECOND_STAGE = {"bits": 8, "sym": False, "weight_only": True}
+
+    def __init__(
+        self,
+        first_stage: Optional[Union[Dict, OVWeightQuantizationConfig]] = None,
+        second_stage: Optional[Union[Dict, OVWeightQuantizationConfig]] = None,
+        **kwargs,
+    ):
+        """Two-pass weight compression config for the language model of openbmb/MiniCPM-OCR-1.0."""
+        kwargs.pop("config_class", None)
+        first_stage = self.DEFAULT_FIRST_STAGE if first_stage is None else first_stage
+        second_stage = self.DEFAULT_SECOND_STAGE if second_stage is None else second_stage
+        if isinstance(first_stage, dict):
+            first_stage = OVWeightQuantizationConfig.from_dict(copy.deepcopy(first_stage))
+        if isinstance(second_stage, dict):
+            second_stage = OVWeightQuantizationConfig.from_dict(copy.deepcopy(second_stage))
+        self.first_stage, self.second_stage = first_stage, second_stage
+        # Calibration data related parameters are taken from the first stage
+        for field in ("dataset", "num_samples", "tokenizer", "processor", "_dataset_kwargs"):
+            kwargs.setdefault(field, getattr(self.first_stage, field))
+        super().__init__(**kwargs)
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = super().to_dict()
+        result["config_class"] = self.CONFIG_CLASS
+        result["first_stage"] = self.first_stage.to_dict()
+        result["second_stage"] = self.second_stage.to_dict()
+        return result
+
+
 def _quantization_config_from_dict(config_dict: Dict[str, Any]) -> OVQuantizationConfigBase:
     """
     Helper function to create a quantization config from a dictionary.
@@ -1756,6 +1906,10 @@ def _quantization_config_from_dict(config_dict: Dict[str, Any]) -> OVQuantizatio
     # Check for OVPipelineQuantizationConfig
     if "quantization_configs" in config_dict:
         return OVPipelineQuantizationConfig.from_dict(config_dict)
+
+    # Check for MiniCPM-OCR quantization config
+    if config_dict.get("config_class") == _MiniCPMOCRQuantizationConfig.CONFIG_CLASS:
+        return _MiniCPMOCRQuantizationConfig.from_dict(config_dict)
 
     # Check for GPT-OSS quantization config
     if "quantization_config1" in config_dict and "quantization_config2" in config_dict:

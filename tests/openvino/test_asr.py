@@ -24,7 +24,7 @@ from transformers import AutoModelForSpeechSeq2Seq, AutoProcessor, set_seed
 from transformers.generation import GenerationMixin
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
 from transformers.testing_utils import slow
-from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, REMOTE_CODE_MODELS, SEED
+from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, SEED
 
 from optimum.exporters.openvino.stateful import model_has_state
 from optimum.intel import OVModelForSpeechSeq2Seq
@@ -40,10 +40,11 @@ class OVASRTest(unittest.TestCase):
     (non trust-remote-code) model with export edge cases the other architectures don't hit.
     """
 
-    SUPPORTED_ARCHITECTURES = ()
-    # Qwen3-ASR and FunASR are trust-remote-code models we currently support only for transformers==4.57
+    # Qwen3-ASR, FunASR and SenseVoice are trust-remote-code models we currently support only for transformers==4.57
+    REMOTE_CODE_ARCHITECTURES = ()
     if is_transformers_version(">=", "4.57") and is_transformers_version("<", "4.58"):
-        SUPPORTED_ARCHITECTURES += ("qwen3_asr", "fun_asr")
+        REMOTE_CODE_ARCHITECTURES += ("qwen3_asr", "fun_asr", "sense_voice")
+    SUPPORTED_ARCHITECTURES = REMOTE_CODE_ARCHITECTURES
     if "cohere_asr" in CONFIG_MAPPING_NAMES:
         SUPPORTED_ARCHITECTURES += ("cohere_asr",)
 
@@ -70,9 +71,14 @@ class OVASRTest(unittest.TestCase):
         # Generate with OV model using the exact PT-produced inputs.
         ov_gen_kwargs = {
             "input_features": ref["input_features"],
-            "decoder_input_ids": ref["decoder_input_ids"],
             **ref["gen_kwargs"],
         }
+        if ref.get("decoder_input_ids") is not None:
+            ov_gen_kwargs["decoder_input_ids"] = ref["decoder_input_ids"]
+
+        if ref.get("speech_lengths") is not None:
+            ov_gen_kwargs["speech_lengths"] = ref["speech_lengths"]
+
         if ref["attention_mask"] is not None:
             ov_gen_kwargs["attention_mask"] = ref["attention_mask"]
 
@@ -80,7 +86,10 @@ class OVASRTest(unittest.TestCase):
         if hasattr(ov_generated_ids, "sequences"):
             ov_generated_ids = ov_generated_ids.sequences
 
-        prompt_len = ref["decoder_input_ids"].shape[1]
+        if ref.get("decoder_input_ids") is not None:
+            prompt_len = ref["decoder_input_ids"].shape[1]
+        else:
+            prompt_len = None
         ov_text = ref["decode_fn"](ov_generated_ids, prompt_len)
 
         self.assertEqual(ref["pt_text"], ov_text)
@@ -94,15 +103,146 @@ class OVASRTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         set_seed(SEED)
         ref = self._get_pt_reference(model_arch)
-        self._compare_generated_text(model_id, ref, trust_remote_code=model_arch in REMOTE_CODE_MODELS)
+        self._compare_generated_text(model_id, ref, trust_remote_code=model_arch in self.REMOTE_CODE_ARCHITECTURES)
+
+    @parameterized.expand(REMOTE_CODE_ARCHITECTURES, skip_on_empty=True)
+    def test_compile_false(self, model_arch):
+        model_id = MODEL_NAMES[model_arch]
+        set_seed(SEED)
+
+        ref = self._get_pt_reference(model_arch)
+
+        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
+            model_id,
+            export=True,
+            trust_remote_code=True,
+            ov_config=F32_CONFIG,
+            device=OPENVINO_DEVICE,
+            compile=False,
+        )
+
+        ov_gen_kwargs = {"input_features": ref["input_features"], **ref["gen_kwargs"]}
+        if ref.get("decoder_input_ids") is not None:
+            ov_gen_kwargs["decoder_input_ids"] = ref["decoder_input_ids"]
+        if ref.get("speech_lengths") is not None:
+            ov_gen_kwargs["speech_lengths"] = ref["speech_lengths"]
+        if ref["attention_mask"] is not None:
+            ov_gen_kwargs["attention_mask"] = ref["attention_mask"]
+
+        ov_generated_ids = ov_model.generate(**ov_gen_kwargs)
+        if hasattr(ov_generated_ids, "sequences"):
+            ov_generated_ids = ov_generated_ids.sequences
+
+        prompt_len = ref["decoder_input_ids"].shape[1] if ref.get("decoder_input_ids") is not None else None
+        ov_text = ref["decode_fn"](ov_generated_ids, prompt_len)
+        self.assertEqual(ref["pt_text"], ov_text)
+
+        del ref["pt_model"]
+        del ov_model
+        gc.collect()
+
+    @pytest.mark.skipif(
+        is_transformers_version("<", "4.57") or is_transformers_version(">=", "4.58"),
+        reason="Currently, we support Qwen3-ASR and FunASR only for transformers==4.57 since they are trust-remote-code models.",
+    )
+    def test_fun_asr_audio_features_truncated_to_prompt_length(self):
+        """Regression test for the FunASR OpenVINO decoder runaway / WER inflation.
+
+        The exported audio encoder emits one feature per frame, which can be longer than the
+        number of audio placeholder tokens the prompt reserves (``fake_token_len`` in native
+        FunASR). Native inference splices only the first ``fake_token_len`` adaptor frames into
+        the LLM input embeddings. The OpenVINO path used to instead *expand* the audio
+        placeholder run up to the full encoder length, feeding extra, misaligned audio frames
+        into the decoder. On some utterances this made greedy decoding fall into a repetition
+        loop (e.g. "shame on you ... on you on you ...") and inflated WER. The fix truncates the
+        encoder features to the prompt's placeholder count; this test asserts that invariant.
+        """
+        from optimum.intel.openvino import modeling_seq2seq
+
+        model_id = MODEL_NAMES["fun_asr"]
+        set_seed(SEED)
+        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
+            model_id, export=True, trust_remote_code=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+        audio_token_id = getattr(ov_model.config, "audio_token_id", 0)
+
+        audio_data, sample_rate = self._generate_audio_data()
+        inputs = ov_model.preprocess_input(audio_data, sample_rate, language="中文")
+        input_features = inputs["input_features"]
+
+        # Number of audio feature frames produced by the exported encoder.
+        encoder_outputs = ov_model.encoder(input_ids=input_features)
+        enc_hidden = (
+            encoder_outputs.last_hidden_state if hasattr(encoder_outputs, "last_hidden_state") else encoder_outputs[0]
+        )
+        num_encoder_features = enc_hidden.shape[1]
+        self.assertGreater(num_encoder_features, 1)
+
+        # Build a prompt whose audio placeholder run is shorter than the encoder output,
+        # reproducing the native situation where fake_token_len < encoder length.
+        target_audio_tokens = max(1, num_encoder_features // 2)
+        self.assertLess(target_audio_tokens, num_encoder_features)
+        decoder_input_ids = torch.tensor(
+            [[1, 2, 3] + [audio_token_id] * target_audio_tokens + [4, 5]], dtype=torch.long
+        )
+        decoder_attention_mask = torch.ones_like(decoder_input_ids)
+
+        # Capture what the FunASR forward passes down to the base seq2seq forward.
+        captured = {}
+        orig_forward = modeling_seq2seq.OVModelForSpeechSeq2Seq.forward
+
+        def capturing_forward(self, *args, **kwargs):
+            did = kwargs.get("decoder_input_ids")
+            enc_out = kwargs.get("encoder_outputs")
+            enc_h = enc_out.last_hidden_state if hasattr(enc_out, "last_hidden_state") else enc_out[0]
+            captured["audio_count"] = int((did == audio_token_id).sum(dim=-1).max())
+            captured["encoder_len"] = int(torch.as_tensor(enc_h).shape[1])
+            return orig_forward(self, *args, **kwargs)
+
+        modeling_seq2seq.OVModelForSpeechSeq2Seq.forward = capturing_forward
+        try:
+            ov_model.forward(
+                input_features=input_features,
+                decoder_input_ids=decoder_input_ids,
+                decoder_attention_mask=decoder_attention_mask,
+            )
+        finally:
+            modeling_seq2seq.OVModelForSpeechSeq2Seq.forward = orig_forward
+
+        # Native behavior: the placeholder run is kept as-is (NOT expanded to the encoder
+        # length) and the encoder features are truncated to match the placeholder count.
+        self.assertEqual(captured["audio_count"], target_audio_tokens)
+        self.assertEqual(captured["encoder_len"], target_audio_tokens)
+        self.assertNotEqual(captured["encoder_len"], num_encoder_features)
+
+        del ov_model
+        gc.collect()
+
+    @pytest.mark.skipif(
+        is_transformers_version("<", "4.57") or is_transformers_version(">=", "4.58"),
+        reason="Currently, we support FunASR only for transformers==4.57 since it is a trust-remote-code model.",
+    )
+    def test_fun_asr_activations_scale_factor(self):
+        # The Fun-ASR-Nano decoder overflows fp16 on GPU without activation scaling, and the GPU plugin
+        # ignores the default 8.0 for LLM-like models, so the decoder must carry a non-default value.
+        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
+            MODEL_NAMES["fun_asr"], export=True, trust_remote_code=True, compile=False
+        )
+        decoder_rt_info = ov_model.decoder.model.get_rt_info()
+        self.assertEqual(decoder_rt_info["runtime_options"]["ACTIVATIONS_SCALE_FACTOR"].value, "4.0")
+        self.assertFalse(ov_model.encoder.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"]))
+
+        del ov_model
+        gc.collect()
 
     def _get_pt_reference(self, model_arch):
         if model_arch == "fun_asr":
             return self._get_pt_reference_funasr()
-        elif model_arch == "cohere_asr":
+        if model_arch == "cohere_asr":
             return self._get_pt_reference_cohere_asr()
-        else:
-            return self._get_pt_reference_qwen3_asr()
+        if model_arch == "sense_voice":
+            return self._get_pt_reference_sense_voice()
+        return self._get_pt_reference_qwen3_asr()
 
     def _get_pt_reference_funasr(self):
         import io
@@ -430,3 +570,37 @@ class OVASRTest(unittest.TestCase):
             self.assertIsNotNone(reloaded_processor.tokenizer)
             del model
             gc.collect()
+
+    def _get_pt_reference_sense_voice(self):
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+
+        from funasr import AutoModel
+        from funasr.utils.load_utils import extract_fbank
+
+        model_id = MODEL_NAMES["sense_voice"]
+        buf = io.StringIO()
+        with redirect_stdout(buf), redirect_stderr(buf):
+            pt_model = AutoModel(model=model_id, hub="hf", trust_remote_code=True, device="cpu", disable_update=True)
+
+        audio_data, sample_rate = self._generate_audio_data()
+        audio_tensor = torch.from_numpy(audio_data)
+
+        speech, speech_lengths = extract_fbank(audio_tensor, data_type="sound", frontend=pt_model.kwargs["frontend"])
+
+        with redirect_stdout(buf), redirect_stderr(buf):
+            args = pt_model.kwargs
+            args["data_type"] = "fbank"
+            pt_result = pt_model.model.inference(speech, speech_lengths, **args)
+        pt_text = pt_result[0][0]["text"]
+
+        return {
+            "input_features": speech,
+            "speech_lengths": speech_lengths,
+            "decode_fn": lambda ids, prompt_len: ids[0],
+            "pt_text": pt_text,
+            "preprocess_check": None,
+            "gen_kwargs": {},
+            "pt_model": pt_model,
+            "attention_mask": None,
+        }

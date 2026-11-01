@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 import functools
+import importlib.metadata as importlib_metadata
 import importlib.util
 import logging
 import operator as op
@@ -20,12 +21,6 @@ from collections import OrderedDict
 from typing import Union
 
 from packaging.version import Version, parse
-
-
-if sys.version_info < (3, 8):
-    import importlib_metadata
-else:
-    import importlib.metadata as importlib_metadata
 
 
 logger = logging.getLogger(__name__)
@@ -117,6 +112,14 @@ if _kokoro_available:
     except importlib_metadata.PackageNotFoundError:
         _kokoro_available = False
 
+_qwen_tts_available = importlib.util.find_spec("qwen_tts") is not None
+_qwen_tts_version = "N/A"
+if _qwen_tts_available:
+    try:
+        _qwen_tts_version = importlib_metadata.version("qwen-tts")
+    except importlib_metadata.PackageNotFoundError:
+        _qwen_tts_available = False
+
 _funasr_available = importlib.util.find_spec("funasr") is not None
 _funasr_version = "N/A"
 if _funasr_available:
@@ -124,6 +127,22 @@ if _funasr_available:
         _funasr_version = importlib_metadata.version("funasr")
     except importlib_metadata.PackageNotFoundError:
         _funasr_available = False
+
+_torchaudio_available = importlib.util.find_spec("torchaudio") is not None
+_torchaudio_version = "N/A"
+if _torchaudio_available:
+    try:
+        _torchaudio_version = importlib_metadata.version("torchaudio")
+    except importlib_metadata.PackageNotFoundError:
+        _torchaudio_available = False
+
+_sentencepiece_available = importlib.util.find_spec("sentencepiece") is not None
+_sentencepiece_version = "N/A"
+if _sentencepiece_available:
+    try:
+        _sentencepiece_version = importlib_metadata.version("sentencepiece")
+    except importlib_metadata.PackageNotFoundError:
+        _sentencepiece_available = False
 
 _safetensors_version = "N/A"
 _safetensors_available = importlib.util.find_spec("safetensors") is not None
@@ -168,6 +187,9 @@ if _accelerate_available:
         _accelerate_version = importlib_metadata.version("accelerate")
     except importlib_metadata.PackageNotFoundError:
         _accelerate_available = False
+
+
+_compressed_tensors_available = importlib.util.find_spec("compressed_tensors") is not None
 
 _numa_available = importlib.util.find_spec("numa") is not None
 
@@ -310,8 +332,20 @@ def is_kokoro_available():
     return _kokoro_available
 
 
+def is_qwen_tts_available():
+    return _qwen_tts_available
+
+
 def is_funasr_available():
     return _funasr_available
+
+
+def is_torchaudio_available():
+    return _torchaudio_available
+
+
+def is_sentencepiece_available():
+    return _sentencepiece_available
 
 
 def is_safetensors_available():
@@ -332,6 +366,10 @@ def is_pillow_available():
 
 def is_accelerate_available():
     return _accelerate_available
+
+
+def is_compressed_tensors_available():
+    return _compressed_tensors_available
 
 
 def is_sentence_transformers_available():

@@ -90,6 +90,20 @@ def _ltx2_modality_isolation_off(model_arch):
     return {"modality_scale": 1.0, "audio_modality_scale": 1.0}
 
 
+def _record_ltx2_timestep_shapes(pipeline):
+    """Record the shape of every `timestep` the LTX-2 transformer request receives."""
+    pipeline.transformer.compile()
+    request = pipeline.transformer.request
+    shapes = []
+
+    def recording_request(inputs, *args, **kwargs):
+        shapes.append(tuple(inputs["timestep"].shape))
+        return request(inputs, *args, **kwargs)
+
+    pipeline.transformer.request = recording_request
+    return shapes
+
+
 class OVPipelineForText2ImageTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = [
         "stable-diffusion",
@@ -114,6 +128,9 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     if is_diffusers_version(">=", "0.35.0"):
         SUPPORTED_ARCHITECTURES.extend(["qwenimage"])
 
+    if is_diffusers_version(">=", "0.41.0.dev0"):
+        SUPPORTED_ARCHITECTURES.extend(["qwenimage21"])
+
     if is_transformers_version("<", "5") or is_diffusers_version(">=", "0.37"):
         SUPPORTED_ARCHITECTURES.append("stable-diffusion-3")
 
@@ -133,6 +150,10 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         if model_type == "sana-sprint":
             inputs["num_inference_steps"] = 2
 
+        if model_type == "qwenimage21":
+            # QwenImage21Pipeline has no guidance-distilled `guidance_scale` (it uses `true_cfg_scale`)
+            inputs.pop("guidance_scale")
+
         return inputs
 
     @require_diffusers
@@ -146,6 +167,8 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     @require_diffusers
     def test_ov_pipeline_class_dispatch(self, model_arch: str):
         auto_cls = self.AUTOMODEL_CLASS if "sana" not in model_arch else DiffusionPipeline
+        if model_arch == "qwenimage21":
+            auto_cls = DiffusionPipeline
         auto_pipeline = auto_cls.from_pretrained(MODEL_NAMES[model_arch])
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
@@ -160,6 +183,8 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
     @require_diffusers
     def test_num_images_per_prompt(self, model_arch: str):
         pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
+        # Qwen-Image-2.1's VAE decodes RGBA images
+        image_channels = 4 if model_arch == "qwenimage21" else 3
 
         for batch_size in [1, 3]:
             for height in [64, 128]:
@@ -169,7 +194,9 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
                             height=height, width=width, batch_size=batch_size, model_type=model_arch
                         )
                         outputs = pipeline(**inputs, num_images_per_prompt=num_images_per_prompt).images
-                        self.assertEqual(outputs.shape, (batch_size * num_images_per_prompt, height, width, 3))
+                        self.assertEqual(
+                            outputs.shape, (batch_size * num_images_per_prompt, height, width, image_channels)
+                        )
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @require_diffusers
@@ -178,6 +205,8 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
         ov_pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
         auto_cls = self.AUTOMODEL_CLASS if "sana" not in model_arch else DiffusionPipeline
+        if model_arch == "qwenimage21":
+            auto_cls = DiffusionPipeline
         model_kwargs = (
             {"torch_dtype": torch.float32}
             if is_transformers_version(">=", "5") and model_arch == "stable-diffusion-3"
@@ -185,6 +214,8 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         )
         diffusers_pipeline = auto_cls.from_pretrained(MODEL_NAMES[model_arch], **model_kwargs)
         atol = 1.5e-2 if model_arch == "flux.2-klein" else 6e-3
+        if model_arch == "qwenimage21":
+            atol = 3e-2
 
         for output_type in ["latent", "np", "pt"]:
             inputs["output_type"] = output_type
@@ -246,6 +277,8 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
         height, width, batch_size = 128, 64, 1
+        # Qwen-Image-2.1's VAE decodes RGBA images
+        image_channels = 4 if model_arch == "qwenimage21" else 3
         inputs = self.generate_inputs(height=height, width=width, batch_size=batch_size, model_type=model_arch)
         if "sana" in model_arch:
             inputs["use_resolution_binning"] = False
@@ -256,13 +289,19 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
             if output_type == "pil":
                 self.assertEqual((len(outputs), outputs[0].height, outputs[0].width), (batch_size, height, width))
             elif output_type == "np":
-                self.assertEqual(outputs.shape, (batch_size, height, width, 3))
+                self.assertEqual(outputs.shape, (batch_size, height, width, image_channels))
             elif output_type == "pt":
-                self.assertEqual(outputs.shape, (batch_size, 3, height, width))
+                self.assertEqual(outputs.shape, (batch_size, image_channels, height, width))
             else:
                 if model_arch in ["flux", "qwenimage"]:
                     packed_height = height // pipeline.vae_scale_factor // 2
                     packed_width = width // pipeline.vae_scale_factor // 2
+                    channels = pipeline.transformer.config.in_channels
+                    self.assertEqual(outputs.shape, (batch_size, packed_height * packed_width, channels))
+                elif model_arch == "qwenimage21":
+                    # Qwen-Image-2.1 consumes latents unpatched: one token per 16x16 pixel tile
+                    packed_height = height // pipeline.vae_scale_factor
+                    packed_width = width // pipeline.vae_scale_factor
                     channels = pipeline.transformer.config.in_channels
                     self.assertEqual(outputs.shape, (batch_size, packed_height * packed_width, channels))
                 else:
@@ -462,6 +501,9 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         ):
             if model_arch != "qwenimage":
                 expected_batch *= 2
+        if model_arch == "qwenimage21":
+            # the Qwen-Image-2.1 transformer is kept dynamic on reshape, so its batch stays unset
+            expected_batch = -1
         self.assertEqual(
             ov_pipeline.batch_size,
             expected_batch,
@@ -531,6 +573,24 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         # generation without height / width provided
         inputs.pop("height")
         inputs.pop("width")
+        image = pipeline(**inputs).images[0]
+        self.assertTupleEqual(image.size, (32, 32))
+
+    @require_diffusers
+    @unittest.skipIf(is_diffusers_version("<", "0.37.0"), reason="FLUX.2 requires diffusers>=0.37.0")
+    def test_flux2_klein_reshape_keeps_text_encoder_sequence_dynamic(self):
+        pipeline = self.OVMODEL_CLASS.from_pretrained(
+            MODEL_NAMES["flux.2-klein"], compile=False, device=OPENVINO_DEVICE
+        )
+        # Released FLUX.2-klein tokenizers report 131072; the tiny test model reports 512.
+        pipeline.tokenizer.model_max_length = 131072
+        pipeline.reshape(batch_size=1, height=32, width=32)
+        for model_input in pipeline.text_encoder.model.inputs:
+            self.assertTrue(model_input.get_partial_shape()[1].is_dynamic)
+
+        pipeline.compile()
+        inputs = self.generate_inputs(height=32, width=32, model_type="flux.2-klein")
+        inputs["output_type"] = "pil"
         image = pipeline(**inputs).images[0]
         self.assertTupleEqual(image.size, (32, 32))
 
@@ -1084,6 +1144,8 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = []
     if is_diffusers_version(">=", "0.28.2"):
         SUPPORTED_ARCHITECTURES.extend(["ltx-video"])
+    if is_diffusers_version(">=", "0.33.0"):
+        SUPPORTED_ARCHITECTURES.extend(["ltx-video-0.9.5"])
     if is_diffusers_version(">=", "0.38.0"):
         SUPPORTED_ARCHITECTURES.extend(["ltx2"])
     if is_diffusers_version(">=", "0.40.0"):
@@ -1139,6 +1201,9 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
                         inputs = self.generate_inputs(
                             height=height, width=width, batch_size=batch_size, model_arch=model_arch
                         )
+                        # Diffusers expands the scalar default by prompt batch, not the effective video batch.
+                        if model_arch == "ltx-video-0.9.5":
+                            inputs["decode_timestep"] = [0.0] * batch_size * num_videos_per_prompt
                         outputs = pipeline(**inputs, num_videos_per_prompt=num_videos_per_prompt).frames
                         self.assertEqual(outputs.shape, (batch_size * num_videos_per_prompt, 1, height, width, 3))
 
@@ -1156,6 +1221,52 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
             ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED)).frames
             diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED)).frames
             np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
+
+    @unittest.skipUnless(is_diffusers_version(">=", "0.33.0"), "LTX Video 0.9.5 requires diffusers >= 0.33")
+    @require_diffusers
+    def test_ltx_video_0_9_5_batched_vae_timestep(self):
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES["ltx-video-0.9.5"], device=OPENVINO_DEVICE)
+        latents = torch.zeros((2, pipeline.vae.config.latent_channels, 1, 2, 2), dtype=pipeline.vae.dtype)
+        self.assertEqual(len(pipeline.vae.decoder.model.input("timestep").partial_shape), 1)
+        with self.assertRaises(RuntimeError):
+            pipeline.vae.decode(latents, 0.5, return_dict=False)
+
+        timesteps = torch.tensor([0.1, 0.9])
+        batch_output = pipeline.vae.decode(latents, timesteps, return_dict=False)[0]
+        individual_outputs = [
+            pipeline.vae.decode(latents[index : index + 1], timesteps[index : index + 1], return_dict=False)[0]
+            for index in range(2)
+        ]
+        self.assertFalse(torch.allclose(individual_outputs[0], individual_outputs[1]))
+        torch.testing.assert_close(batch_output, torch.cat(individual_outputs))
+
+        for batch_size, num_videos_per_prompt in ((2, 1), (1, 2)):
+            inputs = self.generate_inputs(
+                height=64, width=64, batch_size=batch_size, num_frames=9, model_arch="ltx-video-0.9.5"
+            )
+            inputs["decode_timestep"] = timesteps.tolist()
+            outputs = pipeline(
+                **inputs, num_videos_per_prompt=num_videos_per_prompt, generator=get_generator("pt", SEED)
+            ).frames
+            self.assertEqual(outputs.shape, (2, 9, 64, 64, 3))
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
+    @require_diffusers
+    def test_ltx2_timestep_per_sample(self, model_arch: str):
+        # Text-to-video denoises every token at the same noise level, so the transformer gets one timestep
+        # per sample ([B, 1]), which its per-token input broadcasts. Expanding it to [B, S] would compute
+        # the AdaLN modulation for every token, which costs ~9 GiB of GPU memory on LTX-2.3.
+        if not model_arch.startswith("ltx2"):
+            self.skipTest(f"{model_arch} takes a rank-1 timestep")
+
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
+        timestep_shapes = _record_ltx2_timestep_shapes(pipeline)
+        pipeline(**self.generate_inputs(height=64, width=64, batch_size=1, model_arch=model_arch))
+
+        self.assertTrue(timestep_shapes)
+        # One sample per pass: the classifier-free guidance halves run one after the other, as in GenAI.
+        for shape in timestep_shapes:
+            self.assertEqual(shape, (1, 1))
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
@@ -1257,7 +1368,10 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
 
         self.assertFalse(ov_pipeline.is_dynamic)
         expected_batch = batch_size * num_images_per_prompt
-        expected_batch *= 2
+        # LTX-2 runs the two classifier-free guidance halves in separate transformer passes, so its
+        # transformer is sized for one half; LTX-Video runs them together.
+        if not model_arch.startswith("ltx2"):
+            expected_batch *= 2
         self.assertEqual(
             ov_pipeline.batch_size,
             expected_batch,
@@ -1296,6 +1410,8 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = []
     if is_diffusers_version(">=", "0.32"):
         SUPPORTED_ARCHITECTURES.extend(["ltx-video"])
+    if is_diffusers_version(">=", "0.33.0"):
+        SUPPORTED_ARCHITECTURES.extend(["ltx-video-0.9.5"])
     if is_diffusers_version(">=", "0.38.0"):
         SUPPORTED_ARCHITECTURES.extend(["ltx2"])
     # See the note in OVPipelineForText2VideoTest: LTX-2.3 landed in diffusers 0.40.0.dev0.
@@ -1341,6 +1457,24 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
         from diffusers import LTXImageToVideoPipeline
 
         return LTXImageToVideoPipeline
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
+    @require_diffusers
+    def test_ltx2_timestep_per_token(self, model_arch: str):
+        # Image-to-video keeps its conditioning frames at a lower noise level than the rest, so the
+        # timestep must stay per token ([B, S]), unlike text-to-video's [B, 1].
+        if not model_arch.startswith("ltx2"):
+            self.skipTest(f"{model_arch} takes a rank-1 timestep")
+
+        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
+        timestep_shapes = _record_ltx2_timestep_shapes(pipeline)
+        inputs = self.generate_inputs(height=64, width=64, batch_size=1, num_frames=9, model_arch=model_arch)
+        pipeline(**inputs)
+
+        self.assertTrue(timestep_shapes)
+        for shape in timestep_shapes:
+            self.assertEqual(shape[0], 1)
+            self.assertGreater(shape[1], 1)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
@@ -1435,7 +1569,10 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
 
         self.assertFalse(ov_pipeline.is_dynamic)
         expected_batch = batch_size * num_images_per_prompt
-        expected_batch *= 2
+        # LTX-2 runs the two classifier-free guidance halves in separate transformer passes, so its
+        # transformer is sized for one half; LTX-Video runs them together.
+        if not model_arch.startswith("ltx2"):
+            expected_batch *= 2
         self.assertEqual(
             ov_pipeline.batch_size,
             expected_batch,
