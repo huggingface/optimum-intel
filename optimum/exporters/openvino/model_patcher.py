@@ -10202,6 +10202,9 @@ class Gemma4UnifiedImageEmbeddingsModelPatcher(ModelPatcher):
 
         def patched_forward(pixel_values, image_position_ids):
             outputs = embed_vision(pixel_values, image_position_ids)
+            if is_transformers_version(">=", "5.16"):
+                outputs = outputs.pooler_output
+
             return {"last_hidden_state": outputs}
 
         self.patched_forward = patched_forward
