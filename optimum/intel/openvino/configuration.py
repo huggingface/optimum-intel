@@ -612,60 +612,45 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
     },
 }
 
-
-def _is_int8_group_wise_compression_supported() -> bool:
-    """
-    Whether the installed NNCF supports group-wise int8 weight compression, which the tuned int8 config of LTX-2.3
-    needs. NNCF supports it since 3.5.0, including its development builds.
-    """
-    return is_nncf_version(">=", "3.5.0.dev0")
-
-
-# The int8 config of LTX-2.3 for NNCF without group-wise int8 compression, applied only with an explicit int8 weight
-# format
-_LTX2_3_PER_CHANNEL_INT8_CONFIG = {
-    "quantization_configs": {
-        "transformer": {"bits": 8, "sym": False, "weight_only": True},
-        "text_encoder": {"bits": 8, "sym": False, "weight_only": True},
-    },
-}
-
-# The int8 config of LTX-2.3 tuned to keep the video quality, which is also applied by default
-_LTX2_3_GROUP_WISE_INT8_CONFIG = {
-    "quantization_configs": {
-        "transformer": {
-            "bits": 8,
-            "sym": True,
-            "group_size": 32,
-            "weight_only": True,
-            "ignored_scope": {
-                "patterns": [
-                    r".*proj_in.*",  # patchify_proj, audio_patchify_proj
-                    r".*proj_out.*",  # proj_out, audio_proj_out
-                    r".*time_embed.*",  # adaln_single, audio_adaln_single
-                    r".*av_cross_attn_.*",  # av_ca_*_adaln_single
-                    r".*prompt_adaln.*",  # prompt_adaln_single, audio_prompt_adaln_single
-                ],
-            },
-        },
-        "connectors": {
-            "bits": 8,
-            "sym": True,
-            "group_size": 32,
-            "weight_only": True,
-            "ignored_scope": {"patterns": [r".*text_proj_in"]},
-        },
-        "text_encoder": {"bits": 8, "sym": False, "weight_only": True},
-    },
-}
-
 _DEFAULT_8BIT_WQ_CONFIGS = {
     "Qwen/Qwen2.5-Coder-3B-Instruct": {"bits": 8, "sym": False, "dq_group_size": 128},
-    "diffusers/LTX-2.3-Diffusers": (
-        _LTX2_3_GROUP_WISE_INT8_CONFIG
-        if _is_int8_group_wise_compression_supported()
-        else _LTX2_3_PER_CHANNEL_INT8_CONFIG
-    ),
+    "diffusers/LTX-2.3-Diffusers": {
+        "quantization_configs": {
+            "transformer": {
+                "bits": 8,
+                "sym": True,
+                "group_size": 32,
+                "weight_only": True,
+                "ignored_scope": {
+                    "patterns": [
+                        r".*proj_in.*",  # patchify_proj, audio_patchify_proj
+                        r".*proj_out.*",  # proj_out, audio_proj_out
+                        r".*time_embed.*",  # adaln_single, audio_adaln_single
+                        r".*av_cross_attn_.*",  # av_ca_*_adaln_single
+                        r".*prompt_adaln.*",  # prompt_adaln_single, audio_prompt_adaln_single
+                    ],
+                },
+            },
+            "connectors": {
+                "bits": 8,
+                "sym": True,
+                "group_size": 32,
+                "weight_only": True,
+                "ignored_scope": {"patterns": [r".*text_proj_in"]},
+            },
+            "text_encoder": {"bits": 8, "sym": False, "weight_only": True},
+        },
+    },
+}
+
+# The int8 configs used instead of the ones above that need a newer NNCF version than the installed one
+_DEFAULT_8BIT_WQ_CONFIGS_FOR_OLDER_NNCF = {
+    "diffusers/LTX-2.3-Diffusers": {
+        "quantization_configs": {
+            "transformer": {"bits": 8, "sym": False, "weight_only": True},
+            "text_encoder": {"bits": 8, "sym": False, "weight_only": True},
+        },
+    },
 }
 
 # Add configs for model id aliases
@@ -860,28 +845,14 @@ def get_default_quantization_config(
         quant_mode (`str`, *optional*):
             The quantization mode. Currently only "int8" value is supported.
     Returns:
-        Default quantization config for the given model if found and `None` otherwise.
+        Default quantization config for the given model if found and `None` otherwise. If the installed NNCF version
+        does not support the default config, the one registered for older NNCF versions is returned instead, if any.
     """
-    config = _find_default_quantization_config(model_id_or_path, weight_format, quant_mode)
-    if config == _LTX2_3_PER_CHANNEL_INT8_CONFIG:
-        logger.warning(
-            "LTX-2.3 is compressed to int8 with an nncf version that does not support group-wise int8 compression, so "
-            "its default int8 config is per-channel instead of the group-wise one tuned to keep the video quality. "
-            "Please install the latest nncf version (nncf>=3.5.0), e.g. with `pip install -U nncf`."
-        )
-    return config
 
-
-def _find_default_quantization_config(
-    model_id_or_path: str, weight_format: Optional[str] = None, quant_mode: Optional[str] = None
-) -> Optional[Dict[str, Any]]:
-    """
-    Returns the default quantization config for the given model like `get_default_quantization_config`, but without
-    printing warnings about it.
-    """
     if weight_format is None and quant_mode is None:
         raise ValueError("Either `weight_format` or `quant_mode` must be provided.")
 
+    configs_for_older_nncf = {}
     if weight_format == "int2":
         default_configs_dict = _DEFAULT_2BIT_WQ_CONFIGS
     elif weight_format == "int3":
@@ -890,11 +861,29 @@ def _find_default_quantization_config(
         default_configs_dict = _DEFAULT_4BIT_WQ_CONFIGS
     elif weight_format == "int8":
         default_configs_dict = _DEFAULT_8BIT_WQ_CONFIGS
+        configs_for_older_nncf = _DEFAULT_8BIT_WQ_CONFIGS_FOR_OLDER_NNCF
     elif quant_mode == "int8":
         default_configs_dict = _DEFAULT_INT8_FQ_CONFIGS
     else:
         return None
 
+    config = _find_model_config(model_id_or_path, default_configs_dict)
+    missing_nncf_version = _get_missing_nncf_version(config)
+    if missing_nncf_version is not None:
+        logger.warning(
+            f"The default {weight_format or quant_mode} config of {model_id_or_path} needs "
+            f"nncf>={missing_nncf_version}, so it is replaced with one that the installed nncf version supports, "
+            "which may keep less of the model quality. Please install the latest nncf version, e.g. with "
+            "`pip install -U nncf`."
+        )
+        config = _find_model_config(model_id_or_path, configs_for_older_nncf)
+    return config
+
+
+def _find_model_config(model_id_or_path: str, default_configs_dict: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Returns the config of the given model in `default_configs_dict` if found and `None` otherwise.
+    """
     # Check if the model_id_or_path is in the default configs
     model_id_candidates = _get_model_id_candidates(model_id_or_path)
     for model_id in model_id_candidates:
@@ -908,6 +897,28 @@ def _find_default_quantization_config(
         if model_path.name == short_id:
             return config
 
+    return None
+
+
+def _get_missing_nncf_version(quantization_config: Optional[Dict[str, Any]]) -> Optional[str]:
+    """
+    Returns the NNCF version that the given quantization config needs if the installed NNCF version is older, and
+    `None` otherwise. So far, only group-wise int8 weight compression needs a newer NNCF version: NNCF supports it
+    since 3.5.0.
+    """
+    if quantization_config is None:
+        return None
+
+    if "quantization_configs" in quantization_config:  # a config per submodel
+        configs = quantization_config["quantization_configs"].values()
+    else:
+        configs = [quantization_config]
+    for config in configs:
+        # The data type of the weights is given either by `dtype` or by `bits`, which is 8 by default
+        is_int8 = (config.get("dtype") or f"int{config.get('bits', 8)}") == "int8"
+        # The development builds of NNCF 3.5.0 support group-wise int8 weight compression too
+        if is_int8 and config.get("group_size") not in (None, -1) and not is_nncf_version(">=", "3.5.0.dev0"):
+            return "3.5.0"
     return None
 
 

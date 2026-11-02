@@ -762,13 +762,11 @@ def main_export(
         # TODO: Remove GPT-OSS workaround when possible
         quantization_config = None if ov_config is None else ov_config.quantization_config
         if not quantization_config or isinstance(quantization_config, _GPTOSSQuantizationConfig):
-            default_quantization_config = (
-                _get_default_int8_config_for_auto_compression(model_name_or_path, skip_auto_compression)
-                if ov_config is None
-                else None
+            better_quality_config = (
+                _get_better_quality_config(model_name_or_path, skip_auto_compression) if ov_config is None else None
             )
             _apply_model_size_based_quantization(
-                submodel_paths, ov_config, output, skip_auto_compression, default_quantization_config
+                submodel_paths, ov_config, output, skip_auto_compression, better_quality_config
             )
     finally:
         # Unpatch modules after quantized model export
@@ -1013,34 +1011,34 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
         logger.warning("Tokenizer won't be converted.")
 
 
-def _get_default_int8_config_for_auto_compression(
-    model_name_or_path: str, skip_auto_compression: bool
-) -> Optional[Dict[str, Any]]:
+def _get_better_quality_config(model_name_or_path: str, skip_auto_compression: bool) -> Optional[Dict[str, Any]]:
     """
-    Returns the int8 config to compress the large submodels with when no weight format is given, if it is not the
-    generic int8_asym one. Only the models excluded from the automatic int8 compression (LTX-2) have such a config: the
-    one registered for the model in `_DEFAULT_8BIT_WQ_CONFIGS`, which is tuned to keep the quality with group-wise int8
-    compression. If NNCF does not support it, the model is not compressed and a warning to install the latest NNCF
-    version is printed.
+    Returns the config to compress the large submodels with when no weight format is given, instead of the generic
+    int8_asym one, which costs too much quality for the models excluded from the automatic int8 compression (LTX-2).
+    Only such models can have it: it is the int8 config registered for the model in `_DEFAULT_8BIT_WQ_CONFIGS`, which
+    is tuned to keep the quality. If the installed NNCF version does not support it, the model is not compressed and a
+    warning to install the latest NNCF version is printed.
     """
     if not skip_auto_compression:
         return None
 
     from optimum.intel.openvino.configuration import (
-        _find_default_quantization_config,
-        _is_int8_group_wise_compression_supported,
+        _DEFAULT_8BIT_WQ_CONFIGS,
+        _find_model_config,
+        _get_missing_nncf_version,
     )
 
-    default_quantization_config = _find_default_quantization_config(model_name_or_path, weight_format="int8")
-    if default_quantization_config is not None and not _is_int8_group_wise_compression_supported():
+    better_quality_config = _find_model_config(model_name_or_path, _DEFAULT_8BIT_WQ_CONFIGS)
+    missing_nncf_version = _get_missing_nncf_version(better_quality_config)
+    if missing_nncf_version is not None:
         logger.warning(
-            "The model weights are not compressed, since the installed nncf does not support group-wise int8 "
-            "compression, which the int8 config tuned to keep the quality of this model needs. With nncf>=3.5.0, its "
-            "large submodels are compressed to int8 by default, which roughly halves the size of the exported model. "
-            "Please install the latest nncf version, e.g. with `pip install -U nncf`."
+            "The model weights are not compressed, since the int8 config tuned to keep the quality of this model "
+            f"needs nncf>={missing_nncf_version}. With it, the large submodels of the model are compressed to int8 by "
+            "default, which roughly halves their size. Please install the latest nncf version, e.g. with "
+            "`pip install -U nncf`."
         )
         return None
-    return default_quantization_config
+    return better_quality_config
 
 
 def _apply_model_size_based_quantization(
@@ -1048,7 +1046,7 @@ def _apply_model_size_based_quantization(
     ov_config: "OVConfig",
     output: Union[str, Path],
     skip_auto_compression: bool = False,
-    default_quantization_config: Optional[Dict[str, Any]] = None,
+    better_quality_config: Optional[Dict[str, Any]] = None,
 ):
     """
     Apply weight-only quantization to int8_asym to submodels larger than 1B parameters.
@@ -1056,11 +1054,11 @@ def _apply_model_size_based_quantization(
     Models for which `is_auto_compression_disabled` holds are left uncompressed: they are large
     enough to always cross the threshold, but lose too much quality at int8 for that to be a silent
     default. If such a model has an int8 config registered in `_DEFAULT_8BIT_WQ_CONFIGS`, given as
-    `default_quantization_config`, its submodels larger than 1B parameters that have an entry in it, matched by the
+    `better_quality_config`, its submodels larger than 1B parameters that have an entry in it, matched by the
     submodel directory name, are quantized with that entry, which is tuned to keep the quality.
     An explicitly requested weight format is unaffected -- it does not reach this branch.
     """
-    if skip_auto_compression and ov_config is None and default_quantization_config is None:
+    if skip_auto_compression and ov_config is None and better_quality_config is None:
         logger.info(
             "Automatic int8 weight compression is skipped for this model. Export with "
             "`--weight-format int8` to compress the weights anyway."
@@ -1092,13 +1090,11 @@ def _apply_model_size_based_quantization(
                 del op
             if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
                 if is_nncf_available():
-                    if default_quantization_config is None:
+                    if better_quality_config is None:
                         quantization_config = {"bits": 8, "sym": False}
                         logger.info("The model weights will be quantized to int8_asym.")
                     else:
-                        quantization_config = default_quantization_config.get("quantization_configs", {}).get(
-                            submodel_name
-                        )
+                        quantization_config = better_quality_config.get("quantization_configs", {}).get(submodel_name)
                         if quantization_config is not None:
                             logger.info(
                                 f"The {submodel_name} weights will be quantized to int8 with config {quantization_config}."
