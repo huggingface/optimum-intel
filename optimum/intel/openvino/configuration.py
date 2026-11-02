@@ -612,35 +612,60 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
     },
 }
 
+
+def _is_int8_group_wise_compression_supported() -> bool:
+    """
+    Whether the installed NNCF supports group-wise int8 weight compression, which the tuned int8 config of LTX-2.3
+    needs. NNCF supports it since 3.5.0, including its development builds.
+    """
+    return is_nncf_version(">=", "3.5.0.dev0")
+
+
+# The int8 config of LTX-2.3 for NNCF without group-wise int8 compression, applied only with an explicit int8 weight
+# format
+_LTX2_3_PER_CHANNEL_INT8_CONFIG = {
+    "quantization_configs": {
+        "transformer": {"bits": 8, "sym": False, "weight_only": True},
+        "text_encoder": {"bits": 8, "sym": False, "weight_only": True},
+    },
+}
+
+# The int8 config of LTX-2.3 tuned to keep the video quality, which is also applied by default
+_LTX2_3_GROUP_WISE_INT8_CONFIG = {
+    "quantization_configs": {
+        "transformer": {
+            "bits": 8,
+            "sym": True,
+            "group_size": 32,
+            "weight_only": True,
+            "ignored_scope": {
+                "patterns": [
+                    r".*proj_in.*",  # patchify_proj, audio_patchify_proj
+                    r".*proj_out.*",  # proj_out, audio_proj_out
+                    r".*time_embed.*",  # adaln_single, audio_adaln_single
+                    r".*av_cross_attn_.*",  # av_ca_*_adaln_single
+                    r".*prompt_adaln.*",  # prompt_adaln_single, audio_prompt_adaln_single
+                ],
+            },
+        },
+        "connectors": {
+            "bits": 8,
+            "sym": True,
+            "group_size": 32,
+            "weight_only": True,
+            "ignored_scope": {"patterns": [r".*text_proj_in"]},
+        },
+        "text_encoder": {"bits": 8, "sym": False, "weight_only": True},
+    },
+}
+
 _DEFAULT_8BIT_WQ_CONFIGS = {
     "Qwen/Qwen2.5-Coder-3B-Instruct": {"bits": 8, "sym": False, "dq_group_size": 128},
-    "diffusers/LTX-2.3-Diffusers": {
-        "quantization_configs": {
-            "transformer": {
-                "bits": 8,
-                "sym": True,
-                "group_size": 32,
-                "weight_only": True,
-                "ignored_scope": {
-                    "patterns": [
-                        r".*proj_in.*",  # patchify_proj, audio_patchify_proj
-                        r".*proj_out.*",  # proj_out, audio_proj_out
-                        r".*time_embed.*",  # adaln_single, audio_adaln_single
-                        r".*av_cross_attn_.*",  # av_ca_*_adaln_single
-                        r".*prompt_adaln.*",  # prompt_adaln_single, audio_prompt_adaln_single
-                    ],
-                },
-            },
-            "connectors": {
-                "bits": 8,
-                "sym": True,
-                "group_size": 32,
-                "weight_only": True,
-                "ignored_scope": {"patterns": [r".*text_proj_in"]},
-            },
-            "text_encoder": {"bits": 8, "sym": False, "weight_only": True},
-        },
-    },
+    "diffusers/LTX-2.3-Diffusers": (
+        _LTX2_3_GROUP_WISE_INT8_CONFIG
+        if _is_int8_group_wise_compression_supported()
+        else _LTX2_3_PER_CHANNEL_INT8_CONFIG
+    ),
 }
 
 # Add configs for model id aliases
@@ -837,7 +862,23 @@ def get_default_quantization_config(
     Returns:
         Default quantization config for the given model if found and `None` otherwise.
     """
+    config = _find_default_quantization_config(model_id_or_path, weight_format, quant_mode)
+    if config == _LTX2_3_PER_CHANNEL_INT8_CONFIG:
+        logger.warning(
+            "LTX-2.3 is compressed to int8 with an nncf version that does not support group-wise int8 compression, so "
+            "its default int8 config is per-channel instead of the group-wise one tuned to keep the video quality. "
+            "Please install the latest nncf version (nncf>=3.5.0), e.g. with `pip install -U nncf`."
+        )
+    return config
 
+
+def _find_default_quantization_config(
+    model_id_or_path: str, weight_format: Optional[str] = None, quant_mode: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    """
+    Returns the default quantization config for the given model like `get_default_quantization_config`, but without
+    printing warnings about it.
+    """
     if weight_format is None and quant_mode is None:
         raise ValueError("Either `weight_format` or `quant_mode` must be provided.")
 

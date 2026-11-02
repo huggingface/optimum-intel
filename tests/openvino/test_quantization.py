@@ -78,6 +78,9 @@ from optimum.intel.openvino.configuration import (
     _DEFAULT_4BIT_WQ_CONFIGS,
     _DEFAULT_4BIT_WQ_CONFIG,
     _DEFAULT_8BIT_WQ_CONFIGS,
+    _LTX2_3_GROUP_WISE_INT8_CONFIG,
+    _LTX2_3_PER_CHANNEL_INT8_CONFIG,
+    _is_int8_group_wise_compression_supported,
     _quantization_config_from_dict,
     _GPTOSSQuantizationConfig,
     _MiniCPMOCRQuantizationConfig,
@@ -1256,6 +1259,21 @@ class OVWeightCompressionTest(unittest.TestCase):
             },
         ),
         (
+            OVLTX2Pipeline,
+            "ltx2.3",
+            8,
+            # The config for NNCF without group-wise int8 compression: its weights can be compressed by any NNCF version
+            _LTX2_3_PER_CHANNEL_INT8_CONFIG,
+            {
+                "transformer": {"int8": 124},
+                "text_encoder": {"int8": 30},
+                "connectors": {},
+                "vae_decoder": {},
+                "audio_vae_decoder": {},
+                "vocoder": {},
+            },
+        ),
+        (
             OVModelForVisualCausalLM,
             "llava",
             4,
@@ -1848,9 +1866,9 @@ class OVWeightCompressionTest(unittest.TestCase):
                 compress_weights_patch.assert_called_with(unittest.mock.ANY, **compression_params)
 
     DEFAULT_INT8_CONFIG_CONFIGURATIONS = [
-        # (model class, model type, int8 config registered for the model, `quantization_config` given to
-        #  `from_pretrained`, uncompressed size threshold or None to keep the real one, the config expected for each
-        #  compressed submodel)
+        # (model class, model type, int8 config registered for the model, whether NNCF supports group-wise int8
+        #  compression, `quantization_config` given to `from_pretrained`, uncompressed size threshold or None to keep
+        #  the real one, the config expected for each compressed submodel)
         # Exported without a weight format, the large submodels of a model that is not LTX-2 keep the generic int8_asym
         # compression, whatever int8 config is registered for the model, e.g. the one of Qwen2.5-Coder-3B with its
         # dynamic quantization group size
@@ -1858,35 +1876,50 @@ class OVWeightCompressionTest(unittest.TestCase):
             OVModelForCausalLM,
             "llama",
             _DEFAULT_8BIT_WQ_CONFIGS["Qwen/Qwen2.5-Coder-3B-Instruct"],
+            True,
             None,
             0,
             {"model": {"bits": 8, "sym": False}},
         ),
     ]
     if is_diffusers_version(">=", "0.40.0"):
-        LTX2_3_DEFAULT_INT8_CONFIG = _DEFAULT_8BIT_WQ_CONFIGS["diffusers/LTX-2.3-Diffusers"]
         DEFAULT_INT8_CONFIG_CONFIGURATIONS.extend(
             [
-                # Exported without a weight format, the real transformer, connectors and text encoder are all above
-                # the size threshold: each of them is compressed with its entry, the other submodels are not compressed
+                # With group-wise int8 compression in NNCF, LTX-2.3 has its tuned int8 config. Exported without a weight
+                # format, the real transformer, connectors and text encoder are all above the size threshold: each of
+                # them is compressed with its entry, the other submodels are not compressed
                 (
                     OVLTX2Pipeline,
                     "ltx2.3",
-                    LTX2_3_DEFAULT_INT8_CONFIG,
+                    _LTX2_3_GROUP_WISE_INT8_CONFIG,
+                    True,
                     None,
                     0,
-                    LTX2_3_DEFAULT_INT8_CONFIG["quantization_configs"],
+                    _LTX2_3_GROUP_WISE_INT8_CONFIG["quantization_configs"],
                 ),
                 # The tiny submodels are below the real size threshold: nothing is compressed
-                (OVLTX2Pipeline, "ltx2.3", LTX2_3_DEFAULT_INT8_CONFIG, None, None, {}),
+                (OVLTX2Pipeline, "ltx2.3", _LTX2_3_GROUP_WISE_INT8_CONFIG, True, None, None, {}),
                 # With an int8 weight format, the entries are applied whatever the size
                 (
                     OVLTX2Pipeline,
                     "ltx2.3",
-                    LTX2_3_DEFAULT_INT8_CONFIG,
+                    _LTX2_3_GROUP_WISE_INT8_CONFIG,
+                    True,
                     {"bits": 8},
                     None,
-                    LTX2_3_DEFAULT_INT8_CONFIG["quantization_configs"],
+                    _LTX2_3_GROUP_WISE_INT8_CONFIG["quantization_configs"],
+                ),
+                # Without group-wise int8 compression in NNCF, LTX-2.3 has a per-channel int8 config, which is applied
+                # only with an int8 weight format: without it nothing is compressed, whatever the size
+                (OVLTX2Pipeline, "ltx2.3", _LTX2_3_PER_CHANNEL_INT8_CONFIG, False, None, 0, {}),
+                (
+                    OVLTX2Pipeline,
+                    "ltx2.3",
+                    _LTX2_3_PER_CHANNEL_INT8_CONFIG,
+                    False,
+                    {"bits": 8},
+                    None,
+                    _LTX2_3_PER_CHANNEL_INT8_CONFIG["quantization_configs"],
                 ),
             ]
         )
@@ -1896,10 +1929,18 @@ class OVWeightCompressionTest(unittest.TestCase):
         name_func=lambda testcase_func, param_num, params: f"{testcase_func.__name__}_{param_num}_{parameterized.to_safe_name(params.args[1])}",
     )
     def test_ovmodel_default_int8_config(
-        self, model_cls, model_type, default_config, quantization_config, uncompressed_size_threshold, expected_configs
+        self,
+        model_cls,
+        model_type,
+        default_config,
+        int8_group_wise_supported,
+        quantization_config,
+        uncompressed_size_threshold,
+        expected_configs,
     ):
         # NNCF is not run: the layers of the tiny models do not fit the real configs (e.g. a group size of 32 and the
-        # ignored scopes of LTX-2.3), so the arguments `nncf.compress_weights` gets are stored in the compressed model
+        # ignored scopes of LTX-2.3), so the arguments `nncf.compress_weights` gets are stored in the compressed model.
+        # Whether NNCF supports group-wise int8 compression is given by the test case, whatever NNCF is installed.
         def compress_weights(model, **kwargs):
             arguments = {
                 "mode": kwargs["mode"].value,
@@ -1915,6 +1956,12 @@ class OVWeightCompressionTest(unittest.TestCase):
                     "optimum.intel.openvino.configuration._DEFAULT_8BIT_WQ_CONFIGS",
                     {MODEL_NAMES[model_type]: default_config},
                     clear=False,
+                )
+            )
+            stack.enter_context(
+                unittest.mock.patch(
+                    "optimum.intel.openvino.configuration._is_int8_group_wise_compression_supported",
+                    return_value=int8_group_wise_supported,
                 )
             )
             if uncompressed_size_threshold is not None:
@@ -1957,6 +2004,71 @@ class OVWeightCompressionTest(unittest.TestCase):
         self.assertEqual(expected_arguments, actual_configs)
         # Each compressed submodel is compressed once
         self.assertEqual(len(expected_configs), compress_weights_patch.call_count)
+
+    @parameterized.expand([("3.4.0", False), ("3.5.0.dev0+3b4caeba", True), ("3.5.0", True), ("3.6.0", True)])
+    def test_int8_group_wise_compression_support(self, nncf_version, expected_support):
+        # NNCF supports group-wise int8 compression since 3.5.0, including its development builds
+        with unittest.mock.patch("optimum.intel.utils.import_utils._nncf_version", nncf_version):
+            self.assertEqual(expected_support, _is_int8_group_wise_compression_supported())
+
+    def test_ltx2_3_default_int8_config(self):
+        # The tuned int8 config of LTX-2.3 is registered only if NNCF supports group-wise int8 compression
+        expected_config = (
+            _LTX2_3_GROUP_WISE_INT8_CONFIG
+            if _is_int8_group_wise_compression_supported()
+            else _LTX2_3_PER_CHANNEL_INT8_CONFIG
+        )
+        self.assertIs(expected_config, _DEFAULT_8BIT_WQ_CONFIGS["diffusers/LTX-2.3-Diffusers"])
+
+    @parameterized.expand([(_LTX2_3_PER_CHANNEL_INT8_CONFIG, True), (_LTX2_3_GROUP_WISE_INT8_CONFIG, False)])
+    def test_ltx2_3_int8_config_nncf_warning(self, ltx2_3_config, expect_warning):
+        # Compressing LTX-2.3 to int8 with an nncf version without group-wise int8 compression, i.e. with its
+        # per-channel int8 config, prints a warning to install the latest nncf version
+        from optimum.intel.openvino.configuration import get_default_quantization_config
+        from optimum.intel.openvino.configuration import logger as configuration_logger
+
+        with unittest.mock.patch.dict(
+            "optimum.intel.openvino.configuration._DEFAULT_8BIT_WQ_CONFIGS",
+            {"diffusers/LTX-2.3-Diffusers": ltx2_3_config},
+        ), unittest.mock.patch.object(configuration_logger, "warning") as warning:
+            config = get_default_quantization_config("diffusers/LTX-2.3-Diffusers", weight_format="int8")
+
+        self.assertIs(ltx2_3_config, config)
+        nncf_warnings = [call for call in warning.call_args_list if "nncf>=3.5.0" in call.args[0]]
+        self.assertEqual(int(expect_warning), len(nncf_warnings))
+
+    @parameterized.expand([(True,), (False,)])
+    def test_ltx2_3_auto_compression_nncf_warning(self, int8_group_wise_supported):
+        # Exported without a weight format, LTX-2.3 is compressed with its tuned int8 config if nncf supports group-wise
+        # int8 compression. Otherwise it is not compressed, and a warning tells that the latest nncf version gives a
+        # smaller model
+        from optimum.exporters.openvino.__main__ import _get_default_int8_config_for_auto_compression
+        from optimum.exporters.openvino.__main__ import logger as main_export_logger
+        from optimum.intel.openvino.configuration import logger as configuration_logger
+
+        registered_config = (
+            _LTX2_3_GROUP_WISE_INT8_CONFIG if int8_group_wise_supported else _LTX2_3_PER_CHANNEL_INT8_CONFIG
+        )
+        with unittest.mock.patch.dict(
+            "optimum.intel.openvino.configuration._DEFAULT_8BIT_WQ_CONFIGS",
+            {"diffusers/LTX-2.3-Diffusers": registered_config},
+        ), unittest.mock.patch(
+            "optimum.intel.openvino.configuration._is_int8_group_wise_compression_supported",
+            return_value=int8_group_wise_supported,
+        ), unittest.mock.patch.object(
+            main_export_logger, "warning"
+        ) as main_export_warning, unittest.mock.patch.object(
+            configuration_logger, "warning"
+        ) as configuration_warning:
+            config = _get_default_int8_config_for_auto_compression(
+                "diffusers/LTX-2.3-Diffusers", skip_auto_compression=True
+            )
+
+        self.assertIs(registered_config if int8_group_wise_supported else None, config)
+        nncf_warnings = [call for call in main_export_warning.call_args_list if "nncf>=3.5.0" in call.args[0]]
+        self.assertEqual(0 if int8_group_wise_supported else 1, len(nncf_warnings))
+        # Nothing is compressed with the per-channel config, so the warning about it is not printed
+        configuration_warning.assert_not_called()
 
     @parameterized.expand([(MODEL_NAMES["gpt2"],)])
     def test_dataset_seq_len_option(self, model_id):

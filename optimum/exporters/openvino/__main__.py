@@ -362,7 +362,7 @@ def main_export(
     ```
     """
     from optimum.exporters.openvino.convert import export_from_model
-    from optimum.intel.openvino.configuration import _GPTOSSQuantizationConfig, get_default_quantization_config
+    from optimum.intel.openvino.configuration import _GPTOSSQuantizationConfig
 
     if framework is None:
         framework = TasksManager.determine_framework(
@@ -762,11 +762,9 @@ def main_export(
         # TODO: Remove GPT-OSS workaround when possible
         quantization_config = None if ov_config is None else ov_config.quantization_config
         if not quantization_config or isinstance(quantization_config, _GPTOSSQuantizationConfig):
-            # Only the models excluded from the automatic int8 compression (LTX-2) are compressed with their default
-            # int8 config when no weight format is given, the other models keep the generic int8_asym compression
             default_quantization_config = (
-                get_default_quantization_config(model_name_or_path, weight_format="int8")
-                if ov_config is None and skip_auto_compression
+                _get_default_int8_config_for_auto_compression(model_name_or_path, skip_auto_compression)
+                if ov_config is None
                 else None
             )
             _apply_model_size_based_quantization(
@@ -1013,6 +1011,36 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
                 )
     else:
         logger.warning("Tokenizer won't be converted.")
+
+
+def _get_default_int8_config_for_auto_compression(
+    model_name_or_path: str, skip_auto_compression: bool
+) -> Optional[Dict[str, Any]]:
+    """
+    Returns the int8 config to compress the large submodels with when no weight format is given, if it is not the
+    generic int8_asym one. Only the models excluded from the automatic int8 compression (LTX-2) have such a config: the
+    one registered for the model in `_DEFAULT_8BIT_WQ_CONFIGS`, which is tuned to keep the quality with group-wise int8
+    compression. If NNCF does not support it, the model is not compressed and a warning to install the latest NNCF
+    version is printed.
+    """
+    if not skip_auto_compression:
+        return None
+
+    from optimum.intel.openvino.configuration import (
+        _find_default_quantization_config,
+        _is_int8_group_wise_compression_supported,
+    )
+
+    default_quantization_config = _find_default_quantization_config(model_name_or_path, weight_format="int8")
+    if default_quantization_config is not None and not _is_int8_group_wise_compression_supported():
+        logger.warning(
+            "The model weights are not compressed, since the installed nncf does not support group-wise int8 "
+            "compression, which the int8 config tuned to keep the quality of this model needs. With nncf>=3.5.0, its "
+            "large submodels are compressed to int8 by default, which roughly halves the size of the exported model. "
+            "Please install the latest nncf version, e.g. with `pip install -U nncf`."
+        )
+        return None
+    return default_quantization_config
 
 
 def _apply_model_size_based_quantization(
