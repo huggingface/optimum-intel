@@ -27,6 +27,7 @@ import torch
 from openvino_genai import (
     ASRPipeline,
     LLMPipeline,
+    SchedulerConfig,
     Text2SpeechPipeline,
     VLMPipeline,
     draft_model,
@@ -806,7 +807,14 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
         inputs = {"videos": [ov.Tensor(rng.integers(0, 256, size=(5, 32, 32, 3), dtype=np.uint8))]}
         question = "Why is this video funny?"
 
+        # Before 2026.5, MTP verifier speculative decoding on linear-attention models
+        # requires prefix caching to be disabled.
+        disable_prefix_caching = speculative_decoding_type == "MTP" and is_openvino_version("<", "2026.5")
         speculative_pipeline_kwargs = dict(TEST_CONFIG)
+        if disable_prefix_caching:
+            scheduler_config = SchedulerConfig()
+            scheduler_config.enable_prefix_caching = False
+            speculative_pipeline_kwargs["scheduler_config"] = scheduler_config
 
         # MTP speculative decoding requires the number of tokens proposed by the draft (the
         # Multi-Token Prediction head) to be set explicitly.
@@ -833,6 +841,10 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
 
         # Phase 2: generate without speculative decoding
         baseline_pipeline_kwargs = dict(TEST_CONFIG)
+        if disable_prefix_caching:
+            scheduler_config = SchedulerConfig()
+            scheduler_config.enable_prefix_caching = False
+            baseline_pipeline_kwargs["scheduler_config"] = scheduler_config
         ov_pipe = VLMPipeline(main_model_path, OPENVINO_DEVICE, **baseline_pipeline_kwargs)
         genai_output = ov_pipe.generate(prompt=question, **inputs, **self.GEN_KWARGS).texts[0]
         del ov_pipe
