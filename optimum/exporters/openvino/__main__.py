@@ -1042,7 +1042,8 @@ def _apply_model_size_based_quantization(
     # TODO: Refactor the code below in the following way:
     #   1. Create a OVPipelineQuantizationConfig based on each submodel size
     #   2. Run _main_quantize() with the created quantization config
-    # TODO: Apply default ignored scope configs from configuration.py if matches
+    # TODO: Apply default int8 and ignored scope configs from configuration.py if matches
+    #       (not only for skip_auto_compressed models)
     for submodel_path in submodel_paths:
         submodel_name = Path(submodel_path).parent.name  # the submodel directory of a diffusers pipeline
         submodel_path = Path(output) / submodel_path
@@ -1067,8 +1068,6 @@ def _apply_model_size_based_quantization(
                         quantization_config = {"bits": 8, "sym": False}
                         logger.info("The model weights will be quantized to int8_asym.")
                     else:
-                        # A model excluded from the automatic compression: only the submodels with an entry in its
-                        # default int8 config are compressed
                         quantization_config = default_quantization_config.get("quantization_configs", {}).get(
                             submodel_name
                         )
