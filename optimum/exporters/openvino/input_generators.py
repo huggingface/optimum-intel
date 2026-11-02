@@ -2997,6 +2997,11 @@ class DummyQwen4ExpLMInputGenerator(DummyTextInputGenerator):
         if input_name == "ngram_embeddings":
             shape = (self.batch_size, self.sequence_length, self.num_ple_layers, self.ple_embed_dim)
             return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "attention_mask":
+            # over the past and the current tokens: the past caches of Qwen4ExpDummyPastKeyValuesGenerator have
+            # `sequence_length` tokens
+            shape = (self.batch_size, 2 * self.sequence_length)
+            return self.random_int_tensor(shape, min_value=1, max_value=2, framework=framework, dtype=int_dtype)
         generated_input = super().generate(input_name, framework, int_dtype, float_dtype)
         if input_name == "position_ids":
             return generated_input.unsqueeze(0).expand(4, -1, -1)
@@ -3022,12 +3027,18 @@ def _qwen4_exp_rotary_dim(config, head_dim: int) -> int:
     return int(head_dim * factor)
 
 
+def qwen4_exp_uses_qsa(config) -> bool:
+    # the attention layers of qwen4_exp are Qwen Sparse Attention (QSA) with an indexer if the config defines it, and
+    # plain full attention otherwise (dense variants such as Qwen4-27B have no `indexer_*` parameters)
+    return getattr(config, "indexer_budget", None) is not None
+
+
 class Qwen4ExpDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     """
-    Dummy `cache_params` of the Qwen3.8-Flash-Next language model, in the order of
-    `Qwen4ExpTextOpenVINOConfig.add_past_key_values`: [conv, ssm] per Gated DeltaNet layer, [key, value] per QSA layer,
-    the raw index keys per QSA layer, the block index keys per QSA layer, the PLE short conv state per PLE layer and
-    the M-RoPE positions of past tokens.
+    Dummy `cache_params` of the qwen4_exp language model, in the order of
+    `Qwen4ExpTextOpenVINOConfig.add_past_key_values`: [conv, ssm] per Gated DeltaNet layer, [key, value] per attention
+    layer, then for QSA attention the raw index keys, the block index keys and the incomplete block RoPE per layer, and
+    the PLE short conv state per PLE layer.
     """
 
     SUPPORTED_INPUT_NAMES = ("cache_params",)
@@ -3053,7 +3064,8 @@ class Qwen4ExpDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         config = self.config
         layer_types = config.layer_types
         num_linear = layer_types.count("linear_attention")
-        num_qsa = len(layer_types) - num_linear
+        num_attn = len(layer_types) - num_linear
+        num_qsa = num_attn if qwen4_exp_uses_qsa(config) else 0
         num_ple = len(config.ple_layer_ids or [])
         conv_dim = 2 * config.linear_num_key_heads * config.linear_key_head_dim
         conv_dim += config.linear_num_value_heads * config.linear_value_head_dim
@@ -3075,17 +3087,18 @@ class Qwen4ExpDummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
                     )
                 )
             )
-        for _ in range(num_qsa):
+        for _ in range(num_attn):
             kv_shape = (self.batch_size, config.num_key_value_heads, self.sequence_length, head_dim)
             cache_params += [random_float(kv_shape), random_float(kv_shape)]
-        ratio = config.indexer_compress_ratio
-        for _ in range(num_qsa):
-            cache_params.append(random_float((self.batch_size, ratio - 1, config.indexer_head_dim)))
-        num_blocks = self.sequence_length // ratio
-        for _ in range(num_qsa):
-            cache_params.append(random_float((self.batch_size, num_blocks, config.indexer_head_dim)))
-        for _ in range(num_qsa):
-            cache_params.append(random_float((self.batch_size, 2 * _qwen4_exp_rotary_dim(config, head_dim))))
+        if num_qsa:
+            ratio = config.indexer_compress_ratio
+            for _ in range(num_qsa):
+                cache_params.append(random_float((self.batch_size, ratio - 1, config.indexer_head_dim)))
+            num_blocks = self.sequence_length // ratio
+            for _ in range(num_qsa):
+                cache_params.append(random_float((self.batch_size, num_blocks, config.indexer_head_dim)))
+            for _ in range(num_qsa):
+                cache_params.append(random_float((self.batch_size, 2 * _qwen4_exp_rotary_dim(config, head_dim))))
         ple_conv_state_len = (config.ple_conv_kernel_size - 1) * config.ngram_size
         for _ in range(num_ple):
             cache_params.append(
@@ -3145,11 +3158,12 @@ class Qwen4ExpMTPDummyInputGenerator(DummyInputGenerator):
         for _ in range(num_layers):
             kv_shape = (batch, config.num_key_value_heads, past, head_dim)
             cache_params += [random_float(kv_shape), random_float(kv_shape)]
-        ratio = config.indexer_compress_ratio
-        for _ in range(num_layers):
-            cache_params.append(random_float((batch, ratio - 1, config.indexer_head_dim)))
-        for _ in range(num_layers):
-            cache_params.append(random_float((batch, past // ratio, config.indexer_head_dim)))
-        for _ in range(num_layers):
-            cache_params.append(random_float((batch, 2 * _qwen4_exp_rotary_dim(config, head_dim))))
+        if qwen4_exp_uses_qsa(config):
+            ratio = config.indexer_compress_ratio
+            for _ in range(num_layers):
+                cache_params.append(random_float((batch, ratio - 1, config.indexer_head_dim)))
+            for _ in range(num_layers):
+                cache_params.append(random_float((batch, past // ratio, config.indexer_head_dim)))
+            for _ in range(num_layers):
+                cache_params.append(random_float((batch, 2 * _qwen4_exp_rotary_dim(config, head_dim))))
         return cache_params

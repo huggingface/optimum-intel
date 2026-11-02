@@ -7975,9 +7975,11 @@ class _OVQwen4ExpForCausalLM(_OVQwen3_5ForCausalLM):
     PLE layers are computed by the separate `ngram_embeddings` model from the current tokens and the previous
     `ngram_size - 1` tokens of every sequence (`ngram_history`, kept here between the generation steps) and passed
     to the language model as its `ngram_embeddings` input.
+    Dense variants (Qwen4-27B) have no PLE layers and no `ngram_embeddings` model.
     """
 
-    # `mtp` is optional, as for Qwen3.5: only present for checkpoints exported with an MTP head
+    # `mtp` is optional, as for Qwen3.5: only present for checkpoints exported with an MTP head;
+    # `ngram_embeddings` only for checkpoints with PLE layers
     additional_parts = ["vision_embeddings_merger", "vision_embeddings_pos", "ngram_embeddings", "mtp"]
 
     def __init__(
@@ -8063,6 +8065,9 @@ class _OVQwen4ExpForCausalLM(_OVQwen3_5ForCausalLM):
         )
 
     def get_ngram_embeddings(self, input_ids, attention_mask=None, past_key_values=None):
+        if self.ngram_embeddings is None:
+            # dense variants (Qwen4-27B) have no PLE layers
+            return None
         batch_size, seq_len = input_ids.shape
         if past_key_values is None or self.ngram_history is None or self.ngram_history.shape[0] != batch_size:
             self.ngram_history = np.full(

@@ -122,6 +122,7 @@ from optimum.exporters.openvino.input_generators import (
     QwenImage21VaeDummyInputGenerator,
     SenseVoiceDummyInputGenerator,
     Zamba2DummyPastKeyValuesGenerator,
+    qwen4_exp_uses_qsa,
 )
 from optimum.exporters.openvino.model_patcher import (
     AfmoeModelPatcher,
@@ -8010,8 +8011,9 @@ class Qwen3_5MoeOpenVINOConfig(Qwen3_5OpenVINOConfig):
 )
 class Qwen4ExpTextOpenVINOConfig(Qwen3_5TextOpenVINOConfig):
     """
-    Language model of Qwen3.8-Flash-Next, exported as part of `qwen4_exp` (image-text-to-text) with the hashed
-    n-gram embeddings of its PLE layers provided by the separate `ngram_embeddings` model.
+    Language model of qwen4_exp, exported as part of `qwen4_exp` (image-text-to-text). For Qwen3.8-Flash-Next the
+    hashed n-gram embeddings of its PLE layers are provided by the separate `ngram_embeddings` model; dense variants
+    (Qwen4-27B: plain full attention, dense MLP, no PLE layers) have no such input.
     """
 
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen4ExpLMInputGenerator, Qwen4ExpDummyPastKeyValuesGenerator)
@@ -8035,13 +8037,14 @@ class Qwen4ExpTextOpenVINOConfig(Qwen3_5TextOpenVINOConfig):
 
         layer_types = self._normalized_config.layer_types
         num_linear_attn_layers = layer_types.count("linear_attention")
-        num_qsa_layers = len(layer_types) - num_linear_attn_layers
+        num_attn_layers = len(layer_types) - num_linear_attn_layers
+        num_qsa_layers = num_attn_layers if qwen4_exp_uses_qsa(self._normalized_config.config) else 0
         num_ple_layers = len(self._normalized_config.ple_layer_ids or [])
 
         for i in range(num_linear_attn_layers):
             inputs_or_outputs[f"{cache_name_prefix}.conv.{i}"] = {0: "batch_size"}
             inputs_or_outputs[f"{cache_name_prefix}.ssm.{i}"] = {0: "batch_size"}
-        for i in range(num_qsa_layers):
+        for i in range(num_attn_layers):
             inputs_or_outputs[f"{cache_name_prefix}.key.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
             inputs_or_outputs[f"{cache_name_prefix}.value.{i}"] = {0: "batch_size", 2: decoder_sequence_name}
         for i in range(num_qsa_layers):
@@ -8062,8 +8065,9 @@ class Qwen4ExpTextOpenVINOConfig(Qwen3_5TextOpenVINOConfig):
             "input_ids": {0: "batch_size", 1: "sequence_length"},
             "attention_mask": {0: "batch_size", 1: "past_sequence_length + sequence_length"},
             "position_ids": {1: "batch_size", 2: "sequence_length"},
-            "ngram_embeddings": {0: "batch_size", 1: "sequence_length"},
         }
+        if self._normalized_config.ple_layer_ids:
+            common_inputs["ngram_embeddings"] = {0: "batch_size", 1: "sequence_length"}
         if self.use_past_in_inputs:
             self.add_past_key_values(common_inputs, direction="inputs")
         return common_inputs
@@ -8109,6 +8113,9 @@ class Qwen4ExpMTPOpenVINOConfig(OpenVINOConfigWithPast):
         for i in range(num_layers):
             inputs_or_outputs[f"{prefix}.key.{i}"] = {0: "batch_size", 2: sequence_name}
             inputs_or_outputs[f"{prefix}.value.{i}"] = {0: "batch_size", 2: sequence_name}
+        if not qwen4_exp_uses_qsa(self._config):
+            # plain full attention of dense variants: key / value caches only
+            return
         for i in range(num_layers):
             inputs_or_outputs[f"{prefix}.incomplete_index_key.{i}"] = {0: "batch_size"}
         for i in range(num_layers):
@@ -8190,9 +8197,12 @@ class Qwen4ExpOpenVINOConfig(Qwen3_5OpenVINOConfig):
             behavior=behavior,
             preprocessors=preprocessors,
         )
-        # the MTP head is exported if the checkpoint has one
+        # the MTP head is exported if the checkpoint has one, the n-gram embeddings model if it has PLE layers
+        text_config = getattr(config, "text_config", config)
         self.SUPPORTED_BEHAVIORS = list(type(self).SUPPORTED_BEHAVIORS)
-        if getattr(getattr(config, "text_config", config), "mtp_num_hidden_layers", 0) > 0:
+        if not getattr(text_config, "ple_layer_ids", None):
+            self.SUPPORTED_BEHAVIORS.remove(Qwen4ExpConfigBehavior.NGRAM_EMBEDDINGS.value)
+        if getattr(text_config, "mtp_num_hidden_layers", 0) > 0:
             self.SUPPORTED_BEHAVIORS.append(Qwen4ExpConfigBehavior.MTP.value)
         if self._behavior == Qwen4ExpConfigBehavior.NGRAM_EMBEDDINGS:
             self._config = config.text_config

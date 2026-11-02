@@ -10241,13 +10241,24 @@ def prepare_minicpmv4_7_moe_weights(experts: nn.Module):
     Prepares 16-bit experts (`gate_up_proj` / `down_proj` 3D weights) for `lfm2_moe_experts_forward` in a 16-bit
     export, so that they stay 16-bit constants in the `(num_experts, out, in)` layout instead of being upcast to f32:
     - the experts module is marked, so OpenVINO's 16-bit tracing helper does not cast its parameters to f32;
-    - the gate / up halves are copied into contiguous parameters, as a `chunk` (Slice) between the constant and its
-      decompression Convert would be constant-folded into new f32 constants.
+    - the gate / up halves are moved into contiguous parameters, as a `chunk` (VariadicSplit) between the constant and
+      the MatMul keeps the 3-GEMM MoE pattern from being fused and the packed weight from being compressed by NNCF.
+      The halves replace `gate_up_proj`, which is rebuilt only on the next forward call after
+      `restore_minicpmv4_7_moe_weights`, so no expert weight is held twice in memory during the conversion and saving.
     Undo with `restore_minicpmv4_7_moe_weights`.
     """
-    gate_proj, up_proj = experts.gate_up_proj.detach().chunk(2, dim=-2)
-    experts.ov_gate_proj = nn.Parameter(gate_proj.contiguous(), requires_grad=False)
-    experts.ov_up_proj = nn.Parameter(up_proj.contiguous(), requires_grad=False)
+    rebuild_hook = getattr(experts, "_ov_gate_up_proj_hook", None)
+    if rebuild_hook is not None:
+        # still split by a previous export, `gate_up_proj` has not been rebuilt yet
+        rebuild_hook.remove()
+        del experts._ov_gate_up_proj_hook
+    else:
+        gate_up_proj = experts.gate_up_proj
+        gate_proj, up_proj = gate_up_proj.detach().chunk(2, dim=-2)
+        experts.ov_gate_proj = nn.Parameter(gate_proj.contiguous(), requires_grad=False)
+        experts.ov_up_proj = nn.Parameter(up_proj.contiguous(), requires_grad=False)
+        experts._ov_gate_up_proj_requires_grad = gate_up_proj.requires_grad
+        del experts.gate_up_proj, gate_up_proj, gate_proj, up_proj
     # OpenVINO's 16-bit helper skips the modules carrying this attribute (name hard-coded in the OpenVINO PyTorch
     # frontend) and restores `forward` from it when unpatching
     # TODO: remove it when OpenVINO's 16-bit tracing helper is fixed PyTorch Frontend
@@ -10255,10 +10266,21 @@ def prepare_minicpmv4_7_moe_weights(experts: nn.Module):
     setattr(experts, "_openvino_module_extension_patch_orig_forward", experts.forward)
 
 
+def _rebuild_minicpmv4_7_gate_up_proj(experts: nn.Module, *args):
+    gate_up_proj = torch.cat([experts.ov_gate_proj, experts.ov_up_proj], dim=-2)
+    del experts.ov_gate_proj, experts.ov_up_proj
+    experts.gate_up_proj = nn.Parameter(gate_up_proj, requires_grad=experts._ov_gate_up_proj_requires_grad)
+    experts._ov_gate_up_proj_hook.remove()
+    del experts._ov_gate_up_proj_requires_grad, experts._ov_gate_up_proj_hook
+
+
 def restore_minicpmv4_7_moe_weights(experts: nn.Module):
-    for name in ("ov_gate_proj", "ov_up_proj", "_openvino_module_extension_patch_orig_forward"):
-        if hasattr(experts, name):
-            delattr(experts, name)
+    # The exported OpenVINO model shares the memory of the gate / up halves until it is saved, which happens after the
+    # patcher exits: rebuilding `gate_up_proj` here would hold these weights twice, so it is rebuilt on the next call
+    if hasattr(experts, "ov_gate_proj") and not hasattr(experts, "_ov_gate_up_proj_hook"):
+        experts._ov_gate_up_proj_hook = experts.register_forward_pre_hook(_rebuild_minicpmv4_7_gate_up_proj)
+    if hasattr(experts, "_openvino_module_extension_patch_orig_forward"):
+        delattr(experts, "_openvino_module_extension_patch_orig_forward")
 
 
 class Lfm2MoeModelPatcher(Lfm2ModelPatcher):
@@ -13164,7 +13186,8 @@ class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
                 # Why: the per-expert loop does not trace; the `torch.bmm` form is fused into OpenVINO's MoE op.
                 # 16-bit weights also need `prepare_minicpmv4_7_moe_weights` to stay 16-bit (not upcast to f32) in the graph.
                 experts._orig_forward = experts.forward
-                if experts.gate_up_proj.dtype in (torch.float16, torch.bfloat16):
+                # `down_proj`: `gate_up_proj` is absent while split by a previous export
+                if experts.down_proj.dtype in (torch.float16, torch.bfloat16):
                     prepare_minicpmv4_7_moe_weights(experts)
                 experts.forward = types.MethodType(lfm2_moe_experts_forward, experts)
 
@@ -13311,6 +13334,9 @@ class MiniCPMV4_7VisionEmbeddingsPatcher(ModelPatcher):
 # The hashed n-gram table lookup of PLE is exported as a separate model (`Qwen4ExpNGramEmbeddings`), its output is the
 # `ngram_embeddings` input of the language model.
 # QSA is expressed with the QSAPrepare -> SparseAttentionIndexer -> SparseAttention operation modules of `_ov_ops.py`.
+# Dense variants (Qwen4-27B: dense MLP, full attention without the QSA indexer, no PLE layers) keep only the key / value
+# caches of their attention layers, with the regular scaled dot product attention. transformers builds only the MoE +
+# QSA variant, so their checkpoints are loaded with a vendor patch of the qwen4_exp modules.
 class _Qwen4ExpLinearAttentionCache:
     """The subset of the cache interface used by `qwen3_5_gated_delta_net_forward`."""
 
@@ -13398,6 +13424,53 @@ def _qwen4_exp_qsa_attention_forward(
     return attn_output, key_states, value_states, incomplete_index_keys, block_index_keys, incomplete_index_rope
 
 
+def _qwen4_exp_attention_forward(
+    self,
+    hidden_states: torch.Tensor,
+    position_embeddings: Tuple[torch.Tensor, torch.Tensor],
+    attention_mask: torch.Tensor,
+    key_cache: torch.Tensor,
+    value_cache: torch.Tensor,
+):
+    """
+    Gated full attention of the dense qwen4_exp variants (Qwen4-27B), `Qwen4ExpTextAttention` without the QSA indexer.
+    `position_embeddings` are the cos / sin of the current tokens [N, L, Dr], `attention_mask` is the 4D additive mask
+    over the past and the current tokens.
+    """
+    rotary_dim = int(self.head_dim * self.config.rope_parameters.get("partial_rotary_factor", 1.0))
+    current_cos, current_sin = position_embeddings
+    input_shape = hidden_states.shape[:-1]
+    hidden_shape = (*input_shape, -1, self.head_dim)
+    query_states, gate = torch.chunk(self.q_proj(hidden_states).view(*input_shape, -1, self.head_dim * 2), 2, dim=-1)
+    gate = gate.reshape(*input_shape, -1)
+    query_states = self.q_norm(query_states.view(hidden_shape)).transpose(1, 2)
+    key_states = self.k_norm(self.k_proj(hidden_states).view(hidden_shape)).transpose(1, 2)
+    value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+    query_states = apply_rotary_pos_emb_qwen4_exp(query_states, current_cos, current_sin, rotary_dim, self.head_dim)
+    key_states = apply_rotary_pos_emb_qwen4_exp(key_states, current_cos, current_sin, rotary_dim, self.head_dim)
+    key_states = torch.cat([key_cache, key_states], dim=2)
+    value_states = torch.cat([value_cache, value_states], dim=2)
+
+    attn_output = F.scaled_dot_product_attention(
+        query_states,
+        repeat_kv(key_states, self.num_key_value_groups),
+        repeat_kv(value_states, self.num_key_value_groups),
+        attn_mask=attention_mask,
+        scale=self.scaling,
+    )
+    attn_output = attn_output.transpose(1, 2).reshape(*input_shape, -1)
+    attn_output = self.o_proj(attn_output * torch.sigmoid(gate))
+    return attn_output, key_states, value_states
+
+
+def _qwen4_exp_causal_mask(attention_mask: torch.Tensor, seq_len, past_len, dtype: torch.dtype):
+    # 4D additive causal mask [N, 1, L, past + L] of the current over the past and the current tokens, with padding
+    row_idx = torch.arange(seq_len).unsqueeze(1) + past_len
+    col_idx = torch.arange(past_len + seq_len).unsqueeze(0)
+    causal_mask = (col_idx > row_idx)[None, None].to(dtype) * torch.finfo(dtype).min
+    return causal_mask + (1.0 - attention_mask[:, None, None, :].to(dtype)) * torch.finfo(dtype).min
+
+
 def _qwen4_exp_rotary_embeddings(rotary_emb, positions: torch.Tensor):
     """
     Interleaved M-RoPE cos / sin [N, S, Dr] of `Qwen4ExpTextRotaryEmbedding` from positions [N, S, 3] (T, H, W).
@@ -13461,7 +13534,8 @@ def _patch_qwen4_exp_experts(experts: nn.Module):
     in the graph) during the conversion. The sparse MoE block (router, shared expert) traces as is.
     """
     experts._orig_forward = experts.forward
-    if experts.gate_up_proj.dtype in (torch.float16, torch.bfloat16):
+    # `down_proj`: `gate_up_proj` is absent while split by a previous export (see `prepare_minicpmv4_7_moe_weights`)
+    if experts.down_proj.dtype in (torch.float16, torch.bfloat16):
         prepare_minicpmv4_7_moe_weights(experts)
     experts.forward = types.MethodType(lfm2_moe_experts_forward, experts)
 
@@ -13489,7 +13563,10 @@ class Qwen4ExpLanguageModelPatcher(OVDecoderModelPatcher):
         self._text_config = text_config
         layer_types = [layer.layer_type for layer in self._text_model.layers]
         linear_layers = [i for i, layer_type in enumerate(layer_types) if layer_type == "linear_attention"]
-        qsa_layers = [i for i, layer_type in enumerate(layer_types) if layer_type != "linear_attention"]
+        attn_layers = [i for i, layer_type in enumerate(layer_types) if layer_type != "linear_attention"]
+        # Qwen Sparse Attention layers have an indexer; the attention of dense variants (Qwen4-27B) is plain full
+        # attention without it
+        qsa_layers = [i for i in attn_layers if getattr(self._text_model.layers[i].self_attn, "indexer", None)]
         ple_layers = [i for i, layer in enumerate(self._text_model.layers) if layer.ple is not None]
         linear_attn_mapping = {layer_idx: idx for idx, layer_idx in enumerate(linear_layers)}
 
@@ -13512,8 +13589,8 @@ class Qwen4ExpLanguageModelPatcher(OVDecoderModelPatcher):
         )
 
         # `cache_params` layout (see Qwen4ExpTextOpenVINOConfig.add_past_key_values):
-        # [conv, ssm] per linear layer, [key, value] per QSA layer, incomplete_index_key per QSA layer, block_index_key
-        # per QSA layer, incomplete_index_rope per QSA layer, ple_conv per PLE layer
+        # [conv, ssm] per linear layer, [key, value] per attention layer, incomplete_index_key per QSA layer,
+        # block_index_key per QSA layer, incomplete_index_rope per QSA layer, ple_conv per PLE layer
         def patched_forward(
             inputs_embeds,
             attention_mask=None,
@@ -13522,13 +13599,14 @@ class Qwen4ExpLanguageModelPatcher(OVDecoderModelPatcher):
             cache_params=None,
         ):
             text_model = self._text_model
-            num_linear, num_qsa, num_ple = len(linear_layers), len(qsa_layers), len(ple_layers)
+            num_linear, num_attn = len(linear_layers), len(attn_layers)
+            num_qsa, num_ple = len(qsa_layers), len(ple_layers)
             conv_states = [cache_params[2 * i] for i in range(num_linear)]
             recurrent_states = [cache_params[2 * i + 1] for i in range(num_linear)]
             offset = 2 * num_linear
-            key_caches = [cache_params[offset + 2 * i] for i in range(num_qsa)]
-            value_caches = [cache_params[offset + 2 * i + 1] for i in range(num_qsa)]
-            offset += 2 * num_qsa
+            key_caches = [cache_params[offset + 2 * i] for i in range(num_attn)]
+            value_caches = [cache_params[offset + 2 * i + 1] for i in range(num_attn)]
+            offset += 2 * num_attn
             incomplete_index_key_caches = cache_params[offset : offset + num_qsa]
             offset += num_qsa
             block_index_key_caches = cache_params[offset : offset + num_qsa]
@@ -13545,8 +13623,14 @@ class Qwen4ExpLanguageModelPatcher(OVDecoderModelPatcher):
             mrope_positions = position_ids[1:] if position_ids.shape[0] == 4 else position_ids
             position_embeddings = _qwen4_exp_rotary_embeddings(text_model.rotary_emb, mrope_positions.permute(1, 2, 0))
             conv_mask = attention_mask[:, -seq_len:]
-            # valid key tokens of every sequence for QSA: the sequences are aligned to the right (left padding)
-            key_length = attention_mask.sum(dim=-1)
+            if num_qsa:
+                # valid key tokens of every sequence for QSA: the sequences are aligned to the right (left padding)
+                key_length = attention_mask.sum(dim=-1)
+            if num_attn > num_qsa:
+                # plain full attention of dense variants
+                causal_mask = _qwen4_exp_causal_mask(
+                    attention_mask, seq_len, key_caches[0].shape[2], inputs_embeds.dtype
+                )
 
             hidden_states = inputs_embeds.repeat(1, 1, text_config.hc_count)
             present_keys, present_values, present_index_keys, present_block_index_keys = [], [], [], []
@@ -13569,14 +13653,14 @@ class Qwen4ExpLanguageModelPatcher(OVDecoderModelPatcher):
                     hidden_states = decoder_layer.linear_attn(
                         hidden_states, cache_params=linear_cache, attention_mask=conv_mask
                     )
-                else:
-                    qsa_idx = len(present_keys)
+                elif layer_idx in qsa_layers:
+                    attn_idx, qsa_idx = len(present_keys), len(present_index_keys)
                     hidden_states, *qsa_caches = _qwen4_exp_qsa_attention_forward(
                         decoder_layer.self_attn,
                         hidden_states,
                         position_embeddings,
-                        key_caches[qsa_idx],
-                        value_caches[qsa_idx],
+                        key_caches[attn_idx],
+                        value_caches[attn_idx],
                         incomplete_index_key_caches[qsa_idx],
                         block_index_key_caches[qsa_idx],
                         incomplete_index_rope_caches[qsa_idx],
@@ -13591,6 +13675,18 @@ class Qwen4ExpLanguageModelPatcher(OVDecoderModelPatcher):
                     )
                     for present, cache in zip(presents, qsa_caches):
                         present.append(cache)
+                else:
+                    attn_idx = len(present_keys)
+                    hidden_states, key_cache, value_cache = _qwen4_exp_attention_forward(
+                        decoder_layer.self_attn,
+                        hidden_states,
+                        position_embeddings,
+                        causal_mask,
+                        key_caches[attn_idx],
+                        value_caches[attn_idx],
+                    )
+                    present_keys.append(key_cache)
+                    present_values.append(value_cache)
                 injection = hidden_states.unsqueeze(-2) * injection_weights.unsqueeze(-1)
                 hidden_states = hyper_input + injection.flatten(-2)
 
@@ -13625,23 +13721,26 @@ class Qwen4ExpLanguageModelPatcher(OVDecoderModelPatcher):
                 linear_attn_layer.forward = types.MethodType(qwen3_5_gated_delta_net_forward, linear_attn_layer)
                 linear_attn_layer.recurrent_gated_delta_rule = patched_recurrent_gated_delta_rule
                 linear_attn_layer.recurrent_attention_cell = RecurrentAttentionCell()
-            else:
+            elif layer_idx in self._qsa_modules:
                 attn = decoder_layer.self_attn
                 attn.qsa_prepare, attn.sparse_attention_indexer, attn.sparse_attention = self._qsa_modules[layer_idx]
-            _patch_qwen4_exp_experts(decoder_layer.mlp.experts)
+            # the MLP of dense variants has no experts
+            if hasattr(decoder_layer.mlp, "experts"):
+                _patch_qwen4_exp_experts(decoder_layer.mlp.experts)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
-        for decoder_layer in self._text_model.layers:
+        for layer_idx, decoder_layer in enumerate(self._text_model.layers):
             if decoder_layer.layer_type == "linear_attention":
                 linear_attn_layer = decoder_layer.linear_attn
                 linear_attn_layer.forward = linear_attn_layer._orig_forward
                 del linear_attn_layer.recurrent_attention_cell
-            else:
+            elif layer_idx in self._qsa_modules:
                 attn = decoder_layer.self_attn
                 del attn.qsa_prepare, attn.sparse_attention_indexer, attn.sparse_attention
-            _unpatch_qwen4_exp_experts(decoder_layer.mlp.experts)
+            if hasattr(decoder_layer.mlp, "experts"):
+                _unpatch_qwen4_exp_experts(decoder_layer.mlp.experts)
 
 
 class Qwen4ExpNGramEmbeddings(torch.nn.Module):
@@ -13705,7 +13804,7 @@ class Qwen4ExpMTPModule(nn.Module):
     (`vllm/models/qwen4_exp`, `residual_linear_shared` fusion):
         e = fc_embedding(pre_fc_norm_embedding(inputs_embeds))                                       [N, L, H]
         x = fc_hidden(pre_fc_norm_hidden(hidden_states).view(hc, H)) + e                             [N, L, hc, H]
-        x = one Qwen Sparse Attention decoder layer (hyper-connections, QSA, MoE; no PLE)
+        x = one decoder layer (hyper-connections, QSA, MoE; no PLE), for dense variants: full attention, dense MLP
         last_hidden_state = hyper_connection_mixer(x)  -> the lm_head of the main model
         next_hidden_states = x                          -> `hidden_states` of the next draft step
     `hidden_states` of the first draft step are the pre-final-mixer hyper-connection streams of the main model.
@@ -13722,12 +13821,15 @@ class Qwen4ExpMTPModule(nn.Module):
             Qwen4ExpTextRotaryEmbedding,
         )
 
+        from .input_generators import qwen4_exp_uses_qsa
+
         hidden_size, hc_count = text_config.hidden_size, text_config.hc_count
         self.hidden_size, self.hc_count = hidden_size, hc_count
-        # one QSA layer of the main architecture, without PLE
+        # one attention layer of the main architecture (QSA, or plain full attention for dense variants), without PLE
         layer_config = copy.deepcopy(text_config)
         layer_config.num_hidden_layers = text_config.mtp_num_hidden_layers
-        layer_config.layer_types = ["qwen_sparse_attention"] * text_config.mtp_num_hidden_layers
+        attention_type = "qwen_sparse_attention" if qwen4_exp_uses_qsa(text_config) else "full_attention"
+        layer_config.layer_types = [attention_type] * text_config.mtp_num_hidden_layers
         layer_config.ple_layer_ids = []
         self.pre_fc_norm_embedding = Qwen4ExpTextRMSNorm(hidden_size, eps=text_config.rms_norm_eps)
         self.pre_fc_norm_hidden = Qwen4ExpTextRMSNorm(hc_count * hidden_size, eps=text_config.rms_norm_eps)
@@ -13751,9 +13853,10 @@ class Qwen4ExpMTPModule(nn.Module):
         return mtp_module
 
     def forward(self, hidden_states, inputs_embeds, attention_mask=None, position_ids=None, cache_params=None):
-        # `cache_params` layout (see Qwen4ExpMTPOpenVINOConfig): [key, value] per layer, incomplete_index_key per
-        # layer, block_index_key per layer, incomplete_index_rope per layer
+        # `cache_params` layout (see Qwen4ExpMTPOpenVINOConfig): [key, value] per layer, then for QSA
+        # incomplete_index_key per layer, block_index_key per layer, incomplete_index_rope per layer
         num_layers = len(self.layers)
+        uses_qsa = getattr(self.layers[0].self_attn, "indexer", None) is not None
         key_caches = [cache_params[2 * i] for i in range(num_layers)]
         value_caches = [cache_params[2 * i + 1] for i in range(num_layers)]
         incomplete_index_key_caches = cache_params[2 * num_layers : 3 * num_layers]
@@ -13767,23 +13870,37 @@ class Qwen4ExpMTPModule(nn.Module):
         # M-RoPE cos / sin of the current tokens, as in the language model
         mrope_positions = position_ids[1:] if position_ids.shape[0] == 4 else position_ids
         position_embeddings = _qwen4_exp_rotary_embeddings(self.rotary_emb, mrope_positions.permute(1, 2, 0))
-        key_length = attention_mask.sum(dim=-1)
+        if uses_qsa:
+            key_length = attention_mask.sum(dim=-1)
+        else:
+            seq_len = inputs_embeds.shape[1]
+            causal_mask = _qwen4_exp_causal_mask(attention_mask, seq_len, key_caches[0].shape[2], inputs_embeds.dtype)
 
         present = [[] for _ in range(5)]
         for idx, decoder_layer in enumerate(self.layers):
             hidden_states, hyper_input, injection_weights = decoder_layer.attn_hyper_connection(hidden_states)
-            hidden_states, *qsa_caches = _qwen4_exp_qsa_attention_forward(
-                decoder_layer.self_attn,
-                hidden_states,
-                position_embeddings,
-                key_caches[idx],
-                value_caches[idx],
-                incomplete_index_key_caches[idx],
-                block_index_key_caches[idx],
-                incomplete_index_rope_caches[idx],
-                key_length,
-            )
-            for cache_list, cache in zip(present, qsa_caches):
+            if uses_qsa:
+                hidden_states, *caches = _qwen4_exp_qsa_attention_forward(
+                    decoder_layer.self_attn,
+                    hidden_states,
+                    position_embeddings,
+                    key_caches[idx],
+                    value_caches[idx],
+                    incomplete_index_key_caches[idx],
+                    block_index_key_caches[idx],
+                    incomplete_index_rope_caches[idx],
+                    key_length,
+                )
+            else:
+                hidden_states, *caches = _qwen4_exp_attention_forward(
+                    decoder_layer.self_attn,
+                    hidden_states,
+                    position_embeddings,
+                    causal_mask,
+                    key_caches[idx],
+                    value_caches[idx],
+                )
+            for cache_list, cache in zip(present, caches):
                 cache_list.append(cache)
             injection = hidden_states.unsqueeze(-2) * injection_weights.unsqueeze(-1)
             hidden_states = hyper_input + injection.flatten(-2)
@@ -13815,16 +13932,19 @@ class Qwen4ExpMTPModelPatcher(ModelPatcher):
 
         super().__init__(config, model, model_kwargs)
         text_config = model.config
+        # QSA operation modules per layer; none for the plain full attention of dense variants
         self._qsa_modules = [
             (
                 QSAPrepare(text_config.indexer_compress_ratio, epsilon=text_config.rms_norm_eps),
                 SparseAttentionIndexer(text_config.indexer_compress_ratio, text_config.indexer_budget),
                 SparseAttention(text_config.indexer_compress_ratio),
             )
-            for _ in model.layers
+            for layer in model.layers
+            if getattr(layer.self_attn, "indexer", None) is not None
         ]
         op_modules = [module for modules in self._qsa_modules for module in modules]
-        self.module_extensions, self.conversion_extensions = get_openvino_extensions(op_modules)
+        if op_modules:
+            self.module_extensions, self.conversion_extensions = get_openvino_extensions(op_modules)
         # the forward lives on the module (see `Qwen4ExpMTPModule.forward`); bypass the base cache handling
         self.patched_forward = self._model.forward
         self.orig_forward = self._model.forward
@@ -13838,11 +13958,15 @@ class Qwen4ExpMTPModelPatcher(ModelPatcher):
                 indexer,
                 sparse_attention,
             )
-            _patch_qwen4_exp_experts(decoder_layer.mlp.experts)
+        for decoder_layer in self._model.layers:
+            if hasattr(decoder_layer.mlp, "experts"):
+                _patch_qwen4_exp_experts(decoder_layer.mlp.experts)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
-        for decoder_layer in self._model.layers:
+        for decoder_layer, _ in zip(self._model.layers, self._qsa_modules):
             attn = decoder_layer.self_attn
             del attn.qsa_prepare, attn.sparse_attention_indexer, attn.sparse_attention
-            _unpatch_qwen4_exp_experts(decoder_layer.mlp.experts)
+        for decoder_layer in self._model.layers:
+            if hasattr(decoder_layer.mlp, "experts"):
+                _unpatch_qwen4_exp_experts(decoder_layer.mlp.experts)
