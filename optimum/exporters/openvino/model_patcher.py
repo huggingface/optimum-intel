@@ -12200,7 +12200,9 @@ class MuseGlimmerVisionEmbeddingsModelPatcher(ModelPatcher):
 
             # --- rotary position ids (raster (h, w) flipped + 1, matches native) ---
             position_ids = torch.stack([row, col], dim=-1).flip(-1) + 1
-            position_ids = position_ids[None]
+            # transformers < 5.16 expects batched (1, N, 2) vision rotary position ids, recent version expects (N, 2)
+            if is_transformers_version("<", "5.16"):
+                position_ids = position_ids[None]
 
             # --- pixel-shuffle gather (merge_size x merge_size block reorder) ---
             factor = cfg.merge_size

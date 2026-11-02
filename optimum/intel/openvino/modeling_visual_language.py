@@ -43,13 +43,6 @@ from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLModel
 from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLModel
 from transformers.utils import ModelOutput
 
-
-try:
-    from transformers.models.qwen2_vl.modeling_qwen2_vl import VisionRotaryEmbedding
-except ImportError:
-    # renamed in newer transformers releases
-    from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLVisionRotaryEmbedding as VisionRotaryEmbedding
-
 from optimum.exporters.openvino import main_export
 from optimum.exporters.openvino.stateful import ensure_stateful_is_available, model_has_input_output_name
 from optimum.exporters.openvino.utils import save_config
@@ -63,16 +56,37 @@ from optimum.intel.openvino.utils import (
     TemporaryDirectory,
     classproperty,
 )
-from optimum.intel.utils.import_utils import is_transformers_version
+from optimum.intel.utils import is_transformers_version
 
 
 if is_transformers_version(">=", "4.57"):
     from transformers.models.qwen3_omni_moe.processing_qwen3_omni_moe import _get_feat_extract_output_lengths
-    from transformers.models.qwen3_vl.modeling_qwen3_vl import (
-        Qwen3VLModel,
-        Qwen3VLVisionModel,
-        Qwen3VLVisionRotaryEmbedding,
-    )
+    from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLModel, Qwen3VLVisionModel
+
+    if is_transformers_version("<", "5.17"):
+        from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLVisionRotaryEmbedding
+
+if is_transformers_version("<", "5.17"):
+    try:
+        from transformers.models.qwen2_vl.modeling_qwen2_vl import VisionRotaryEmbedding
+    except ImportError:
+        # renamed in newer transformers releases
+        from transformers.models.qwen2_vl.modeling_qwen2_vl import (
+            Qwen2VLVisionRotaryEmbedding as VisionRotaryEmbedding,
+        )
+else:
+    # VisionRotaryEmbedding now takes a config and returns cos/sin, which is not what the OpenVINO vision embeddings model consumes
+    # https://github.com/huggingface/transformers/blob/v5.15.0/src/transformers/models/qwen2_vl/modeling_qwen2_vl.py#L239
+    class VisionRotaryEmbedding(torch.nn.Module):
+        def __init__(self, dim: int, theta: float = 10000.0) -> None:
+            super().__init__()
+            inv_freq = 1.0 / (theta ** (torch.arange(0, dim, 2, dtype=torch.float) / dim))
+            self.register_buffer("inv_freq", inv_freq, persistent=False)
+
+        def forward(self, position_ids: torch.Tensor) -> torch.Tensor:
+            return (position_ids.unsqueeze(-1) * self.inv_freq).flatten(1)
+
+    Qwen3VLVisionRotaryEmbedding = VisionRotaryEmbedding
 
 
 if is_transformers_version(">=", "5.0.0"):
@@ -1628,6 +1642,10 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
         # Get the target length
         target_length = input_ids.shape[1]
         past_length = self.language_model._get_past_length(past_key_values)
+
+        if attention_mask is None:
+            # newer transformers no longer materialize a default attention mask in generate()
+            attention_mask = torch.ones(input_ids.shape, dtype=torch.long, device=input_ids.device)
 
         extended_attention_mask = torch.ones(
             (attention_mask.shape[0], past_length),
@@ -4317,7 +4335,16 @@ if is_transformers_version(">=", "4.57"):
     _OVQwen3VLForCausalLM.get_placeholder_mask = Qwen3VLModel.get_placeholder_mask
     _OVQwen3VLForCausalLM.get_rope_index = Qwen3VLModel.get_rope_index
     _OVQwen3VLForCausalLM.get_video_features = Qwen3VLModel.get_video_features
-    _OVQwen3VLForCausalLM.rot_pos_emb = getattr(Qwen3VLVisionModel, "rot_pos_emb", None)
+    if hasattr(Qwen3VLVisionModel, "rot_pos_emb"):
+        _OVQwen3VLForCausalLM.rot_pos_emb = Qwen3VLVisionModel.rot_pos_emb
+    else:
+        # rot_pos_emb removed since transformers v5.17
+        def _qwen3_vl_rot_pos_emb(self, grid_thw):
+            from transformers.vision_utils import get_vision_position_ids
+
+            return self.rotary_pos_emb(get_vision_position_ids(grid_thw, self.spatial_merge_size))
+
+        _OVQwen3VLForCausalLM.rot_pos_emb = _qwen3_vl_rot_pos_emb
     _OVQwen3VLForCausalLM.get_vision_position_ids = getattr(Qwen3VLModel, "get_vision_position_ids", None)
 
 
