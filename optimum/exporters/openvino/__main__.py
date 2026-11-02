@@ -762,9 +762,11 @@ def main_export(
         # TODO: Remove GPT-OSS workaround when possible
         quantization_config = None if ov_config is None else ov_config.quantization_config
         if not quantization_config or isinstance(quantization_config, _GPTOSSQuantizationConfig):
+            # Only the models excluded from the automatic int8 compression (LTX-2) are compressed with their default
+            # int8 config when no weight format is given, the other models keep the generic int8_asym compression
             default_quantization_config = (
                 get_default_quantization_config(model_name_or_path, weight_format="int8")
-                if ov_config is None
+                if ov_config is None and skip_auto_compression
                 else None
             )
             _apply_model_size_based_quantization(
@@ -1023,13 +1025,11 @@ def _apply_model_size_based_quantization(
     """
     Apply weight-only quantization to int8_asym to submodels larger than 1B parameters.
 
-    A submodel with an entry in `default_quantization_config`, the int8 config registered for the model in
-    `_DEFAULT_8BIT_WQ_CONFIGS`, is quantized with that entry instead: per-submodel entries are matched by the
-    submodel directory name (diffusers layout), a config without per-submodel entries applies to every submodel.
-
     Models for which `is_auto_compression_disabled` holds are left uncompressed: they are large
     enough to always cross the threshold, but lose too much quality at int8 for that to be a silent
-    default. Only the entries of their default int8 config, tuned to keep the quality, are applied.
+    default. If such a model has an int8 config registered in `_DEFAULT_8BIT_WQ_CONFIGS`, given as
+    `default_quantization_config`, its submodels larger than 1B parameters that have an entry in it, matched by the
+    submodel directory name, are quantized with that entry, which is tuned to keep the quality.
     An explicitly requested weight format is unaffected -- it does not reach this branch.
     """
     if skip_auto_compression and ov_config is None and default_quantization_config is None:
@@ -1067,16 +1067,14 @@ def _apply_model_size_based_quantization(
                         quantization_config = {"bits": 8, "sym": False}
                         logger.info("The model weights will be quantized to int8_asym.")
                     else:
-                        quantization_configs = default_quantization_config.get("quantization_configs")
-                        if quantization_configs is None:
-                            quantization_config = default_quantization_config
-                        elif submodel_name in quantization_configs:
-                            quantization_config = quantization_configs[submodel_name]
-                        elif not skip_auto_compression:
-                            quantization_config = {"bits": 8, "sym": False}
+                        # A model excluded from the automatic compression: only the submodels with an entry in its
+                        # default int8 config are compressed
+                        quantization_config = default_quantization_config.get("quantization_configs", {}).get(
+                            submodel_name
+                        )
                         if quantization_config is not None:
                             logger.info(
-                                f"The model weights will be quantized to int8 with config {quantization_config}."
+                                f"The {submodel_name} weights will be quantized to int8 with config {quantization_config}."
                             )
                 else:
                     logger.warning(

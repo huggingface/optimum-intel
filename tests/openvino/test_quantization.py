@@ -18,6 +18,7 @@ import inspect
 # ruff: noqa
 
 import itertools
+import json
 import logging
 import unittest
 from collections import defaultdict
@@ -1255,20 +1256,6 @@ class OVWeightCompressionTest(unittest.TestCase):
             },
         ),
         (
-            OVLTX2Pipeline,
-            "ltx2.3",
-            8,
-            _DEFAULT_8BIT_WQ_CONFIGS["diffusers/LTX-2.3-Diffusers"],
-            {
-                "transformer": {"int8": 124},
-                "text_encoder": {"int8": 30},
-                "connectors": {},
-                "vae_decoder": {},
-                "audio_vae_decoder": {},
-                "vocoder": {},
-            },
-        ),
-        (
             OVModelForVisualCausalLM,
             "llava",
             4,
@@ -1860,58 +1847,68 @@ class OVWeightCompressionTest(unittest.TestCase):
                 }
                 compress_weights_patch.assert_called_with(unittest.mock.ANY, **compression_params)
 
-    DEFAULT_INT8_CONFIG_AUTO_COMPRESSION_CONFIGURATIONS = [
-        # (model class, model type, default int8 config registered for the model, uncompressed size threshold,
-        #  compressed submodels with the int8 mode each gets)
+    DEFAULT_INT8_CONFIG_CONFIGURATIONS = [
+        # (model class, model type, int8 config registered for the model, `quantization_config` given to
+        #  `from_pretrained`, uncompressed size threshold or None to keep the real one, the config expected for each
+        #  compressed submodel)
+        # Exported without a weight format, the large submodels of a model that is not LTX-2 keep the generic int8_asym
+        # compression, whatever int8 config is registered for the model, e.g. the one of Qwen2.5-Coder-3B with its
+        # dynamic quantization group size
         (
-            # A submodel with an entry gets it, the other large submodels get the generic int8_asym
-            OVStableDiffusionPipeline,
-            "stable-diffusion",
-            {"quantization_configs": {"unet": {"bits": 8, "sym": True, "weight_only": True}}},
+            OVModelForCausalLM,
+            "llama",
+            _DEFAULT_8BIT_WQ_CONFIGS["Qwen/Qwen2.5-Coder-3B-Instruct"],
+            None,
             0,
-            {
-                "unet": nncf.CompressWeightsMode.INT8_SYM,
-                "text_encoder": nncf.CompressWeightsMode.INT8_ASYM,
-                "vae_encoder": nncf.CompressWeightsMode.INT8_ASYM,
-                "vae_decoder": nncf.CompressWeightsMode.INT8_ASYM,
-            },
+            {"model": {"bits": 8, "sym": False}},
         ),
     ]
     if is_diffusers_version(">=", "0.40.0"):
-        LTX2_3_DEFAULT_INT8_CONFIG = {
-            "quantization_configs": {
-                "transformer": {"bits": 8, "sym": True, "weight_only": True},
-                "text_encoder": {"bits": 8, "sym": False, "weight_only": True},
-            }
-        }
-        DEFAULT_INT8_CONFIG_AUTO_COMPRESSION_CONFIGURATIONS.extend(
+        LTX2_3_DEFAULT_INT8_CONFIG = _DEFAULT_8BIT_WQ_CONFIGS["diffusers/LTX-2.3-Diffusers"]
+        DEFAULT_INT8_CONFIG_CONFIGURATIONS.extend(
             [
-                # LTX-2 is excluded from the generic int8_asym compression: only the entries are applied
+                # Exported without a weight format, the real transformer, connectors and text encoder are all above
+                # the size threshold: each of them is compressed with its entry, the other submodels are not compressed
                 (
                     OVLTX2Pipeline,
                     "ltx2.3",
                     LTX2_3_DEFAULT_INT8_CONFIG,
+                    None,
                     0,
-                    {
-                        "transformer": nncf.CompressWeightsMode.INT8_SYM,
-                        "text_encoder": nncf.CompressWeightsMode.INT8_ASYM,
-                    },
+                    LTX2_3_DEFAULT_INT8_CONFIG["quantization_configs"],
                 ),
-                # Below the size threshold nothing is compressed, whatever the registered config
-                (OVLTX2Pipeline, "ltx2.3", LTX2_3_DEFAULT_INT8_CONFIG, None, {}),
+                # The tiny submodels are below the real size threshold: nothing is compressed
+                (OVLTX2Pipeline, "ltx2.3", LTX2_3_DEFAULT_INT8_CONFIG, None, None, {}),
+                # With an int8 weight format, the entries are applied whatever the size
+                (
+                    OVLTX2Pipeline,
+                    "ltx2.3",
+                    LTX2_3_DEFAULT_INT8_CONFIG,
+                    {"bits": 8},
+                    None,
+                    LTX2_3_DEFAULT_INT8_CONFIG["quantization_configs"],
+                ),
             ]
         )
 
     @parameterized.expand(
-        DEFAULT_INT8_CONFIG_AUTO_COMPRESSION_CONFIGURATIONS,
+        DEFAULT_INT8_CONFIG_CONFIGURATIONS,
         name_func=lambda testcase_func, param_num, params: f"{testcase_func.__name__}_{param_num}_{parameterized.to_safe_name(params.args[1])}",
     )
-    def test_ovmodel_load_large_model_with_default_int8_config(
-        self, model_cls, model_type, default_config, uncompressed_size_threshold, expected_compression_modes
+    def test_ovmodel_default_int8_config(
+        self, model_cls, model_type, default_config, quantization_config, uncompressed_size_threshold, expected_configs
     ):
-        # Exported without a weight format, the submodels above the size threshold are compressed to int8 with the
-        # entries of the model's default int8 config. A threshold of `None` keeps the real one, which the tiny models
-        # are all below.
+        # NNCF is not run: the layers of the tiny models do not fit the real configs (e.g. a group size of 32 and the
+        # ignored scopes of LTX-2.3), so the arguments `nncf.compress_weights` gets are stored in the compressed model
+        def compress_weights(model, **kwargs):
+            arguments = {
+                "mode": kwargs["mode"].value,
+                "group_size": kwargs["group_size"],
+                "ignored_patterns": sorted(kwargs["ignored_scope"].patterns),
+            }
+            model.set_rt_info(json.dumps(arguments), ["test", "compress_weights"])
+            return model
+
         with contextlib.ExitStack() as stack:
             stack.enter_context(
                 unittest.mock.patch.dict(
@@ -1927,21 +1924,39 @@ class OVWeightCompressionTest(unittest.TestCase):
                     )
                 )
             compress_weights_patch = stack.enter_context(
-                unittest.mock.patch("nncf.compress_weights", wraps=nncf.compress_weights)
+                unittest.mock.patch("nncf.compress_weights", side_effect=compress_weights)
             )
             model = model_cls.from_pretrained(
-                MODEL_NAMES[model_type], export=True, compile=False, device=OPENVINO_DEVICE
+                MODEL_NAMES[model_type],
+                export=True,
+                compile=False,
+                device=OPENVINO_DEVICE,
+                quantization_config=quantization_config,
             )
 
-        compression_modes = sorted(call.kwargs["mode"] for call in compress_weights_patch.call_args_list)
-        self.assertEqual(sorted(expected_compression_modes.values()), compression_modes)
+        actual_configs = {}
+        for ov_model_name, ov_model in model.ov_models.items():
+            if not ov_model.has_rt_info(["test", "compress_weights"]):
+                continue
+            arguments = json.loads(ov_model.get_rt_info(["test", "compress_weights"]).value)
+            dq_group_size = ["runtime_options", "DYNAMIC_QUANTIZATION_GROUP_SIZE"]
+            if ov_model.has_rt_info(dq_group_size):
+                arguments["dq_group_size"] = int(ov_model.get_rt_info(dq_group_size).value)
+            actual_configs[ov_model_name] = arguments
 
-        expected_int8 = _ARCHITECTURES_TO_EXPECTED_INT8[model_type]
-        expected_int8 = {k: {"int8": v} if k in expected_compression_modes else {} for k, v in expected_int8.items()}
-        if model_type == "ltx2.3":
-            # Only the LTX-2 image-to-video pipeline loads a VAE encoder, to encode the input image.
-            del expected_int8["vae_encoder"]
-        check_compression_state_per_model(self, model.ov_models, expected_int8)
+        expected_arguments = {}
+        for ov_model_name, config in expected_configs.items():
+            mode = nncf.CompressWeightsMode.INT8_SYM if config.get("sym") else nncf.CompressWeightsMode.INT8_ASYM
+            expected_arguments[ov_model_name] = {
+                "mode": mode.value,
+                "group_size": config.get("group_size"),
+                "ignored_patterns": sorted(config.get("ignored_scope", {}).get("patterns", [])),
+            }
+            if config.get("dq_group_size") is not None:
+                expected_arguments[ov_model_name]["dq_group_size"] = config["dq_group_size"]
+        self.assertEqual(expected_arguments, actual_configs)
+        # Each compressed submodel is compressed once
+        self.assertEqual(len(expected_configs), compress_weights_patch.call_count)
 
     @parameterized.expand([(MODEL_NAMES["gpt2"],)])
     def test_dataset_seq_len_option(self, model_id):
