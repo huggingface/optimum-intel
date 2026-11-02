@@ -514,7 +514,9 @@ class OVModelForImageTextToTextIntegrationTest(OVSeq2SeqTestMixin):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
-        ov_model = self.OVMODEL_CLASS.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
+        ov_model = self.OVMODEL_CLASS.from_pretrained(
+            model_id, export=True, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
+        )
         self._check_openvino_model_attributes(ov_model, use_cache=True, stateful=False)
 
         set_seed(SEED)
@@ -1011,7 +1013,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         )
         transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(model_id)
         ov_model = self.OVMODEL_CLASS.from_pretrained(
-            model_id, export=True, trust_remote_code=trust_remote_code, device=OPENVINO_DEVICE
+            model_id, export=True, trust_remote_code=trust_remote_code, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
         )
         self.assertTrue(ov_model._support_new_processing)
         self.assertTrue(processor.patch_size is not None)
