@@ -168,15 +168,21 @@ class ExportModelTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = {
         model_type: model_cls
         for model_type, model_cls in SUPPORTED_ARCHITECTURES.items()
-        if TEST_NAME_TO_MODEL_TYPE.get(model_type, model_type)
-        in (
-            get_supported_model_for_library("transformers")
-            | get_supported_model_for_library("diffusers")
-            | get_supported_model_for_library("funasr")
+        if (
+            TEST_NAME_TO_MODEL_TYPE.get(model_type, model_type)
+            in (
+                get_supported_model_for_library("transformers")
+                | get_supported_model_for_library("diffusers")
+                | get_supported_model_for_library("funasr")
+            )
+            # Qwen3-TTS is exported component by component through custom export configs rather than a
+            # task registry entry, so the registry lookup above cannot see it; it needs `qwen_tts`.
+            or (model_type == "qwen3_tts" and is_qwen_tts_available())
         )
-        # Qwen3-TTS is exported component by component through custom export configs rather than a
-        # task registry entry, so the registry lookup above cannot see it; it needs `qwen_tts`.
-        or (model_type == "qwen3_tts" and is_qwen_tts_available())
+        and (
+            model_type != "ltx2.5"
+            or (is_transformers_version(">=", "5.10.0") and is_diffusers_version(">=", "0.40.0"))
+        )
     }
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
@@ -502,7 +508,9 @@ class LTX2ExportContractTest(unittest.TestCase):
     if is_diffusers_version(">=", "0.38.0"):
         SUPPORTED_ARCHITECTURES.append("ltx2")
     if is_diffusers_version(">=", "0.40.0"):
-        SUPPORTED_ARCHITECTURES.extend(["ltx2.3", "ltx2.5"])
+        SUPPORTED_ARCHITECTURES.append("ltx2.3")
+    if is_transformers_version(">=", "5.10.0") and is_diffusers_version(">=", "0.40.0"):
+        SUPPORTED_ARCHITECTURES.append("ltx2.5")
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers

@@ -88,6 +88,7 @@ from optimum.intel.openvino.utils import (
 from optimum.intel.utils.import_utils import (
     compare_versions,
     is_compressed_tensors_available,
+    is_diffusers_version,
     is_openvino_tokenizers_available,
     is_openvino_version,
     is_qwen_tts_available,
@@ -178,6 +179,10 @@ class OVCLIExportTestCase(unittest.TestCase):
         for task, model_type in SUPPORTED_ARCHITECTURES
         if TEST_NAME_TO_MODEL_TYPE.get(model_type, model_type)
         in get_supported_model_for_library("transformers") | get_supported_model_for_library("diffusers")
+        and (
+            model_type != "ltx2.5"
+            or (is_transformers_version(">=", "5.10.0") and is_diffusers_version(">=", "0.40.0"))
+        )
     ]
 
     # Add custom model types

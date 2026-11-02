@@ -1149,7 +1149,9 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
     if is_diffusers_version(">=", "0.38.0"):
         SUPPORTED_ARCHITECTURES.extend(["ltx2"])
     if is_diffusers_version(">=", "0.40.0"):
-        SUPPORTED_ARCHITECTURES.extend(["ltx2.3", "ltx2.5"])
+        SUPPORTED_ARCHITECTURES.append("ltx2.3")
+    if is_transformers_version(">=", "5.10.0") and is_diffusers_version(">=", "0.40.0"):
+        SUPPORTED_ARCHITECTURES.append("ltx2.5")
 
     OVMODEL_CLASS = OVPipelineForText2Video
     AUTOMODEL_CLASS = DiffusionPipeline
@@ -1416,7 +1418,9 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
         SUPPORTED_ARCHITECTURES.extend(["ltx2"])
     # See the note in OVPipelineForText2VideoTest: LTX-2.3 landed in diffusers 0.40.0.dev0.
     if is_diffusers_version(">=", "0.40.0"):
-        SUPPORTED_ARCHITECTURES.extend(["ltx2.3", "ltx2.5"])
+        SUPPORTED_ARCHITECTURES.append("ltx2.3")
+    if is_transformers_version(">=", "5.10.0") and is_diffusers_version(">=", "0.40.0"):
+        SUPPORTED_ARCHITECTURES.append("ltx2.5")
 
     OVMODEL_CLASS = OVPipelineForImage2Video
     AUTOMODEL_CLASS = DiffusionPipeline
@@ -1649,8 +1653,9 @@ class OVLTX2AutoDurationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = []
     LEGACY_ARCHITECTURES = []
     if is_diffusers_version(">=", "0.40.0"):
-        SUPPORTED_ARCHITECTURES.append("ltx2.5")
         LEGACY_ARCHITECTURES.extend(["ltx2", "ltx2.3"])
+    if is_transformers_version(">=", "5.10.0") and is_diffusers_version(">=", "0.40.0"):
+        SUPPORTED_ARCHITECTURES.append("ltx2.5")
 
     OVMODEL_CLASS = OVPipelineForText2Video
     AUTOMODEL_CLASS = DiffusionPipeline
@@ -1780,7 +1785,7 @@ class OVLTX2PromptEnhancerTest(unittest.TestCase):
     """
 
     SUPPORTED_ARCHITECTURES = []
-    if is_diffusers_version(">=", "0.40.0"):
+    if is_transformers_version(">=", "5.10.0") and is_diffusers_version(">=", "0.40.0"):
         SUPPORTED_ARCHITECTURES.append("ltx2.5")
 
     OVMODEL_CLASS = OVPipelineForText2Video

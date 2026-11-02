@@ -16,7 +16,6 @@ import copy
 import functools
 import gc
 import inspect
-import json
 import logging
 import os
 from pathlib import Path
@@ -954,7 +953,6 @@ def export_from_model(
         )
 
         model.save_config(output)
-        _drop_unexported_ltx2_components(model, output)
 
     _set_runtime_options(
         models_and_export_configs,
@@ -1496,46 +1494,6 @@ def _export_ltx2_prompt_enhancer(model, output: Path, **export_kwargs) -> List[s
         **export_kwargs,
     )
     return [os.path.join(subfolder, path) for path in enhancer_paths]
-
-
-def _drop_unexported_ltx2_components(model, output: Path):
-    """Null out `model_index.json` entries for LTX-2 components that were never written to disk.
-
-    `save_config` copies the torch pipeline's module registry verbatim. From LTX-2.5 on that registry
-    includes components belonging to *sibling* pipelines -- `diffusion_decoder` is only used by
-    `LTX2VideoDiffusionDecodePipeline` -- which this export does not produce, so loading the result
-    would go looking for folders that are not there.
-
-    Scoped to LTX-2 on purpose: other pipelines have their own long-standing handling of absent
-    components (the `safety_checker` back-compat path in `OVDiffusionPipeline._from_pretrained`, say),
-    and this must not change what they write.
-    """
-    if not model.__class__.__name__.startswith("LTX2"):
-        return
-
-    config_path = output / "model_index.json"
-    if not config_path.is_file():
-        return
-
-    model_index = json.loads(config_path.read_text())
-    dropped = []
-    for name, entry in model_index.items():
-        if name.startswith("_") or not (isinstance(entry, (list, tuple)) and len(entry) == 2):
-            continue
-        if entry[0] is None:
-            continue
-        # A component is on disk under its own name, or split across `<name>_*` folders: `vae` is
-        # written as `vae_decoder` / `vae_encoder`, `audio_vae` as `audio_vae_decoder`.
-        if (output / name).is_dir() or any(
-            child.is_dir() and child.name.startswith(f"{name}_") for child in output.iterdir()
-        ):
-            continue
-        model_index[name] = [None, None]
-        dropped.append(name)
-
-    if dropped:
-        logger.info(f"Not exported, so removed from model_index.json: {', '.join(sorted(dropped))}")
-        config_path.write_text(json.dumps(model_index, indent=2, sort_keys=True) + "\n")
 
 
 def get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype):
