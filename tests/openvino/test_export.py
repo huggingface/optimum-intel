@@ -466,6 +466,64 @@ class ExportModelTest(unittest.TestCase):
                 model_path = Path(tmpdir) / f"openvino_{behavior.value}_model.xml"
                 self.assertTrue(model_path.exists(), f"Missing {behavior.value}_model for task={task}")
 
+    @unittest.skipUnless(is_transformers_version(">=", "5.0"), "qwen3_omni_moe requires transformers >= 5.0")
+    def test_qwen3_omni_moe_export_16bit_experts_compressible(self):
+        # The real checkpoints are bfloat16. Packed 3D expert weights must reach their MatMul as 16-bit constants
+        # through a decompression Convert only, otherwise NNCF weight compression skips them (a `chunk` between the
+        # constant and the MatMul leaves a VariadicSplit NNCF does not look through).
+        import openvino as ov
+        from transformers import AutoConfig, Qwen3OmniMoeForConditionalGeneration
+
+        from optimum.exporters.openvino.__main__ import _ensure_qwen3_omni_rope_scaling
+
+        model_name = MODEL_NAMES["qwen3_omni_moe"]
+        config = _ensure_qwen3_omni_rope_scaling(AutoConfig.from_pretrained(model_name))
+        model = Qwen3OmniMoeForConditionalGeneration.from_pretrained(
+            model_name, config=config, attn_implementation="eager", dtype=torch.bfloat16
+        )
+        thinker_experts = [layer.mlp.experts for layer in model.thinker.model.layers]
+        talker_experts = [layer.mlp.experts for layer in model.talker.model.layers if hasattr(layer.mlp, "experts")]
+        self.assertEqual(thinker_experts[0].gate_up_proj.dtype, torch.bfloat16)
+        original_forwards = {id(experts): experts.forward for experts in thinker_experts + talker_experts}
+
+        def expert_weight_consumers(model_path, num_experts):
+            consumers = []
+            for op in ov.Core().read_model(model_path).get_ops():
+                if op.get_type_name() != "Constant" or len(op.get_output_shape(0)) != 3:
+                    continue
+                shape = list(op.get_output_shape(0))
+                if shape[0] != num_experts or min(shape) == 1:
+                    continue
+                if op.get_element_type() not in (ov.Type.bf16, ov.Type.f16, ov.Type.f32):
+                    continue
+                consumer = op.output(0).get_target_inputs().pop().get_node()
+                while consumer.get_type_name() == "Convert":
+                    consumer = consumer.output(0).get_target_inputs().pop().get_node()
+                consumers.append((op.get_element_type(), consumer.get_type_name()))
+            return consumers
+
+        with TemporaryDirectory() as tmpdir:
+            export_from_model(model, tmpdir, task="image-text-to-text", stateful=True, patch_16bit_model=True)
+            for behavior, experts in (
+                (Qwen3OmniMoeConfigBehavior.LANGUAGE, thinker_experts),
+                (Qwen3OmniMoeConfigBehavior.TALKER, talker_experts),
+            ):
+                consumers = expert_weight_consumers(
+                    Path(tmpdir) / f"openvino_{behavior.value}_model.xml", experts[0].num_experts
+                )
+                # gate, up and down projections per MoE layer
+                self.assertEqual(len(consumers), 3 * len(experts), f"{behavior.value}: {consumers}")
+                self.assertEqual({consumer for _, consumer in consumers}, {"MatMul"}, f"{behavior.value}: {consumers}")
+                # OpenVINO < 2026.5 upcasts packed expert weights of the whole model to f32 in place while preparing
+                # the preceding sub-model exports; OpenVINO >= 2026.5 keeps them 16-bit.
+                self.assertLessEqual({dtype for dtype, _ in consumers}, {ov.Type.bf16, ov.Type.f32}, behavior.value)
+
+        for experts in thinker_experts + talker_experts:
+            self.assertFalse(hasattr(experts, "ov_gate_proj"))
+            self.assertFalse(hasattr(experts, "_openvino_module_extension_patch_orig_forward"))
+            self.assertNotIn("forward", experts.__dict__)
+            self.assertEqual(experts.forward.__func__, original_forwards[id(experts)].__func__)
+
     def test_compare_openvino_onnx_supported_architectures(self):
         onnx_architectures = set()
         openvino_architectures = set()

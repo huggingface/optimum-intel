@@ -5125,12 +5125,28 @@ class _Qwen3OmniMoeLMPatcherMixin:
 
     def __enter__(self):
         super().__enter__()
+        # 16-bit `gate_up_proj` must be pre-split into `ov_gate_proj` / `ov_up_proj` (see
+        # `prepare_minicpmv4_7_moe_weights`): OpenVINO >= 2026.5 keeps packed 3D expert weights 16-bit instead of
+        # upcasting them to f32, so the `chunk` in `lfm2_moe_experts_forward` is no longer constant-folded and the
+        # resulting VariadicSplit between the constant and the bmm hides `gate_up_proj` from NNCF weight compression.
+        self._prepared_experts = [
+            module
+            for module in self._model.modules()
+            if isinstance(module, self._moe_block_cls) and module.gate_up_proj.dtype in (torch.float16, torch.bfloat16)
+        ]
+        for experts in self._prepared_experts:
+            prepare_minicpmv4_7_moe_weights(experts)
         # Patch MoE forward to avoid .nonzero() which breaks tracing.
         self._original_moe_forward = self._moe_block_cls.forward
         self._moe_block_cls.forward = self._patched_moe_forward
 
     def __exit__(self, exc_type, exc_value, traceback):
         self._moe_block_cls.forward = self._original_moe_forward
+        for experts in self._prepared_experts:
+            restore_minicpmv4_7_moe_weights(experts)
+            # OpenVINO's unpatching re-assigns the stashed bound `forward` as an instance attribute, which would
+            # shadow the class-level forward restored above.
+            experts.__dict__.pop("forward", None)
         super().__exit__(exc_type, exc_value, traceback)
 
 
