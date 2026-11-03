@@ -320,6 +320,77 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "ConvertToSwishCPU",
         ],
     },
+    "muse_glimmer_assistant": {
+        "model_class": "OVAssistantForCausalLM",
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+            "TransposeConvert",
+        ],
+        "compile": [
+            "CommonDecompositions",
+            "LinOpSequenceFusion",
+            "MultiplyFusions",
+            "ConvertSoftMax8ToSoftMax1",
+            "ConvertBroadcast3",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusion",
+            "RMSFusion",
+            "ConvertMatMulToFC",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+        ],
+    },
+    "minicpmv4_7": {
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+            "CommonFusions",
+            "TransposeConvert",
+        ],
+        "compile": [
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "CommonDecompositions",
+            "MultiplyFusions",
+            "ConvertSoftMax8ToSoftMax1",
+            "ConvertBroadcast3",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "RMSFusion",
+            "GatedDeltaNetFusion",
+            "ConvertTiledMoeBlockToGatherMatmuls",
+            "ConvertMatMulToFC",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+        ],
+    },
+    "minicpm_ocr": {
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+            "CommonFusions",
+            "TransposeConvert",
+        ],
+        "compile": [
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "CommonDecompositions",
+            "MultiplyFusions",
+            "ConvertSoftMax8ToSoftMax1",
+            "ConvertBroadcast3",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "RMSFusion",
+            "GatedDeltaNetFusion",
+            "ConvertMatMulToFC",
+            "ConvertToSwishCPU",
+        ],
+    },
     "deepseek_ocr2": {
         "model_class": "OVModelForVisualCausalLM",
         "convert": [
@@ -446,7 +517,6 @@ if is_diffusers_version(">=", "0.38.0"):
             "PackMultiHeadAttention",
             "CommonFusions",
             "TransposeConvert",
-            "TransposeFuse",
             "ReverseInputChannelsFusion",
             "BroadcastTransition",
         ],
@@ -464,6 +534,59 @@ if is_diffusers_version(">=", "0.38.0"):
             "MultiplyFusions",
             "RoPEFusion",
             "RoPEFusionGPTNEOX",
+            "SDPASubgraphFusion",
+            "Snippets",
+            "Tokenization",
+        ],
+    }
+
+if is_diffusers_version(">=", "0.40.0"):
+    _ltx2 = ARCH_TO_EXPECTED_TRANSFORMATIONS["ltx2"]
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["ltx2.3"] = {
+        "model_class": "OVLTX2Pipeline",
+        "convert": list(_ltx2["convert"]),
+        "compile": list(_ltx2["compile"]),
+    }
+    if is_transformers_version(">=", "5.10.0"):
+        ARCH_TO_EXPECTED_TRANSFORMATIONS["ltx2.5"] = {
+            "model_class": "OVLTX2Pipeline",
+            # TransposeConvert has nothing to match in the LTX-2.5 export
+            "convert": [t for t in _ltx2["convert"] if t != "TransposeConvert"],
+            "compile": list(_ltx2["compile"]),
+        }
+
+
+if is_diffusers_version(">=", "0.33.0"):
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["ltx-video-0.9.5"] = {
+        "model_class": "OVLTXPipeline",
+        "convert": [
+            "CommonFusions",
+            "ConstantFolding",
+            "MOC",
+            "ReshapeOptimizations",
+            "SDPAFusion",
+            "ShapeOfConstFolding",
+            "SharedOpOptimization",
+            "SmartReshape",
+        ],
+        "compile": [
+            "CausalMaskPreprocessFusion",
+            "CommonDecompositions",
+            "CommonOptimizations",
+            "ConvertBroadcast3",
+            "ConvertMatMulToFC",
+            "ConvertSoftMax8ToSoftMax1",
+            "ConvertToCPUSpecificOpset",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+            "DecompressionHandling",
+            "FullyConnectedBiasFusion",
+            "FuseTransposeBrgemm",
+            "LinOpSequenceFusion",
+            "MultiplyFusions",
+            "RMSFusion",
+            "RoPEFusion",
+            "RoPEFusionLtxVideo",
             "SDPASubgraphFusion",
             "Snippets",
             "Tokenization",

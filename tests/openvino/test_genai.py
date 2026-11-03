@@ -45,6 +45,7 @@ from transformers import (
 )
 import test_decoder as _test_decoder
 import test_seq2seq as _test_seq2seq
+import test_tts as _test_tts
 from utils_tests import (
     DFLASH_MODELS,
     DFLASH_VLM_MODELS,
@@ -352,10 +353,13 @@ _GENAI_VLM_UNSUPPORTED_ARCHITECTURES = (
     "llama4",
     "maira2",
     "minicpmv",  # transformers output is empty with tiny model on transformers 4.57
+    "minicpm_v4_5",  # tokenizer argument unsupported by this generic test
     "smolvlm",
     "videochat_flash_qwen",  # GenAI requires video input; image-only not supported
     "qwen3_omni_moe",
     "mistral3",
+    "ministral3",
+    "muse_glimmer",
 )
 
 # Gemma 4 version requirements for OpenVINO GenaAI are documented at:
@@ -582,7 +586,7 @@ class Speech2TextPipelineTestCase(unittest.TestCase):
 
 @pytest.mark.skipif(OPENVINO_DEVICE == "NPU", reason="Text2Speech test is not yet supported on NPU")
 class Text2SpeechPipelineTestCase(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = _test_seq2seq.OVModelForTextToSpeechSeq2SeqIntegrationTest.SUPPORTED_ARCHITECTURES
+    SUPPORTED_ARCHITECTURES = _test_tts.OVModelForTextToSpeechSeq2SeqIntegrationTest.SUPPORTED_ARCHITECTURES
     VOCODER = "fxmarty/speecht5-hifigan-tiny"
 
     GEN_KWARGS = {

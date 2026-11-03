@@ -78,6 +78,7 @@ from optimum.intel.openvino.configuration import (
     _DEFAULT_8BIT_WQ_CONFIGS,
     _quantization_config_from_dict,
     _GPTOSSQuantizationConfig,
+    _MiniCPMOCRQuantizationConfig,
 )
 from optimum.intel.openvino.modeling_visual_language import _OVNanoLlavaForCausalLM
 from optimum.intel.openvino.utils import TemporaryDirectory
@@ -86,6 +87,7 @@ from copy import deepcopy
 from optimum.intel.openvino.quantization import InferRequestWrapper, OVCalibrationDatasetBuilder
 from optimum.exporters.openvino import main_export
 from optimum.intel.utils.import_utils import (
+    is_diffusers_version,
     is_nncf_version,
     is_openvino_version,
     is_qwen_tts_available,
@@ -1023,7 +1025,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 num_samples=1,
             ),
             {
-                "lm_model": {"int8": 10, "int4": 24},
+                "lm_model": {"int8": 12, "int4": 22},
                 "text_embeddings_model": {"int8": 1},
                 "vision_embeddings_model": {"int8": 13},
                 "vision_embeddings_pos_model": {"int8": 1},
@@ -1185,16 +1187,20 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForVisualCausalLM, "minicpmv", True),
         (OVModelForSpeechSeq2Seq, "qwen3_asr", True),
         (OVModelForSpeechSeq2Seq, "fun_asr", True),
+        (OVModelForSpeechSeq2Seq, "sense_voice", False),
         (OVModelForVisualCausalLM, "videochat_flash_qwen", True),
         (OVModelForVisualCausalLM, "qwen3_5", False),
         (OVModelForVisualCausalLM, "qwen3_5_mtp", False),
         (OVModelForVisualCausalLM, "qwen3_5_moe", False),
         (OVModelForVisualCausalLM, "qwen3_5_moe_mtp", False),
+        (OVModelForVisualCausalLM, "qwen3_5_moe_mtp_legacy_weights", False),
         (OVModelForVisualCausalLM, "gemma4", False),
         (OVModelForVisualCausalLM, "gemma4_moe", False),
         (OVModelForVisualCausalLM, "deepseek_ocr2", False),
         (OVModelForVisualCausalLM, "mistral3", False),
         (OVModelForVisualCausalLM, "ministral3", False),
+        (OVModelForVisualCausalLM, "minicpmv4_7", False),
+        (OVModelForVisualCausalLM, "minicpm_ocr", False),
     ]
 
     # gemma3n openvino>=2026.2.0 because it needs erfinv operation,
@@ -1293,6 +1299,25 @@ class OVWeightCompressionTest(unittest.TestCase):
             },
         ),
     ]
+
+    if is_transformers_version(">=", "5.10.0") and is_diffusers_version(">=", "0.40.0"):
+        DEFAULT_COMPRESSION_CONFIGURATIONS.append(
+            (
+                OVLTX2Pipeline,
+                "ltx2.5",
+                8,
+                _DEFAULT_8BIT_WQ_CONFIGS["Lightricks/LTX-2.5-Diffusers"],
+                {
+                    "transformer": {"int8": 192},
+                    "text_encoder": {"int8": 28},
+                    "connectors": {},
+                    "vae_decoder": {},
+                    "audio_vae_decoder": {},
+                    "vocoder": {},
+                    "duration_head": {},
+                },
+            )
+        )
 
     # Qwen3-TTS resolves `quantization_config` itself rather than through the default-config table,
     # so the configs given here are the ones it applies for these `bits`. Compression is per
@@ -1520,6 +1545,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             stateful=False,
             trust_remote_code=trust_remote_code,
         )
+
         ref_config = OVWeightQuantizationConfig(bits=8, sym=isinstance(model, OVModelForVisualCausalLM)).to_dict()
 
         if model_type == "open-clip":
@@ -2295,6 +2321,12 @@ class OVQuantizationConfigTest(unittest.TestCase):
                 quantization_config2=OVWeightQuantizationConfig(bits=8),
             ),
         ),
+        (
+            _MiniCPMOCRQuantizationConfig(
+                first_stage=OVWeightQuantizationConfig(bits=4, group_size=16, dataset="wikitext2", num_samples=2),
+                second_stage=OVWeightQuantizationConfig(bits=8, weight_only=True),
+            ),
+        ),
     )
 
     QUANTIZATION_CONFIG_DICTS = (
@@ -2397,6 +2429,16 @@ class OVQuantizationConfigTest(unittest.TestCase):
             _GPTOSSQuantizationConfig,
             None,
         ),
+        (
+            dict(
+                config_class="minicpm_ocr",
+                first_stage=dict(bits=4, group_size=16, dataset="wikitext2"),
+                second_stage=dict(bits=8, weight_only=True),
+            ),
+            _MiniCPMOCRQuantizationConfig,
+            None,
+        ),
+        (dict(config_class="minicpm_ocr"), _MiniCPMOCRQuantizationConfig, None),
     )
 
     QUANTIZATION_CONFIGS_WITH_KWARGS = (

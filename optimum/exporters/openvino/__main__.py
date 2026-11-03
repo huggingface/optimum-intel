@@ -27,7 +27,7 @@ from requests.exceptions import ConnectionError as RequestsConnectionError
 from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
 from transformers.utils import is_torch_available
 
-from openvino import Core, Type, save_model
+from openvino import Core, Model, Type, save_model
 from optimum.exporters.openvino.base import OpenVINOConfig
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
@@ -49,6 +49,7 @@ from optimum.intel.utils.modeling_utils import (
 from .utils import (
     _MAX_UNCOMPRESSED_SIZE,
     MULTI_MODAL_TEXT_GENERATION_MODELS,
+    check_transformers_version_compatibility,
     clear_class_registry,
     deduce_diffusers_dtype,
     is_auto_compression_disabled,
@@ -98,7 +99,15 @@ def infer_task(
             # Use the with-past task so the encoder-decoder export is stateful (KV cache hidden in
             # OpenVINO state). Without the `-with-past` suffix the decoder is exported stateless and
             # incremental generation breaks (only the first token is correct).
-            task = "automatic-speech-recognition-with-past"
+            from optimum.intel.openvino.modeling_funasr import _is_sensevoice_source
+
+            if _is_sensevoice_source(
+                model_name_or_path, cache_dir=cache_dir, token=token, subfolder=subfolder, revision=revision
+            ):
+                # SenseVoiceSmall is a non-autoregressive (CTC encoder-only) model exported as a single stateless graph.
+                task = "automatic-speech-recognition"
+            else:
+                task = "automatic-speech-recognition-with-past"
         else:
             try:
                 task = TasksManager._infer_task_from_model_name_or_path(
@@ -167,6 +176,8 @@ def infer_task(
                     raise e
             else:
                 raise
+        if original_task == "auto" and (config.architectures or [None])[0] in _NATIVE_DRAFT_MODEL_CLASSES:
+            task = "text-generation-with-past"
         if hasattr(config, "export_model_type"):
             model_type = config.export_model_type
         else:
@@ -223,9 +234,26 @@ def _ensure_qwen3_omni_rope_scaling(config):
 _CUSTOM_DRAFT_MODEL_MAP = {
     "LlamaForCausalLMEagle3": ("LlamaEagle3Model", "LlamaEagle3ForCausalLM"),
     "Eagle3LlamaForCausalLM": ("LlamaEagle3Model", "LlamaEagle3ForCausalLM"),
-    "DFlashDraftModel": ("Qwen3DFlashDraftModel", "Qwen3DFlashForCausalLM"),
-    "Qwen3DSparkModel": ("Qwen3DFlashDraftModel", "Qwen3DFlashForCausalLM"),
 }
+
+# Maps config.architectures[0] to the model_patcher export class of DFlash draft models, or to a
+# function building that class. They are loaded directly, so unlike `_CUSTOM_DRAFT_MODEL_MAP` they
+# need no `auto_map` indirection (and no `trust_remote_code`).
+_NATIVE_DRAFT_MODEL_CLASSES = {
+    "DFlashDraftModel": "Qwen3DFlashForCausalLM",
+    "Qwen3DSparkModel": "Qwen3DFlashForCausalLM",
+    "MuseGlimmerAssistantModel": "get_muse_glimmer_assistant_draft_model_class",
+}
+
+
+def load_native_draft_model(architecture: str, model_name_or_path: str, **kwargs):
+    from optimum.exporters.openvino import model_patcher
+
+    model_class = getattr(model_patcher, _NATIVE_DRAFT_MODEL_CLASSES[architecture])
+    # The MuseGlimmer drafter class is built lazily because it needs transformers >= 5.15.
+    if not isinstance(model_class, type):
+        model_class = model_class()
+    return model_class.from_pretrained(model_name_or_path, **kwargs)
 
 
 def update_config_for_custom_draft_model(config, auto_model, auto_model_for_causal_lm):
@@ -481,6 +509,11 @@ def main_export(
             raise ValueError(
                 f"Asked to export a {model_type} model for the task {task}{autodetected_message}, but the Optimum OpenVINO exporter only supports the tasks {', '.join(model_tasks.keys())} for {model_type}. Please use a supported task. Please open an issue at https://github.com/huggingface/optimum-intel/issues if you would like the task {task} to be supported in the OpenVINO export for {model_type}."
             )
+        if model_type in TasksManager._SUPPORTED_MODEL_TYPE:
+            export_config_constructor = TasksManager.get_exporter_config_constructor(
+                exporter="openvino", task=task, model_type=model_type, library_name=library_name
+            )
+            check_transformers_version_compatibility(export_config_constructor)
 
         # some models force flash_attn attention by default that does not support load model on cpu
         if model_type in FORCE_ATTN_MODEL_CLASSES:
@@ -631,9 +664,33 @@ def main_export(
         elif library_name == "kokoro":
             model = _KokoroForTextToSpeech.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
         elif library_name == "funasr":
-            from optimum.intel.openvino.modeling_funasr import _FunASRForSpeechSeq2Seq
+            from optimum.intel.openvino.modeling_funasr import (
+                _FunASRForSpeechSeq2Seq,
+                _is_sensevoice_source,
+                _SenseVoiceForCTC,
+            )
 
-            model = _FunASRForSpeechSeq2Seq.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
+            if _is_sensevoice_source(
+                model_name_or_path, cache_dir=cache_dir, token=token, subfolder=subfolder, revision=revision
+            ):
+                model = _SenseVoiceForCTC.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
+            else:
+                model = _FunASRForSpeechSeq2Seq.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
+        elif (
+            library_name == "transformers"
+            and (getattr(config, "architectures", None) or [None])[0] in _NATIVE_DRAFT_MODEL_CLASSES
+        ):
+            model = load_native_draft_model(
+                config.architectures[0],
+                model_name_or_path,
+                subfolder=subfolder,
+                revision=revision,
+                cache_dir=cache_dir,
+                token=token,
+                local_files_only=local_files_only,
+                force_download=force_download,
+                **loading_kwargs,
+            )
         elif library_name == "qwen3_tts":
             # Without an explicit request the checkpoint's own precision is kept, so the IRs
             # come out at the precision the model was published in rather than upcast. A
@@ -803,6 +860,8 @@ def _main_quantize(
             `model_kwargs={"output_attentions": True}` is passed).
 
     """
+    from optimum.intel.openvino.configuration import OVWeightQuantizationConfig
+    from optimum.intel.openvino.modeling_dflash import is_dflash_draft_model
     from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
 
     # Step 0. Infer task and library name if needed
@@ -868,6 +927,13 @@ def _main_quantize(
             model_cls_name = _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
             if library_name == "sentence_transformers":
                 model_cls_name = "OVSentenceTransformer"
+            elif (
+                library_name == "transformers"
+                and task == "text-classification"
+                and model_type in MULTI_MODAL_TEXT_GENERATION_MODELS
+            ):
+                # a VLM with a sequence classification head is exported as VLM parts
+                model_cls_name = "OVModelForVisualSequenceClassification"
             model_cls = getattr(__import__("optimum.intel", fromlist=[model_cls_name]), model_cls_name)
         except (AttributeError, ImportError, KeyError) as e:
             raise RuntimeError(f"Wasn't able to locate OpenVINO class for task {original_task} ({task}).") from e
@@ -883,6 +949,16 @@ def _main_quantize(
     )
 
     # Step 3. Apply quantization and save the quantized model
+    if (
+        isinstance(quantization_config, OVWeightQuantizationConfig)
+        and quantization_config.bits == 4
+        and quantization_config.all_layers is None
+        and isinstance(getattr(model, "model", None), Model)
+        and is_dflash_draft_model(model.model)
+    ):
+        # DFlash drafts have no embeddings or lm_head, so NNCF's "last MatMul stays int8" rule would hit a decoder layer.
+        quantization_config = quantization_config.clone()
+        quantization_config.all_layers = True
     model._apply_quantization(
         quantization_config,
         compile_only=False,
@@ -913,7 +989,28 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
     from optimum.exporters.openvino.convert import export_tokenizer
 
     if is_openvino_tokenizers_available():
-        if library_name != "diffusers" and preprocessors:
+        if (
+            library_name == "funasr"
+            and model is not None
+            and getattr(model.config, "export_model_type", None) == "sense_voice"
+        ):
+            # SenseVoiceSmall ships a SentencePiece BPE model rather than a transformers tokenizer, so it
+            # is not among ``preprocessors``. It has no text input, so build only the OV detokenizer IR from
+            # that BPE model.
+            from optimum.intel.openvino.modeling_funasr import export_sensevoice_tokenizers
+
+            source = getattr(model, "_sensevoice_source", None)
+            if source is None:
+                logger.warning("SenseVoice source path unknown; OpenVINO detokenizer model won't be generated.")
+            else:
+                try:
+                    export_sensevoice_tokenizers(source, output)
+                except Exception as exception:
+                    logger.warning(
+                        "Could not convert the SenseVoice tokenizer. OpenVINO detokenizer "
+                        f"model won't be generated. Exception: {exception}"
+                    )
+        elif library_name != "diffusers" and preprocessors:
             processor_chat_template = None
             tokenizer = next(filter(lambda it: isinstance(it, PreTrainedTokenizerBase), preprocessors), None)
             if len(preprocessors) > 1:

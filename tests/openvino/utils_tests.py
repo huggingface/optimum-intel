@@ -266,6 +266,8 @@ HUB_MODEL_NAMES = {
     "minicpm": "optimum-intel-internal-testing/tiny-random-minicpm",
     "minicpm3": "optimum-intel-internal-testing/tiny-random-minicpm3",
     "minicpmv": "optimum-intel-internal-testing/tiny-random-minicpmv-2_6",
+    "minicpmv4_7": "optimum-intel-internal-testing/tiny-random-minicpmv47",
+    "minicpm_ocr": "optimum-intel-internal-testing/tiny-random-minicpm-ocr",
     "minicpmo": "optimum-intel-internal-testing/tiny-random-MiniCPM-o-2_6",
     "minicpm_v4_5": "optimum-intel-internal-testing/tiny-random-minicpm-v-4_5",
     "mistral": "optimum-intel-internal-testing/tiny-random-mistral",
@@ -281,6 +283,7 @@ HUB_MODEL_NAMES = {
     "mpt": "optimum-intel-internal-testing/tiny-random-MptForCausalLM",
     "mpnet": "optimum-intel-internal-testing/tiny-random-MPNetModel",
     "muse_glimmer": "optimum-intel-internal-testing/tiny-random-muse-glimmer",
+    "muse_glimmer_assistant": "optimum-intel-internal-testing/tiny-random-muse-glimmer-assistant",
     "mt5": "optimum-intel-internal-testing/mt5-tiny-random",
     "llava-qwen2": "optimum-intel-internal-testing/tiny-random-nanollava",
     "nanollava_vision_tower": "optimum-intel-internal-testing/tiny-random-siglip",
@@ -315,14 +318,17 @@ HUB_MODEL_NAMES = {
     "qwen3_5": "optimum-intel-internal-testing/tiny-random-qwen3.5",
     "qwen3_5_compressed_tensors": "optimum-intel-internal-testing/tiny-random-qwen3.5-compressed-tensors",
     "qwen3_5_mtp": "optimum-intel-internal-testing/tiny-random-qwen3.5-mtp",
+    "qwen3_5_seq_cls": "optimum-intel-internal-testing/tiny-random-qwen3.5-seq-cls",
     "qwen3_5_dflash": "optimum-intel-internal-testing/tiny-random-qwen3.5-dflash",
     "qwen3_5_moe": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe",
     "qwen3_5_moe_mtp": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe-mtp",
+    "qwen3_5_moe_mtp_legacy_weights": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe-mtp-legacy",
     "qwen3_5_moe_dflash": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe-dflash",
     "qwen3_asr": "optimum-intel-internal-testing/tiny-random-qwen3-asr",
     "qwen3_dflash": "optimum-intel-internal-testing/tiny-random-qwen3-dflash",
     "qwen3_deepspec_dflash": "optimum-intel-internal-testing/tiny-random-qwen3-deepspec-dflash",
     "fun_asr": "optimum-intel-internal-testing/tiny-random-fun-asr",
+    "sense_voice": "optimum-intel-internal-testing/tiny-random-sense-voice-small",
     "rembert": "optimum-intel-internal-testing/tiny-random-rembert",
     "resnet": "optimum-intel-internal-testing/tiny-random-resnet",
     "roberta": "optimum-intel-internal-testing/tiny-random-roberta",
@@ -377,10 +383,12 @@ HUB_MODEL_NAMES = {
     "sana": "optimum-intel-internal-testing/tiny-random-sana",
     "sana-sprint": "optimum-intel-internal-testing/tiny-random-sana-sprint",
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
+    "ltx-video-0.9.5": "optimum-intel-internal-testing/tiny-random-ltx-video-0.9.5",
     "qwenimage": "optimum-intel-internal-testing/tiny-random-qwen-image",
     "qwenimage21": "optimum-intel-internal-testing/tiny-random-qwen-image-2.1",
     "ltx2": "optimum-intel-internal-testing/tiny-random-ltx2",
     "ltx2.3": "optimum-intel-internal-testing/tiny-random-ltx2.3",
+    "ltx2.5": "optimum-intel-internal-testing/tiny-random-ltx2.5",
     "zamba2": "optimum-intel-internal-testing/tiny-random-zamba2",
     "qwen3_eagle3": "AngelSlim/Qwen3-1.7B_eagle3",
     "qwen3_eagle3_target": "Qwen/Qwen3-1.7B",
@@ -433,19 +441,22 @@ DFLASH_VLM_MODELS = {
     "qwen3_5_dflash": ("qwen3_5_dflash", "qwen3_5"),
     "qwen3_5_moe_dflash": ("qwen3_5_moe_dflash", "qwen3_5_moe"),
     "gemma4_dflash": ("gemma4_dflash", "gemma4"),
+    "muse_glimmer": ("muse_glimmer_assistant", "muse_glimmer"),
 }
 
 # VLM-based Eagle3 draft models (AngelSlim Eagle3LlamaForCausalLM architecture).
 # These use Qwen3-VL MRoPE and target VLM models for speculative decoding.
-EAGLE3_VLM_MODELS = {
-    "qwen3_vl_eagle3": ("qwen3_vl_eagle3", "qwen3_vl_eagle3_target"),
-}
+EAGLE3_VLM_MODELS = {}
+# VLM Eagle3 export is only supported up to transformers 4.57.6
+if is_transformers_version("<=", "4.57.6"):
+    EAGLE3_VLM_MODELS["qwen3_vl_eagle3"] = ("qwen3_vl_eagle3", "qwen3_vl_eagle3_target")
 
 # MTP (Multi-Token Prediction) VLM models: the MTP head is exported inside the model itself
 # (openvino_mtp_model.xml), so the draft and target are the same model directory.
 MTP_VLM_MODELS = {
     "qwen3_5_mtp": ("qwen3_5_mtp", "qwen3_5_mtp"),
     "qwen3_5_moe_mtp": ("qwen3_5_moe_mtp", "qwen3_5_moe_mtp"),
+    "qwen3_5_moe_mtp_legacy_weights": ("qwen3_5_moe_mtp_legacy_weights", "qwen3_5_moe_mtp_legacy_weights"),
 }
 
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
@@ -457,7 +468,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "blenderbot": {"model": 70 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 72},
     "cohere2": {"model": 32},
     "gpt2": {"model": 44},
-    "granitemoehybrid": {"model": 118},
+    "granitemoehybrid": {"model": 70 if is_transformers_version(">=", "5.13") else 118},
     "wav2vec2": {"model": 34},
     "distilbert": {"model": 66},
     "t5": {
@@ -531,6 +542,16 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "lm_model": 66,
         "text_embeddings_model": 1,
         "vision_embeddings_model": 30,
+    },
+    "minicpmv4_7": {
+        "lm_model": 110,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 28,
+    },
+    "minicpm_ocr": {
+        "lm_model": 70,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 22,
     },
     "llava_next": {
         "lm_model": 30,
@@ -629,6 +650,14 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_pos_model": 1,
         "mtp_model": 28,
     },
+    "qwen3_5_moe_mtp_legacy_weights": {
+        "lm_model": 110,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 1,
+        "vision_embeddings_merger_model": 10,
+        "vision_embeddings_pos_model": 1,
+        "mtp_model": 28,
+    },
     "qwen3_omni_moe": {
         "lm_model": 34,
         "text_embeddings_model": 1,
@@ -653,6 +682,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vae_encoder": 28,
         "text_encoder": 64,
     },
+    "ltx-video-0.9.5": {
+        "transformer": 34,
+        "vae_decoder": 46,
+        "vae_encoder": 32,
+        "text_encoder": 18,
+    },
     "ltx2": {
         "transformer": 108,
         "vae_decoder": 26,
@@ -670,6 +705,16 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "connectors": 32,
         "audio_vae_decoder": 20,
         "vocoder": 440,
+    },
+    "ltx2.5": {
+        "transformer": 192,
+        "vae_decoder": 26,
+        "vae_encoder": 0,
+        "text_encoder": 28,
+        "connectors": 32,
+        "audio_vae_decoder": 20,
+        "vocoder": 440,
+        "duration_head": 16,
     },
     "sam": {
         "vision_encoder": 150,
@@ -711,6 +756,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "qwen3_eagle3": {"model": 20},
     "qwen3_dflash": {"model": 30},
     "qwen3_deepspec_dflash": {"model": 30},
+    "muse_glimmer_assistant": {"model": 30},
     "qwen3_vl_eagle3": {"model": 18},
     "qwen3_next": {"model": 100},
     "gemma3n": {
@@ -740,15 +786,16 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     },
     "ouro": {"model": 34},
     "qwen3_asr": {
-        "encoder": 36,
-        "decoder": 32,
-        "decoder_with_past": 32,
+        "audio_encoder": 36,
+        "text_embeddings": 2,
+        "language_model": 30,
     },
     "fun_asr": {
         "encoder": 46,
         "decoder": 30,
         "decoder_with_past": 30,
     },
+    "sense_voice": {"model": 34},
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
@@ -774,11 +821,6 @@ REMOTE_CODE_MODELS = (
     "decilm",
     "minicpm3",
     "deepseek",
-    "qwen3_dflash",
-    "qwen3_deepspec_dflash",
-    "qwen3_5_dflash",
-    "qwen3_5_moe_dflash",
-    "gemma4_dflash",
     "qwen3_eagle3",
     "qwen3_vl_eagle3",
     "qwen3_asr",
@@ -814,16 +856,149 @@ ARCH_TO_MODEL_CLASS = {
     "qwen3_5_moe": "OVModelForVisualCausalLM",
     "gemma4_moe": "OVModelForVisualCausalLM",
     "gemma4_unified": "OVModelForVisualCausalLM",
-    "gemma4_unified-it": "OVModelForVisualCausalLM",
     "muse_glimmer": "OVModelForVisualCausalLM",
+    "minicpmv4_7": "OVModelForVisualCausalLM",
+    "minicpm_ocr": "OVModelForVisualCausalLM",
     "qwen3_omni_moe": "OVModelForMultimodalLM",
     "stable-diffusion": "OVDiffusionPipeline",
     "whisper": "OVModelForSpeechSeq2Seq",
-    "bart": "OVModelForSeq2SeqLM",
     "bert": "OVModelForFeatureExtraction",
     "electra": "OVModelForFeatureExtraction",
     "clip": "OVModelForZeroShotImageClassification",
     "siglip": "OVModelForZeroShotImageClassification",
+    # From test_export.py
+    "albert": "OVModelForSequenceClassification",
+    "blenderbot": "OVModelForFeatureExtraction",
+    "distilbert": "OVModelForQuestionAnswering",
+    "hunyuan_v1_dense": "OVModelForCausalLM",
+    "roberta": "OVModelForTokenClassification",
+    "sam": "OVSamModel",
+    "smollm3": "OVModelForCausalLM",
+    "speecht5": "OVModelForTextToSpeechSeq2Seq",
+    "t5": "OVModelForSeq2SeqLM",
+    "vit": "OVModelForImageClassification",
+    "wav2vec2": "OVModelForAudioClassification",
+    # From test_decoder.py - CausalLM models
+    "arcee": "OVModelForCausalLM",
+    "biogpt": "OVModelForCausalLM",
+    "bloom": "OVModelForCausalLM",
+    "codegen": "OVModelForCausalLM",
+    "cohere": "OVModelForCausalLM",
+    "falcon": "OVModelForCausalLM",
+    "falcon-40b": "OVModelForCausalLM",
+    "glm4": "OVModelForCausalLM",
+    "gpt_bigcode": "OVModelForCausalLM",
+    "gpt_neo": "OVModelForCausalLM",
+    "gpt_neox": "OVModelForCausalLM",
+    "gpt_neox_japanese": "OVModelForCausalLM",
+    "gpt_oss": "OVModelForCausalLM",
+    "gpt_oss_mxfp4": "OVModelForCausalLM",
+    "gptj": "OVModelForCausalLM",
+    "granite": "OVModelForCausalLM",
+    "granitemoe": "OVModelForCausalLM",
+    "granitemoehybrid": "OVModelForCausalLM",
+    "mistral-nemo": "OVModelForCausalLM",
+    "mixtral": "OVModelForCausalLM",
+    "mpt": "OVModelForCausalLM",
+    "opt": "OVModelForCausalLM",
+    "pegasus": "OVModelForCausalLM",
+    "persimmon": "OVModelForCausalLM",
+    "phi": "OVModelForCausalLM",
+    "phi3": "OVModelForCausalLM",
+    "qwen2_moe": "OVModelForCausalLM",
+    "stablelm": "OVModelForCausalLM",
+    "starcoder2": "OVModelForCausalLM",
+    "xglm": "OVModelForCausalLM",
+    # From test_seq2seq.py - Seq2SeqLM models
+    "bigbird_pegasus": "OVModelForSeq2SeqLM",
+    "blenderbot-small": "OVModelForSeq2SeqLM",
+    "longt5": "OVModelForSeq2SeqLM",
+    "m2m_100": "OVModelForSeq2SeqLM",
+    "mbart": "OVModelForSeq2SeqLM",
+    # Vision models - ImageClassification
+    "audio-spectrogram-transformer": "OVModelForAudioClassification",
+    "beit": "OVModelForImageClassification",
+    "convnext": "OVModelForImageClassification",
+    "data2vec-vision": "OVModelForImageClassification",
+    "deit": "OVModelForImageClassification",
+    "levit": "OVModelForImageClassification",
+    "mobilenet_v1": "OVModelForImageClassification",
+    "mobilenet_v2": "OVModelForImageClassification",
+    "mobilevit": "OVModelForImageClassification",
+    "perceiver_vision": "OVModelForImageClassification",
+    "poolformer": "OVModelForImageClassification",
+    "resnet": "OVModelForImageClassification",
+    "swin": "OVModelForImageClassification",
+    "swin-window": "OVModelForImageClassification",
+    "vit-with-attentions": "OVModelForImageClassification",
+    "vit-with-hidden-states": "OVModelForImageClassification",
+    # Vision models - Feature Extraction / Object Detection
+    "donut-swin": "OVModelForFeatureExtraction",
+    "open-clip": "OVModelOpenCLIPForZeroShotImageClassification",
+    "segformer": "OVModelForFeatureExtraction",
+    # Text models - Masked LM / Feature Extraction / Embeddings
+    "bge": "OVModelForFeatureExtraction",
+    "camembert": "OVModelForMaskedLM",
+    "convbert": "OVModelForSequenceClassification",
+    "deberta": "OVModelForMaskedLM",
+    "deberta-v2": "OVModelForMaskedLM",
+    "esm": "OVModelForMaskedLM",
+    "ibert": "OVModelForMaskedLM",
+    "mobilebert": "OVModelForMaskedLM",
+    "mpnet": "OVModelForFeatureExtraction",
+    "perceiver_text": "OVModelForMaskedLM",
+    "rembert": "OVModelForMaskedLM",
+    "roformer": "OVModelForMaskedLM",
+    "sentence-transformers-bert": "OVModelForFeatureExtraction",
+    "squeezebert": "OVModelForMaskedLM",
+    "st-bert": "OVModelForFeatureExtraction",
+    "st-mpnet": "OVModelForFeatureExtraction",
+    "xlm-roberta": "OVModelForMaskedLM",
+    # Audio models
+    "data2vec-audio": "OVModelForAudioClassification",
+    "hubert": "OVModelForAudioClassification",
+    "sew": "OVModelForAudioClassification",
+    "sew-d": "OVModelForAudioClassification",
+    "unispeech": "OVModelForAudioClassification",
+    "unispeech-sat": "OVModelForAudioClassification",
+    "wav2vec2-conformer": "OVModelForAudioClassification",
+    "wav2vec2-hf": "OVModelForAudioClassification",
+    "wavlm": "OVModelForAudioClassification",
+    # Causal LM - Additional models
+    "cohere2": "OVModelForCausalLM",
+    "gemma3": "OVModelForVisualCausalLM",
+    "olmo": "OVModelForCausalLM",
+    "olmo2": "OVModelForCausalLM",
+    "opt125m": "OVModelForCausalLM",
+    "phimoe": "OVModelForCausalLM",
+    # Vision-Language / Multimodal models
+    "gemma3n": "OVModelForVisualCausalLM",
+    "gemma4": "OVModelForVisualCausalLM",
+    "llava_next": "OVModelForVisualCausalLM",
+    "llava_next_mistral": "OVModelForVisualCausalLM",
+    "mistral3": "OVModelForVisualCausalLM",
+    "pix2struct": "OVModelForPix2Struct",
+    "trocr": "OVModelForVision2Seq",
+    "vision-encoder-decoder": "OVModelForVision2Seq",
+    # Diffusion pipelines
+    "flux": "OVFluxPipeline",
+    "flux-fill": "OVFluxFillPipeline",
+    "flux.2-klein": "OVFlux2KleinPipeline",
+    "latent-consistency": "OVLatentConsistencyModelPipeline",
+    "ltx-video": "OVLTXPipeline",
+    "ltx2": "OVLTX2Pipeline",
+    "ltx2.3": "OVLTX2Pipeline",
+    "ltx2.5": "OVLTX2Pipeline",
+    "qwenimage": "OVQwenImagePipeline",
+    "sana": "OVSanaPipeline",
+    "sana-sprint": "OVSanaPipeline",
+    "stable-diffusion-3": "OVStableDiffusion3Pipeline",
+    "stable-diffusion-xl": "OVStableDiffusionXLPipeline",
+    "stable-diffusion-xl-refiner": "OVStableDiffusionXLImg2ImgPipeline",
+    "stable-diffusion-with-custom-variant": "OVStableDiffusionPipeline",
+    "stable-diffusion-with-safety-checker": "OVStableDiffusionPipeline",
+    "stable-diffusion-with-textual-inversion": "OVStableDiffusionPipeline",
+    "z-image": "OVZImagePipeline",
 }
 
 
@@ -971,9 +1146,12 @@ TEST_NAME_TO_MODEL_TYPE = {
     "llama_compressed_tensors": "llama",
     "llava_next_mistral": "llava_next",
     "ltx-video": "ltx-video-transformer",
+    "ltx-video-0.9.5": "ltx-video-transformer",
     "ltx2": "ltx2-video-transformer",
     "ltx2.3": "ltx2-video-transformer",
+    "ltx2.5": "ltx2-video-transformer",
     "mistral-nemo": "mistral",
+    "minicpm_v4_5": "minicpmv",
     "mixtral_awq": "mixtral",
     "nanollava_vision_tower": "siglip",
     "opt125m": "opt",
@@ -984,7 +1162,9 @@ TEST_NAME_TO_MODEL_TYPE = {
     "qwen3_5_moe_dflash": "qwen3",
     "qwen3_5_compressed_tensors": "qwen3_5",
     "qwen3_5_mtp": "qwen3_5",
+    "qwen3_5_seq_cls": "qwen3_5",
     "qwen3_5_moe_mtp": "qwen3_5_moe",
+    "qwen3_5_moe_mtp_legacy_weights": "qwen3_5_moe",
     "qwen3_dflash": "qwen3",
     "qwen3_deepspec_dflash": "qwen3",
     "qwen3_eagle3": "llama",
@@ -1006,16 +1186,17 @@ TEST_NAME_TO_MODEL_TYPE = {
 }
 
 
-def get_transformers_versions(model_type, library_name="transformers"):
-    supported_model_type = TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES[library_name]
-    export_config = next(iter(supported_model_type[model_type]["openvino"].values()))
+def get_transformers_versions(model_type, library_name="transformers", task=None):
+    # the export config of `task`, or of the first registered task: tasks of one model type can support different versions
+    export_configs = TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES[library_name][model_type]["openvino"]
+    export_config = export_configs[task] if task is not None else next(iter(export_configs.values()))
     min_transformers = getattr(export_config.func, "MIN_TRANSFORMERS_VERSION", None) or "0"
     max_transformers = getattr(export_config.func, "MAX_TRANSFORMERS_VERSION", None) or "999"
     return str(min_transformers), str(max_transformers)
 
 
-def is_model_type_transformers_compatible(model_type, library_name="transformers"):
-    min_transformers, max_transformers = get_transformers_versions(model_type, library_name)
+def is_model_type_transformers_compatible(model_type, library_name="transformers", task=None):
+    min_transformers, max_transformers = get_transformers_versions(model_type, library_name, task)
     return is_transformers_version(">=", min_transformers) and is_transformers_version("<=", max_transformers)
 
 
