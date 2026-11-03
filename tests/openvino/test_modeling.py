@@ -1061,6 +1061,7 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         "roberta",
         "sentence-transformers-bert",
         "qwen3",
+        "xlm-roberta",
     )
     if is_model_type_transformers_compatible("qwen3_vl"):
         SUPPORTED_ARCHITECTURES += ("qwen3_vl_embedding",)
