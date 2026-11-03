@@ -616,6 +616,37 @@ _DEFAULT_8BIT_WQ_CONFIGS = {
     "Qwen/Qwen2.5-Coder-3B-Instruct": {"bits": 8, "sym": False, "dq_group_size": 128},
     "diffusers/LTX-2.3-Diffusers": {
         "quantization_configs": {
+            "transformer": {
+                "bits": 8,
+                "sym": True,
+                "group_size": 32,
+                "weight_only": True,
+                "ignored_scope": {
+                    "patterns": [
+                        r".*proj_in.*",  # patchify_proj, audio_patchify_proj
+                        r".*proj_out.*",  # proj_out, audio_proj_out
+                        r".*time_embed.*",  # adaln_single, audio_adaln_single
+                        r".*av_cross_attn_.*",  # av_ca_*_adaln_single
+                        r".*prompt_adaln.*",  # prompt_adaln_single, audio_prompt_adaln_single
+                    ],
+                },
+            },
+            "connectors": {
+                "bits": 8,
+                "sym": True,
+                "group_size": 32,
+                "weight_only": True,
+                "ignored_scope": {"patterns": [r".*text_proj_in"]},
+            },
+            "text_encoder": {"bits": 8, "sym": False, "weight_only": True},
+        },
+    },
+}
+
+# The int8 configs used instead of the ones above that need a newer NNCF version than the installed one
+_DEFAULT_8BIT_WQ_CONFIGS_FOR_OLDER_NNCF = {
+    "diffusers/LTX-2.3-Diffusers": {
+        "quantization_configs": {
             "transformer": {"bits": 8, "sym": False, "weight_only": True},
             "text_encoder": {"bits": 8, "sym": False, "weight_only": True},
         },
@@ -820,12 +851,14 @@ def get_default_quantization_config(
         quant_mode (`str`, *optional*):
             The quantization mode. Currently only "int8" value is supported.
     Returns:
-        Default quantization config for the given model if found and `None` otherwise.
+        Default quantization config for the given model if found and `None` otherwise. If the installed NNCF version
+        does not support the default config, the one registered for older NNCF versions is returned instead, if any.
     """
 
     if weight_format is None and quant_mode is None:
         raise ValueError("Either `weight_format` or `quant_mode` must be provided.")
 
+    configs_for_older_nncf = {}
     if weight_format == "int2":
         default_configs_dict = _DEFAULT_2BIT_WQ_CONFIGS
     elif weight_format == "int3":
@@ -834,11 +867,29 @@ def get_default_quantization_config(
         default_configs_dict = _DEFAULT_4BIT_WQ_CONFIGS
     elif weight_format == "int8":
         default_configs_dict = _DEFAULT_8BIT_WQ_CONFIGS
+        configs_for_older_nncf = _DEFAULT_8BIT_WQ_CONFIGS_FOR_OLDER_NNCF
     elif quant_mode == "int8":
         default_configs_dict = _DEFAULT_INT8_FQ_CONFIGS
     else:
         return None
 
+    config = _find_model_config(model_id_or_path, default_configs_dict)
+    missing_nncf_version = _get_missing_nncf_version(config)
+    if missing_nncf_version is not None:
+        logger.warning(
+            f"The default {weight_format or quant_mode} config of {model_id_or_path} needs "
+            f"nncf>={missing_nncf_version}, so it is replaced with one that the installed nncf version supports, "
+            "which may keep less of the model quality. Please install the latest nncf version, e.g. with "
+            "`pip install -U nncf`."
+        )
+        config = _find_model_config(model_id_or_path, configs_for_older_nncf)
+    return config
+
+
+def _find_model_config(model_id_or_path: str, default_configs_dict: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Returns the config of the given model in `default_configs_dict` if found and `None` otherwise.
+    """
     # Check if the model_id_or_path is in the default configs
     model_id_candidates = _get_model_id_candidates(model_id_or_path)
     for model_id in model_id_candidates:
@@ -852,6 +903,29 @@ def get_default_quantization_config(
         if model_path.name == short_id:
             return config
 
+    return None
+
+
+def _get_missing_nncf_version(quantization_config: Optional[Dict[str, Any]]) -> Optional[str]:
+    """
+    Returns the NNCF version that the given quantization config needs if the installed NNCF version is older, and
+    `None` otherwise. So far, only group-wise int8 weight compression needs a newer NNCF version: NNCF supports it
+    since 3.5.0.
+    """
+    if quantization_config is None:
+        return None
+
+    if "quantization_configs" in quantization_config:  # a config per submodel
+        configs = quantization_config["quantization_configs"].values()
+    else:
+        configs = [quantization_config]
+    for config in configs:
+        # The data type of the weights is given either by `dtype` or by `bits`, which is 8 by default
+        is_int8 = (config.get("dtype") or f"int{config.get('bits', 8)}") == "int8"
+        # Only the release counts: a development build of NNCF 3.5.0 (3.5.0.dev0+<commit>) supports group-wise int8
+        # weight compression only if it includes the commit that added it, which its version does not tell
+        if is_int8 and config.get("group_size") not in (None, -1) and not is_nncf_version(">=", "3.5.0"):
+            return "3.5.0"
     return None
 
 
@@ -1055,6 +1129,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             Whether to use symmetric quantization on the weights. Does not affect backup precision symmetricity.
         group_size (`int`, *optional*):
             The group size to use for quantization. Recommended value is 128 and -1 uses per-column quantization.
+            8-bit quantization is per-column by default.
         tokenizer (`str`, *optional*):
             The tokenizer used to process the dataset. You can pass either:
                 - A string, the *model id* of a predefined tokenizer hosted inside a model repo on huggingface.co.
@@ -1267,10 +1342,6 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             if self.ratio != 1:
                 raise ValueError(
                     f"For 8-bit quantization, `ratio` is expected to be set to 1.0, but was set to {self.ratio}"
-                )
-            if self.group_size is not None and self.group_size != -1:
-                raise ValueError(
-                    f"For 8-bit quantization, `group_size` is expected to be set to -1, but was set to {self.group_size}"
                 )
             if self.all_layers:
                 raise ValueError("The `all_layers` parameter is not supported for 8-bit quantization")
