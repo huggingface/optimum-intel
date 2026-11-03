@@ -8738,7 +8738,7 @@ class NemotronHModelPatcher(GraniteMoeHybridModelPatcher):
     - each layer has a single mixer, so the Mamba2 mixers are selected by block type;
     - `dt` is clamped with `config.time_step_limit`, (0, inf) for the released models, as in NVIDIA's
       implementation and mamba_ssm. The transformers PyTorch path clamps at `time_step_min` instead;
-    - the experts use `ov_batched_mm` on all supported transformers versions, not only from 5.13.
+    - the experts are also patched before transformers 5.13, with `ov_batched_mm`.
     """
 
     def __init__(
@@ -8757,8 +8757,8 @@ class NemotronHModelPatcher(GraniteMoeHybridModelPatcher):
 
     def __enter__(self):
         super().__enter__()
-        # GraniteMoeHybrid only registers `ov_batched_mm` from transformers 5.13. Before that, the NemotronH experts
-        # would keep the default `grouped_mm`, which uses `torch.histc` and can't be converted
+        # GraniteMoeHybrid only patches the experts from transformers 5.13. Before that, the NemotronH experts would
+        # keep the default `grouped_mm`, which uses `torch.histc` and can't be converted
         if is_transformers_version("<", "5.13"):
             register_ov_batched_mm(self)
 

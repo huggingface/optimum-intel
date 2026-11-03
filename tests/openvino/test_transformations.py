@@ -30,6 +30,7 @@ from utils_tests import (
 from optimum.intel.utils.import_utils import (
     is_diffusers_version,
     is_qwen_tts_available,
+    is_torch_version,
     is_transformers_version,
 )
 
@@ -161,15 +162,13 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "MulAddToFMA",
         ],
     },
-    # NemotronH experts have no gate (up -> relu2 -> down), which `ConvertTiledMoeBlockToGatherMatmuls` does not
-    # match yet, so its MoE blocks keep the tiled form. The Mamba2 fusions (FuseSSMLoop, SelectiveSSMFusion) are only
-    # registered in SDPA -> PagedAttention, so they are checked in test_cb_compatible.py
+    # The MoE transformations depend on the experts patch, see below. The Mamba2 fusions (FuseSSMLoop,
+    # SelectiveSSMFusion) are only registered in SDPA -> PagedAttention, so they are checked in test_cb_compatible.py
     "nemotron_h": {
         "model_class": "OVModelForCausalLM",
         "convert": [
             "SDPAFusion",
             "MakeStateful",
-            "TransposeMatMul",
         ],
         "compile": [
             "StatefulSDPAFusion",
@@ -449,6 +448,14 @@ if is_transformers_version(">=", "5.0.0"):
             "ReshapeAMatMul",
         ]
     )
+
+# From transformers 5.13 with torch 2.10, the NemotronH experts use the grouped MatMul patch and become GatherMatmul.
+# Otherwise they use ov_batched_mm: its transposed expert weights give TransposeMatMul, and its non-gated experts
+# (up -> relu2 -> down) do not match ConvertTiledMoeBlockToGatherMatmuls
+if is_transformers_version(">=", "5.13") and is_torch_version(">=", "2.10.0"):
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["nemotron_h"]["compile"].append("ConvertGroupedMatMulToGatherMatmul")
+else:
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["nemotron_h"]["convert"].append("TransposeMatMul")
 
 
 # filter architectures depending on min/max transformers supported versions
