@@ -87,6 +87,7 @@ from copy import deepcopy
 from optimum.intel.openvino.quantization import InferRequestWrapper, OVCalibrationDatasetBuilder
 from optimum.exporters.openvino import main_export
 from optimum.intel.utils.import_utils import (
+    is_diffusers_version,
     is_nncf_version,
     is_openvino_version,
     is_qwen_tts_available,
@@ -1298,6 +1299,25 @@ class OVWeightCompressionTest(unittest.TestCase):
             },
         ),
     ]
+
+    if is_transformers_version(">=", "5.10.0") and is_diffusers_version(">=", "0.40.0"):
+        DEFAULT_COMPRESSION_CONFIGURATIONS.append(
+            (
+                OVLTX2Pipeline,
+                "ltx2.5",
+                8,
+                _DEFAULT_8BIT_WQ_CONFIGS["Lightricks/LTX-2.5-Diffusers"],
+                {
+                    "transformer": {"int8": 192},
+                    "text_encoder": {"int8": 28},
+                    "connectors": {},
+                    "vae_decoder": {},
+                    "audio_vae_decoder": {},
+                    "vocoder": {},
+                    "duration_head": {},
+                },
+            )
+        )
 
     # Qwen3-TTS resolves `quantization_config` itself rather than through the default-config table,
     # so the configs given here are the ones it applies for these `bits`. Compression is per
