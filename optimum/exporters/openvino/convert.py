@@ -31,7 +31,9 @@ from openvino.exceptions import OVTypeError
 from openvino.tools.ovc import convert_model
 from optimum.exporters.openvino.dflash_utils import (
     DFLASH2_GPU_MIN_ACTIVATIONS_SCALE_FACTOR,
+    DFLASH_ARCHITECTURES,
     MarkovHeadSpec,
+    config_architecture,
     parse_and_validate_dflash_config,
 )
 from optimum.exporters.openvino.utils import (
@@ -1104,16 +1106,21 @@ def _add_dflash_mode_to_rt_info(
         model.set_rt_info(str(hf_config.vocab_size), ["dflash", "vocab_size"])
         return model
 
-    dflash = parse_and_validate_dflash_config(hf_config)
-    dflash_config = dflash.values
-    model.set_rt_info("True", ["dflash_mode"])
-    model.set_rt_info(str(dflash_config["mask_token_id"]), ["dflash", "mask_token_id"])
-    model.set_rt_info(",".join(map(str, dflash_config["target_layer_ids"])), ["dflash", "target_layer_ids"])
     raw_config = getattr(hf_config, "dflash_config", None) or hf_config.to_dict()
+    # Other drafters with a DFlash export config (Muse-Glimmer) get the keys their config has, unvalidated.
+    dflash, dflash_config = None, raw_config
+    if config_architecture(hf_config) in DFLASH_ARCHITECTURES:
+        dflash = parse_and_validate_dflash_config(hf_config)
+        dflash_config = dflash.values
+    model.set_rt_info("True", ["dflash_mode"])
+    if "mask_token_id" in dflash_config:
+        model.set_rt_info(str(dflash_config["mask_token_id"]), ["dflash", "mask_token_id"])
+    if "target_layer_ids" in dflash_config:
+        model.set_rt_info(",".join(map(str, dflash_config["target_layer_ids"])), ["dflash", "target_layer_ids"])
     if "block_size" in raw_config:
         model.set_rt_info(str(raw_config["block_size"]), ["dflash", "block_size"])
     model.set_rt_info(str(candidate_position_offset), ["dflash", "candidate_position_offset"])
-    if dflash.version == 2:
+    if dflash is not None and dflash.version == 2:
         model.set_rt_info("2", ["dflash", "version"])
         model.set_rt_info(
             str(DFLASH2_GPU_MIN_ACTIVATIONS_SCALE_FACTOR),
