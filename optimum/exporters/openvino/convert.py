@@ -138,6 +138,15 @@ def _set_runtime_options(
         # misses them. Without the scale the code predictor logits overflow fp16 on GPU.
         if library_name == "qwen3_tts" and model_name in ("talker_model", "code_predictor_model"):
             sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "8.0"
+        # The Fun-ASR-Nano decoder overflows fp16 on GPU and only emits token 0 without activation
+        # scaling. The GPU plugin ignores the default 8.0 written above for LLM-like (KV-cache) models,
+        # so use a non-default value that the plugin applies (openvinotoolkit/openvino#39233).
+        if (
+            library_name == "funasr"
+            and model_name == DECODER_NAME
+            and getattr(getattr(sub_export_config, "_config", None), "export_model_type", None) == "fun_asr"
+        ):
+            sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "4.0"
 
 
 def _save_model(
@@ -170,6 +179,8 @@ def _save_model(
         "qwen3_5_text",
         "qwen3_5_moe_text",
         "gemma4",
+        "muse_glimmer",
+        "muse_glimmer_text",
     }:
         add_hidden_states_rt_info(source_model, model, config)
 
@@ -698,6 +709,12 @@ def export_from_model(
     **kwargs_shapes,
 ):
     model_kwargs = model_kwargs or {}
+    # `stateful` is narrowed below by what *this* model's task supports. Nested exports (LTX-2.5's prompt
+    # enhancer) are a different task, so they need the caller's request, not the narrowed value.
+    requested_stateful = stateful
+    # IRs written by nested `export_from_model` calls, which the caller still needs to see (auto
+    # compression sizes every returned path) but which are not this model's own components.
+    nested_submodel_paths = []
 
     if ov_config is not None and ov_config.quantization_config and not is_nncf_available():
         raise ImportError(
@@ -926,6 +943,17 @@ def export_from_model(
         if safety_checker is not None:
             safety_checker.save_pretrained(output.joinpath("safety_checker"))
 
+        # Kept out of `files_subpaths`, which doubles as `output_names` for this model's own
+        # `export_models` call below and must stay one name per component.
+        nested_submodel_paths += _export_ltx2_prompt_enhancer(
+            model,
+            output,
+            ov_config=ov_config,
+            stateful=requested_stateful,
+            trust_remote_code=trust_remote_code,
+            device=device,
+        )
+
         model.save_config(output)
 
     _set_runtime_options(
@@ -948,7 +976,7 @@ def export_from_model(
         library_name=library_name,
     )
 
-    return files_subpaths
+    return files_subpaths + nested_submodel_paths
 
 
 def export_tokenizer(
@@ -1038,7 +1066,7 @@ def _add_dflash_mode_to_rt_info(model: Model, hf_config: "PretrainedConfig", can
     Add DFlash metadata to DFlash draft model.
 
     Marks model as DFlash draft model and adds DFlash configuration to the model including
-    mask token id, target layer ids, and candidate position offset.
+    mask token id, block size, target layer ids, and candidate position offset.
     """
     try:
         model.set_rt_info("True", ["dflash_mode"])
@@ -1047,6 +1075,8 @@ def _add_dflash_mode_to_rt_info(model: Model, hf_config: "PretrainedConfig", can
             model.set_rt_info(str(dflash_config["mask_token_id"]), ["dflash", "mask_token_id"])
         if "target_layer_ids" in dflash_config:
             model.set_rt_info(",".join(map(str, dflash_config["target_layer_ids"])), ["dflash", "target_layer_ids"])
+        if "block_size" in dflash_config:
+            model.set_rt_info(str(dflash_config["block_size"]), ["dflash", "block_size"])
         model.set_rt_info(str(candidate_position_offset), ["dflash", "candidate_position_offset"])
     except Exception:
         pass
@@ -1430,6 +1460,46 @@ def get_ltx_video_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     return models_for_export
 
 
+def _export_ltx2_prompt_enhancer(model, output: Path, **export_kwargs) -> List[str]:
+    """Export LTX-2.5's optional prompt enhancer into `prompt_enhancer/`, returning its IR subpaths.
+
+    The enhancer is a `Gemma4ForConditionalGeneration`, which optimum-intel already exports as an
+    `image-text-to-text` VLM: several IRs (language model plus text, per-layer text, vision and audio
+    embeddings) rather than the one-IR-per-subfolder shape `get_ltx2_video_models_for_export` can
+    express. So it is exported by a nested `export_from_model` call into its own subfolder instead of
+    joining the component map.
+
+    Returns an empty list for LTX-2.0/2.3 and for 2.5 checkpoints that register no enhancer, leaving
+    their exports untouched.
+    """
+    if not model.__class__.__name__.startswith("LTX2"):
+        return []
+    prompt_enhancer = getattr(model, "prompt_enhancer", None)
+    if prompt_enhancer is None:
+        return []
+
+    import torch
+
+    subfolder = "prompt_enhancer"
+    logger.info(f"Exporting the LTX-2 prompt enhancer to {subfolder}/")
+    # Tracing a 16-bit module without this fails outright ("expected m1 and m2 to have the same dtype"),
+    # and the real enhancer is bf16. Decided off the enhancer's own weights, as `main_export` does for a
+    # top-level export, rather than inherited from the pipeline's dtype.
+    if getattr(prompt_enhancer, "dtype", None) in (torch.float16, torch.bfloat16):
+        export_kwargs["patch_16bit_model"] = True
+    # The processor is saved separately at the pipeline root, but the enhancer folder needs its own copy
+    # to load as a standalone VLM.
+    preprocessors = [p for p in (getattr(model, "processor", None),) if p is not None]
+    enhancer_paths = export_from_model(
+        model=prompt_enhancer,
+        output=output / subfolder,
+        task="image-text-to-text",
+        preprocessors=preprocessors,
+        **export_kwargs,
+    )
+    return [os.path.join(subfolder, path) for path in enhancer_paths]
+
+
 def get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     models_for_export = {}
 
@@ -1477,6 +1547,22 @@ def get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
         transformer.config, int_dtype=int_dtype, float_dtype=float_dtype
     )
     models_for_export["transformer"] = (transformer, transformer_export_config)
+
+    # Duration head. Registered from LTX-2.5 onwards; LTX-2.0/2.3 have no such module, so this leaves
+    # their export sets untouched.
+    duration_head = getattr(pipeline, "duration_head", None)
+    if duration_head is not None:
+        duration_head_config_constructor = TasksManager.get_exporter_config_constructor(
+            model=duration_head,
+            exporter=exporter,
+            library_name="diffusers",
+            task="semantic-segmentation",
+            model_type="ltx2-duration-head",
+        )
+        duration_head_export_config = duration_head_config_constructor(
+            duration_head.config, int_dtype=int_dtype, float_dtype=float_dtype
+        )
+        models_for_export["duration_head"] = (duration_head, duration_head_export_config)
 
     # VAE Decoder
     vae_decoder = copy.deepcopy(pipeline.vae)

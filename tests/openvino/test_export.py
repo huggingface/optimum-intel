@@ -13,6 +13,7 @@
 # limitations under the License.
 
 
+import json
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -40,6 +41,7 @@ from optimum.exporters.openvino.model_configs import (
     Qwen3OmniMoeConfigBehavior,
 )
 from optimum.exporters.openvino.model_patcher import LTX2TextEncoderPatcher
+from optimum.exporters.openvino.utils import LTX2_ROPE_INPUTS
 from optimum.exporters.tasks import TasksManager
 from optimum.intel import (
     OVFlux2KleinPipeline,
@@ -118,6 +120,7 @@ class ExportModelTest(unittest.TestCase):
         "ltx-video-0.9.5": OVLTXPipeline,
         "ltx2": OVLTX2Pipeline,
         "ltx2.3": OVLTX2Pipeline,
+        "ltx2.5": OVLTX2Pipeline,
         "kokoro": OVModelForTextToSpeechSeq2Seq,
         "qwen3_tts": OVModelForTextToSpeechSeq2Seq,
         "cohere2": OVModelForCausalLM,
@@ -165,15 +168,21 @@ class ExportModelTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = {
         model_type: model_cls
         for model_type, model_cls in SUPPORTED_ARCHITECTURES.items()
-        if TEST_NAME_TO_MODEL_TYPE.get(model_type, model_type)
-        in (
-            get_supported_model_for_library("transformers")
-            | get_supported_model_for_library("diffusers")
-            | get_supported_model_for_library("funasr")
+        if (
+            TEST_NAME_TO_MODEL_TYPE.get(model_type, model_type)
+            in (
+                get_supported_model_for_library("transformers")
+                | get_supported_model_for_library("diffusers")
+                | get_supported_model_for_library("funasr")
+            )
+            # Qwen3-TTS is exported component by component through custom export configs rather than a
+            # task registry entry, so the registry lookup above cannot see it; it needs `qwen_tts`.
+            or (model_type == "qwen3_tts" and is_qwen_tts_available())
         )
-        # Qwen3-TTS is exported component by component through custom export configs rather than a
-        # task registry entry, so the registry lookup above cannot see it; it needs `qwen_tts`.
-        or (model_type == "qwen3_tts" and is_qwen_tts_available())
+        and (
+            model_type != "ltx2.5"
+            or (is_transformers_version(">=", "5.10.0") and is_diffusers_version(">=", "0.40.0"))
+        )
     }
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
@@ -189,6 +198,7 @@ class ExportModelTest(unittest.TestCase):
         "ltx-video-0.9.5": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
         "ltx2": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
         "ltx2.3": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
+        "ltx2.5": {"text_encoder": "8.0", "vae_encoder": "8.0", "vae_decoder": "8.0"},
     }
 
     GENERATIVE_MODELS = ("pix2struct", "t5", "bart", "gpt2", "whisper", "llava", "speecht5")
@@ -483,20 +493,29 @@ class ExportModelTest(unittest.TestCase):
 
 class LTX2ExportContractTest(unittest.TestCase):
     """
-    LTX-2.0 and LTX-2.3 export different graphs from the same set of components. Pin both contracts,
-    so a change meant for one version cannot silently alter the other's IRs.
+    LTX-2 architectures export different graphs from the same set of components. Pin every contract,
+    so a change meant for one architecture cannot silently alter another's IRs.
     """
+
+    # Architectures whose transformer takes the extended-guidance inputs `cross_modality_gate` and
+    # `stg_perturbation_mask`, and an f32 `encoder_attention_mask`. LTX-2.0 takes none of them.
+    EXTENDED_GUIDANCE_ARCHITECTURES = {"ltx2.3", "ltx2.5"}
+
+    # Architectures registering the optional `duration_head` and `prompt_enhancer` components.
+    OPTIONAL_COMPONENT_ARCHITECTURES = {"ltx2.5"}
 
     SUPPORTED_ARCHITECTURES = []
     if is_diffusers_version(">=", "0.38.0"):
         SUPPORTED_ARCHITECTURES.append("ltx2")
     if is_diffusers_version(">=", "0.40.0"):
         SUPPORTED_ARCHITECTURES.append("ltx2.3")
+    if is_transformers_version(">=", "5.10.0") and is_diffusers_version(">=", "0.40.0"):
+        SUPPORTED_ARCHITECTURES.append("ltx2.5")
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
     def test_version_specific_export_contract(self, model_arch: str):
-        is_ltx2_3 = model_arch == "ltx2.3"
+        extended_guidance = model_arch in self.EXTENDED_GUIDANCE_ARCHITECTURES
         pipeline = OVLTX2Pipeline.from_pretrained(
             MODEL_NAMES[model_arch], export=True, compile=False, device=OPENVINO_DEVICE
         )
@@ -510,11 +529,113 @@ class LTX2ExportContractTest(unittest.TestCase):
         # pinned is what the export writes rather than whatever loading made of it.
         transformer = ov.Core().read_model(pipeline.transformer.model_save_dir / "openvino_model.xml")
         transformer_inputs = {name: inp for inp in transformer.inputs for name in inp.names}
-        self.assertEqual("cross_modality_gate" in transformer_inputs, is_ltx2_3)
+        self.assertEqual("cross_modality_gate" in transformer_inputs, extended_guidance)
         self.assertEqual(
             transformer_inputs["encoder_attention_mask"].get_element_type(),
-            ov.Type.f32 if is_ltx2_3 else ov.Type.i64,
+            ov.Type.f32 if extended_guidance else ov.Type.i64,
         )
+
+        # Both versions take RoPE as host-computed (cos, sin) rather than coordinates: fp16 cannot
+        # resolve the rotary angles, so no Sin/Cos may be left on the RoPE path in the graph.
+        rope_inputs = {name for names in LTX2_ROPE_INPUTS.values() for name in names}
+        self.assertTrue(rope_inputs.issubset(transformer_inputs))
+        # The positions enter only through cos/sin, so neither the coordinates nor the frame/size
+        # arguments they are built from are graph inputs.
+        unused_inputs = {"video_coords", "audio_coords", "num_frames", "height", "width", "fps", "audio_num_frames"}
+        self.assertFalse(unused_inputs & set(transformer_inputs))
+        for op in transformer.get_ops():
+            if op.get_type_name() not in ("Sin", "Cos"):
+                continue
+            sources, stack, seen = set(), [op], set()
+            while stack:
+                node = stack.pop()
+                if node.get_friendly_name() in seen:
+                    continue
+                seen.add(node.get_friendly_name())
+                if node.get_type_name() == "Parameter":
+                    sources.add(node.get_friendly_name())
+                stack.extend(inp.get_source_output().get_node() for inp in node.inputs())
+            self.assertTrue(sources.issubset({"timestep", "audio_timestep"}), f"{op.get_friendly_name()}: {sources}")
+
+        # The connectors take their RoPE the same way, one (cos, sin) pair per connector, so their
+        # graph has no Sin/Cos at all.
+        connectors = ov.Core().read_model(pipeline.connectors.model_save_dir / "openvino_model.xml")
+        connectors_inputs = {name for inp in connectors.inputs for name in inp.names}
+        connectors_rope_inputs = {
+            f"{connector}_rotary_{part}"
+            for connector in ("video_connector", "audio_connector")
+            for part in ("cos", "sin")
+        }
+        self.assertTrue(connectors_rope_inputs.issubset(connectors_inputs))
+        self.assertFalse(any(op.get_type_name() in ("Sin", "Cos") for op in connectors.get_ops()))
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
+    @require_diffusers
+    def test_optional_component_export_contract(self, model_arch: str):
+        # `duration_head` and `prompt_enhancer` are exported only when the checkpoint registers them,
+        # which is what keeps the LTX-2.0/2.3 exports byte-identical. Both directions are pinned here.
+        optional_components = model_arch in self.OPTIONAL_COMPONENT_ARCHITECTURES
+        pipeline = OVLTX2Pipeline.from_pretrained(
+            MODEL_NAMES[model_arch], export=True, compile=False, device=OPENVINO_DEVICE
+        )
+        # An `export=True` pipeline holds its output as a live TemporaryDirectory, not a path.
+        model_save_dir = pipeline.model_save_dir
+        export_dir = Path(getattr(model_save_dir, "name", model_save_dir))
+
+        self.assertEqual((export_dir / "duration_head" / "openvino_model.xml").is_file(), optional_components)
+        self.assertEqual((export_dir / "prompt_enhancer").is_dir(), optional_components)
+        if optional_components:
+            duration_head = ov.Core().read_model(export_dir / "duration_head" / "openvino_model.xml")
+            # Both connector streams are required: the pipeline always has both, and an IR cannot make
+            # an input optional.
+            self.assertEqual(
+                {name for inp in duration_head.inputs for name in inp.names}, {"video_tokens", "audio_tokens"}
+            )
+            self.assertEqual({name for out in duration_head.outputs for name in out.names}, {"duration"})
+
+            # The enhancer is a Gemma 4 VLM, so it exports as the several IRs that path already produces
+            # rather than as one more single-IR pipeline component.
+            self.assertTrue(sorted((export_dir / "prompt_enhancer").glob("openvino_*_model.xml")))
+
+        model_index = json.loads((export_dir / "model_index.json").read_text())
+        registered = {name for name, entry in model_index.items() if isinstance(entry, list) and entry[0]}
+
+        # Checked first, because the dangling-reference sweep below only inspects registered entries:
+        # a component wrongly nulled out would drop out of it unnoticed.
+        expected = {"transformer", "vae", "text_encoder", "tokenizer", "scheduler", "connectors", "vocoder"}
+        if optional_components:
+            expected |= {"duration_head", "prompt_enhancer", "processor"}
+        self.assertEqual(expected - registered, set(), "components missing from model_index.json")
+
+        # Components registered by the torch pipeline but belonging to a sibling one -- LTX-2.5's
+        # `diffusion_decoder` -- must not be left as dangling references, or the reload hunts for them.
+        for name, entry in model_index.items():
+            if name.startswith("_") or not (isinstance(entry, (list, tuple)) and len(entry) == 2 and entry[0]):
+                continue
+            with self.subTest(component=name):
+                on_disk = (export_dir / name).is_dir() or any(
+                    child.is_dir() and child.name.startswith(f"{name}_") for child in export_dir.iterdir()
+                )
+                self.assertTrue(on_disk, f"{name} is registered in model_index.json but was not exported")
+
+    @parameterized.expand(sorted(OPTIONAL_COMPONENT_ARCHITECTURES), skip_on_empty=True)
+    @require_diffusers
+    def test_prompt_enhancer_exports_from_16bit_weights(self, model_arch: str):
+        # The nested enhancer export has to make its own `patch_16bit_model` decision -- without it,
+        # tracing 16-bit weights against fp32 dummy inputs fails with "expected m1 and m2 to have the
+        # same dtype". The real checkpoint is bf16 while the fixture is fp32, so the dtype is forced
+        # here rather than deduced; otherwise nothing covers that branch.
+        if model_arch not in self.SUPPORTED_ARCHITECTURES:
+            self.skipTest(f"{model_arch} is not supported by the installed diffusers")
+
+        with TemporaryDirectory() as tmpdir:
+            main_export(
+                model_name_or_path=MODEL_NAMES[model_arch],
+                output=tmpdir,
+                task="text-to-video",
+                model_loading_kwargs={"torch_dtype": "bfloat16"},
+            )
+            self.assertTrue(sorted((Path(tmpdir) / "prompt_enhancer").glob("openvino_*_model.xml")))
 
     def test_text_encoder_packs_hidden_states(self):
         # One contract for both LTX-2 versions: nothing in the text encoder config tells them apart,
