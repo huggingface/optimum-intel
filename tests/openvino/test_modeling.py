@@ -18,6 +18,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Dict, Generator
+from unittest.mock import patch
 
 import numpy as np
 import open_clip  # type: ignore
@@ -606,6 +607,25 @@ class OVModelIntegrationTest(unittest.TestCase):
             model.save_pretrained(Path(tmpdirname) / "openvino")
             # Load openvino model
             model = OVModelForCausalLM.from_pretrained(Path(tmpdirname, device=OPENVINO_DEVICE) / "openvino")
+        del model
+        gc.collect()
+
+    @parameterized.expand(("local_files_only", "offline_mode"))
+    def test_infer_export_when_loading_local_dir_offline(self, mode):
+        # A local PyTorch checkpoint must still be exported when the Hub can't be reached
+        model_id = MODEL_NAMES["gpt2"]
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        with TemporaryDirectory() as tmpdirname:
+            model.save_pretrained(tmpdirname)
+            if mode == "offline_mode":
+                with patch("optimum.intel.openvino.modeling_base.is_offline_mode", return_value=True):
+                    ov_model = OVModelForCausalLM.from_pretrained(tmpdirname, device=OPENVINO_DEVICE)
+            else:
+                ov_model = OVModelForCausalLM.from_pretrained(
+                    tmpdirname, local_files_only=True, device=OPENVINO_DEVICE
+                )
+            self.assertIsInstance(ov_model, OVModelForCausalLM)
+        del ov_model
         del model
         gc.collect()
 

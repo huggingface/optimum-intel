@@ -151,6 +151,121 @@ def is_ltx2_3_transformer_config(config: Any) -> bool:
     return getattr(config, "perturbed_attn", False) or not getattr(config, "use_prompt_embeddings", True)
 
 
+# The LTX-2 transformer takes its rotary embeddings as precomputed (cos, sin) inputs, one pair per
+# rotary module of `LTX2VideoTransformer3DModel`, instead of computing them from `video_coords` and
+# `audio_coords` in the graph. The angles reach ~1.6e4 rad, where fp16 cannot resolve them (its
+# spacing there is 8 rad), so in-graph RoPE breaks under an f16 inference precision (the GPU
+# default). Computed on the host, the angles stay in fp32/fp64 and only cos/sin, bounded by 1, enter
+# the graph.
+LTX2_ROPE_INPUTS = {
+    "rope": ("video_rotary_cos", "video_rotary_sin"),
+    "audio_rope": ("audio_rotary_cos", "audio_rotary_sin"),
+    "cross_attn_rope": ("video_cross_attn_rotary_cos", "video_cross_attn_rotary_sin"),
+    "cross_attn_audio_rope": ("audio_cross_attn_rotary_cos", "audio_cross_attn_rotary_sin"),
+}
+
+
+def build_ltx2_rope_modules(config: Any) -> Dict[str, "nn.Module"]:
+    """
+    Build the weight-free rotary modules of `LTX2VideoTransformer3DModel` from its config, with the
+    same arguments (and defaults) as diffusers, keyed like `LTX2_ROPE_INPUTS`.
+
+    Original (`LTX2VideoTransformer3DModel.__init__`, "4. Rotary Positional Embeddings"):
+    https://github.com/huggingface/diffusers/blob/v0.40.0/src/diffusers/models/transformers/transformer_ltx2.py#L1261-L1323
+    """
+    from diffusers.models.transformers.transformer_ltx2 import (
+        LTX2AudioVideoRotaryPosEmbed,
+        LTX2VideoTransformer3DModel,
+    )
+
+    defaults = {
+        name: param.default
+        for name, param in inspect.signature(LTX2VideoTransformer3DModel.__init__).parameters.items()
+        if param.default is not inspect.Parameter.empty
+    }
+    cfg = {**defaults, **{name: value for name, value in dict(config).items() if name in defaults}}
+
+    common = {
+        "theta": cfg["rope_theta"],
+        "causal_offset": cfg["causal_offset"],
+        "double_precision": cfg["rope_double_precision"],
+        "rope_type": cfg["rope_type"],
+    }
+    cross_attn_pos_embed_max_pos = max(cfg["pos_embed_max_pos"], cfg["audio_pos_embed_max_pos"])
+    return {
+        "rope": LTX2AudioVideoRotaryPosEmbed(
+            dim=cfg["num_attention_heads"] * cfg["attention_head_dim"],
+            patch_size=cfg["patch_size"],
+            patch_size_t=cfg["patch_size_t"],
+            base_num_frames=cfg["pos_embed_max_pos"],
+            base_height=cfg["base_height"],
+            base_width=cfg["base_width"],
+            scale_factors=tuple(cfg["vae_scale_factors"]),
+            modality="video",
+            num_attention_heads=cfg["num_attention_heads"],
+            **common,
+        ),
+        "audio_rope": LTX2AudioVideoRotaryPosEmbed(
+            dim=cfg["audio_num_attention_heads"] * cfg["audio_attention_head_dim"],
+            patch_size=cfg["audio_patch_size"],
+            patch_size_t=cfg["audio_patch_size_t"],
+            base_num_frames=cfg["audio_pos_embed_max_pos"],
+            sampling_rate=cfg["audio_sampling_rate"],
+            hop_length=cfg["audio_hop_length"],
+            scale_factors=[cfg["audio_scale_factor"]],
+            modality="audio",
+            num_attention_heads=cfg["audio_num_attention_heads"],
+            **common,
+        ),
+        "cross_attn_rope": LTX2AudioVideoRotaryPosEmbed(
+            dim=cfg["audio_cross_attention_dim"],
+            patch_size=cfg["patch_size"],
+            patch_size_t=cfg["patch_size_t"],
+            base_num_frames=cross_attn_pos_embed_max_pos,
+            base_height=cfg["base_height"],
+            base_width=cfg["base_width"],
+            modality="video",
+            num_attention_heads=cfg["num_attention_heads"],
+            **common,
+        ),
+        "cross_attn_audio_rope": LTX2AudioVideoRotaryPosEmbed(
+            dim=cfg["audio_cross_attention_dim"],
+            patch_size=cfg["audio_patch_size"],
+            patch_size_t=cfg["audio_patch_size_t"],
+            base_num_frames=cross_attn_pos_embed_max_pos,
+            sampling_rate=cfg["audio_sampling_rate"],
+            hop_length=cfg["audio_hop_length"],
+            modality="audio",
+            num_attention_heads=cfg["audio_num_attention_heads"],
+            **common,
+        ),
+    }
+
+
+def compute_ltx2_rope_inputs(
+    rope_modules: Dict[str, "nn.Module"], video_coords: "torch.Tensor", audio_coords: "torch.Tensor"
+) -> Dict[str, "torch.Tensor"]:
+    """
+    Compute the (cos, sin) transformer inputs named in `LTX2_ROPE_INPUTS` from the RoPE coordinates,
+    exactly as `LTX2VideoTransformer3DModel.forward` does before its transformer blocks.
+
+    Original (`LTX2VideoTransformer3DModel.forward`, "1. Prepare RoPE positional embeddings"):
+    https://github.com/huggingface/diffusers/blob/v0.40.0/src/diffusers/models/transformers/transformer_ltx2.py#L1500-L1506
+    """
+    coords = {
+        "rope": video_coords,
+        "audio_rope": audio_coords,
+        "cross_attn_rope": video_coords[:, 0:1, :],
+        "cross_attn_audio_rope": audio_coords[:, 0:1, :],
+    }
+    inputs = {}
+    for module_name, (cos_name, sin_name) in LTX2_ROPE_INPUTS.items():
+        cos, sin = rope_modules[module_name](coords[module_name].float())
+        inputs[cos_name] = cos.float().contiguous()
+        inputs[sin_name] = sin.float().contiguous()
+    return inputs
+
+
 def is_torch_model(model: Union["PreTrainedModel", "ModelMixin"]):
     """
     Checks whether the model is a torch model.

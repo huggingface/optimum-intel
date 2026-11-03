@@ -946,6 +946,7 @@ ARCH_TO_MODEL_CLASS = {
     "gptj": "OVModelForCausalLM",
     "granite": "OVModelForCausalLM",
     "granitemoe": "OVModelForCausalLM",
+    "granitemoehybrid": "OVModelForCausalLM",
     "mistral-nemo": "OVModelForCausalLM",
     "mixtral": "OVModelForCausalLM",
     "mpt": "OVModelForCausalLM",

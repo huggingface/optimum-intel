@@ -67,6 +67,7 @@ from optimum.exporters.openvino.patching_utils import (
 from optimum.exporters.openvino.utils import (
     GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE,
     GRANITEMOEHYBRID_MAMBA_LAYER_TYPE,
+    LTX2_ROPE_INPUTS,
     is_ltx2_3_transformer_config,
 )
 from optimum.intel.utils.import_utils import (
@@ -347,6 +348,84 @@ def register_ov_batched_mm(patcher):
 
     ALL_EXPERTS_FUNCTIONS.register("ov_batched_mm", batched_mm_experts_forward_patched)
     patcher._model.set_experts_implementation("ov_batched_mm")
+
+
+# Patched version of grouped_mm_experts_forward from transformers.integrations.moe.
+# Original code: https://github.com/huggingface/transformers/blob/d557ef55b6df9fc28bc1df49309ffb56d5789992/src/transformers/integrations/moe.py#L380-L385
+# Replaces torch.histc / torch.bincount with scatter_add_ to count tokens per expert.
+# Neither torch.histc nor torch.bincount is supported by the OV TorchScript frontend;
+# scatter_add_ on a zeros buffer is semantically equivalent and traces cleanly.
+def ov_grouped_mm_experts_forward(
+    self: torch.nn.Module,
+    hidden_states: torch.Tensor,
+    top_k_index: torch.Tensor,
+    top_k_weights: torch.Tensor,
+) -> torch.Tensor:
+    import transformers.integrations.moe as _moe_module
+
+    device = hidden_states.device
+    num_top_k = top_k_index.size(-1)
+    num_tokens = hidden_states.size(0)
+    hidden_dim = hidden_states.size(-1)
+
+    token_idx = torch.arange(num_tokens, device=device).unsqueeze(1).expand(-1, num_top_k).reshape(-1)
+    sample_weights = top_k_weights.reshape(-1)
+    expert_ids = top_k_index.reshape(-1)
+
+    perm = torch.argsort(expert_ids)
+    inv_perm = torch.argsort(perm)
+    expert_ids_g = expert_ids[perm]
+    selected_hidden_states_g = hidden_states[token_idx[perm]]
+
+    # Experts without gating (e.g. NemotronH) only have `up_proj`/`up_proj_bias` and apply the
+    # activation alone. Older transformers versions do not set `has_gate`; their experts are gated.
+    has_gate = getattr(self, "has_gate", True)
+    gate_up_proj = self.gate_up_proj if has_gate else self.up_proj
+    gate_up_proj_bias = (self.gate_up_proj_bias if has_gate else self.up_proj_bias) if self.has_bias else None
+
+    if self.is_transposed:
+        selected_gate_up = gate_up_proj.contiguous()
+        selected_down = self.down_proj.contiguous()
+    else:
+        selected_gate_up = gate_up_proj.transpose(-2, -1).contiguous()
+        selected_down = self.down_proj.transpose(-2, -1).contiguous()
+    selected_gate_up_bias = gate_up_proj_bias[expert_ids_g] if self.has_bias else None
+    selected_down_bias = self.down_proj_bias[expert_ids_g] if self.has_bias else None
+
+    # PATCH: scatter_add_ instead of histc/bincount - OV TorchScript supports scatter_add_
+    tokens_per_expert = torch.zeros(self.num_experts, dtype=torch.int32, device=device)
+    ones = torch.ones(expert_ids_g.size(0), dtype=torch.int32, device=device)
+    tokens_per_expert.scatter_add_(0, expert_ids_g, ones)
+    offsets = torch.cumsum(tokens_per_expert, dim=0, dtype=torch.int32)
+
+    gate_up_out = _moe_module._grouped_linear(
+        selected_hidden_states_g, selected_gate_up, offsets, selected_gate_up_bias, is_transposed=True
+    )
+
+    # Gated experts apply the custom/default gating mechanism; non-gated experts apply the activation.
+    gated_out = self._apply_gate(gate_up_out) if has_gate else self.act_fn(gate_up_out)
+
+    out_per_sample_g = _moe_module._grouped_linear(
+        gated_out, selected_down, offsets, selected_down_bias, is_transposed=True
+    )
+
+    out_per_sample = out_per_sample_g[inv_perm] * sample_weights.unsqueeze(-1)
+    final_hidden_states = out_per_sample.view(num_tokens, num_top_k, hidden_dim).sum(dim=1)
+
+    return final_hidden_states.to(hidden_states.dtype)
+
+
+def register_ov_grouped_mm(patcher):
+    """Patch grouped_mm_experts_forward to use scatter_add_ instead of torch.histc/bincount.
+    The stock implementation uses torch.histc (or torch.bincount) to compute per-expert token
+    counts, which the OV TorchScript frontend does not support. This helper swaps in the
+    OV-compatible scatter_add_ variant while keeping the grouped_mm dispatch key so that
+    hardware-accelerated grouped GEMM paths remain available on supported devices.
+    """
+    from transformers.integrations.moe import ALL_EXPERTS_FUNCTIONS
+
+    ALL_EXPERTS_FUNCTIONS._global_mapping["ov_grouped_mm"] = ov_grouped_mm_experts_forward
+    patcher._model.set_experts_implementation("ov_grouped_mm")
 
 
 def patch_update_causal_mask(
@@ -894,6 +973,15 @@ class MistralModelPatcher(OVDecoderModelPatcher):
 
 
 SUPPORT_SDPA = is_torch_version(">", "2.1.0")
+SUPPORT_GROUPED_MM = is_torch_version(">=", "2.10.0")
+
+
+def grouped_mm_warning():
+    logger.warning(
+        "The current version of torch doesn't support grouped torch.nn.functional.grouped_mm,"
+        "which results in a non optimized MoE block in the exported model."
+        "Install torch >= 2.10.0 for the better model performance."
+    )
 
 
 # TODO: why
@@ -5414,6 +5502,60 @@ def _granite_moe_parallel_experts_forward(self, inputs, expert_size):
     return results
 
 
+# Original code: https://github.com/huggingface/transformers/blob/v5.5.0/src/transformers/models/granitemoe/modeling_granitemoe.py#L250
+def _granite_moe_experts_forward(self, layer_input):
+    bsz, length, emb_size = layer_input.size()
+    layer_input = layer_input.reshape(-1, emb_size)
+
+    _, batch_index, batch_gates, expert_size, _ = self.router(layer_input)
+
+    expert_size = torch.tensor(expert_size, dtype=torch.int32)
+
+    offs = torch.cumsum(
+        expert_size,
+        dim=0,
+        dtype=torch.int32,
+    )
+
+    expert_inputs = layer_input[batch_index]
+
+    hidden_states = torch._grouped_mm(
+        expert_inputs,
+        self.input_linear.weight.transpose(1, 2),
+        offs=offs,
+    )
+
+    x, gate = hidden_states.chunk(2, dim=-1)
+    hidden_states = self.activation(x) * gate
+
+    expert_outputs = torch._grouped_mm(
+        hidden_states,
+        self.output_linear.weight.transpose(1, 2),
+        offs=offs,
+    )
+    expert_outputs = expert_outputs * batch_gates[:, None]
+
+    layer_output = torch.zeros(
+        (bsz * length, self.input_size),
+        dtype=expert_outputs.dtype,
+        device=expert_outputs.device,
+    )
+
+    layer_output.index_add_(
+        0,
+        batch_index,
+        expert_outputs,
+    )
+
+    layer_output = layer_output.view(
+        bsz,
+        length,
+        self.input_size,
+    )
+
+    return layer_output
+
+
 class GraniteMoEModelPatcher(OVDecoderModelPatcher):
     def __enter__(self):
         super().__enter__()
@@ -8517,6 +8659,12 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
                 _granite_moe_parallel_experts_forward, sparse_moe_layer.output_linear
             )
 
+            if SUPPORT_GROUPED_MM:
+                sparse_moe_layer._orig_forward = sparse_moe_layer.forward
+                sparse_moe_layer.forward = types.MethodType(_granite_moe_experts_forward, sparse_moe_layer)
+            else:
+                grouped_mm_warning()
+
         super().__enter__()
         setattr(self._model, self.orig_forward_name, self.patched_forward)
 
@@ -8557,13 +8705,18 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
             mamba_layer.forward = make_mamba_forward(mamba_layer)
 
         if is_transformers_version(">=", "5.13"):
-            register_ov_batched_mm(self)
+            if SUPPORT_GROUPED_MM:
+                register_ov_grouped_mm(self)
+            else:
+                register_ov_batched_mm(self)
 
     def __exit__(self, exc_type, exc_value, traceback):
         def unpatch_sparse_moe(sparse_moe_layer):
             sparse_moe_layer.router.forward = sparse_moe_layer.router._orig_forward
             sparse_moe_layer.input_linear.forward = sparse_moe_layer.input_linear._orig_forward
             sparse_moe_layer.output_linear.forward = sparse_moe_layer.output_linear._orig_forward
+            if SUPPORT_GROUPED_MM:
+                sparse_moe_layer.forward = sparse_moe_layer._orig_forward
 
         super().__exit__(exc_type, exc_value, traceback)
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
@@ -11388,13 +11541,16 @@ class KokoroModelPatcher(ModelPatcher):
         self._model.forward = self._model._orig_forward
 
 
-def _ltx2_connector_forward_patched(self, hidden_states, attention_mask=None, attn_mask_binarize_threshold=-9000.0):
+def _ltx2_connector_forward_patched(
+    self, hidden_states, attention_mask=None, attn_mask_binarize_threshold=-9000.0, rotary_emb=None
+):
     """
     Patched forward for LTX2ConnectorTransformer1d.
 
     Original does boolean-mask indexing `hidden_states[i, mask[i].bool(), :]`, whose output
     length depends on mask values and cannot be traced. Rewritten with fixed-shape sort +
-    gather + arange mask (valid tokens left, registers right).
+    gather + arange mask (valid tokens left, registers right). The RoPE (cos, sin) pair is taken
+    from `rotary_emb` when given, so it is a graph input rather than computed in the graph.
 
     Original (`LTX2ConnectorTransformer1d.forward`, data-dependent indexing at L304):
     https://github.com/huggingface/diffusers/blob/v0.38.0/src/diffusers/pipelines/ltx2/connectors.py#L279-L330
@@ -11429,7 +11585,8 @@ def _ltx2_connector_forward_patched(self, hidden_states, attention_mask=None, at
 
         attention_mask = torch.zeros_like(attention_mask)
 
-    rotary_emb = self.rope(batch_size, seq_len, device=hidden_states.device)
+    if rotary_emb is None:
+        rotary_emb = self.rope(batch_size, seq_len, device=hidden_states.device)
 
     for block in self.transformer_blocks:
         hidden_states = block(hidden_states, attention_mask=attention_mask, rotary_emb=rotary_emb)
@@ -11439,12 +11596,21 @@ def _ltx2_connector_forward_patched(self, hidden_states, attention_mask=None, at
 
 
 def _ltx2_connectors_top_level_forward_patched(
-    self, text_encoder_hidden_states, attention_mask, padding_side="left", scale_factor=8
+    self,
+    text_encoder_hidden_states,
+    attention_mask,
+    video_connector_rotary_cos=None,
+    video_connector_rotary_sin=None,
+    audio_connector_rotary_cos=None,
+    audio_connector_rotary_sin=None,
+    padding_side="left",
+    scale_factor=8,
 ):
     """
     Patched top-level forward for LTX2TextConnectors: inlines per_layer_masked_mean_norm
     (masked_fill/arange/amin/amax, all fixed-shape) and hardcodes padding_side="left" so the
-    connectors stack traces cleanly as a single graph.
+    connectors stack traces cleanly as a single graph. Each connector's RoPE (cos, sin) is a graph
+    input, precomputed on the host as for the transformer, since f16 cannot resolve its angles.
 
     Originals (`LTX2TextConnectors.forward` and `per_layer_masked_mean_norm`):
     https://github.com/huggingface/diffusers/blob/v0.38.0/src/diffusers/pipelines/ltx2/connectors.py#L397-L476
@@ -11510,14 +11676,22 @@ def _ltx2_connectors_top_level_forward_patched(
     add_attn_mask = add_attn_mask.reshape(attention_mask.shape[0], 1, 1, attention_mask.shape[-1])
     add_attn_mask = add_attn_mask * torch.finfo(text_dtype).max
 
-    video_text_embedding, video_attn_mask = self.video_connector(video_text_emb_proj, add_attn_mask)
+    video_rotary_emb = (
+        None if video_connector_rotary_cos is None else (video_connector_rotary_cos, video_connector_rotary_sin)
+    )
+    video_text_embedding, video_attn_mask = self.video_connector(
+        video_text_emb_proj, add_attn_mask, rotary_emb=video_rotary_emb
+    )
 
     # Convert video attn mask to binary
     binary_attn_mask = (video_attn_mask < 1e-6).to(torch.int64)
     binary_attn_mask = binary_attn_mask.reshape(video_text_embedding.shape[0], video_text_embedding.shape[1], 1)
     video_text_embedding = video_text_embedding * binary_attn_mask
 
-    audio_text_embedding, _ = self.audio_connector(audio_text_emb_proj, add_attn_mask)
+    audio_rotary_emb = (
+        None if audio_connector_rotary_cos is None else (audio_connector_rotary_cos, audio_connector_rotary_sin)
+    )
+    audio_text_embedding, _ = self.audio_connector(audio_text_emb_proj, add_attn_mask, rotary_emb=audio_rotary_emb)
 
     return video_text_embedding, audio_text_embedding, binary_attn_mask.squeeze(-1)
 
@@ -11579,28 +11753,21 @@ def _ltx2_apply_split_rotary_emb(x, freqs):
     """
     cos, sin = freqs
     x_dtype = x.dtype
+    # Take the half head dim from cos, not from x: it stays static in the IR, which OpenVINO's RoPE fusion requires.
+    r = cos.shape[-1]
 
     if x.ndim == 3 and cos.ndim == 4:
         b, h, t, _ = cos.shape
-        x = x.reshape(b, t, h, -1).swapaxes(1, 2)
+        x = x.reshape(b, t, h, 2 * r).swapaxes(1, 2)
         needs_reshape = True
     else:
         needs_reshape = False
 
-    last = x.shape[-1]
-    r = last // 2
-
-    split_x = x.reshape(*x.shape[:-1], 2, r).float()
-    first_x = split_x[..., :1, :]
-    second_x = split_x[..., 1:, :]
-
-    cos_u = cos.unsqueeze(-2)
-    sin_u = sin.unsqueeze(-2)
-
-    first_out = first_x * cos_u - sin_u * second_x
-    second_out = second_x * cos_u + sin_u * first_x
-
-    out = torch.cat([first_out, second_out], dim=-2).reshape(*split_x.shape[:-2], last)
+    # Canonical rotate-half form (x * cos + rotate_half(x) * sin), which OpenVINO CPU fuses into a RoPE node.
+    x = x.float()
+    cos = torch.cat([cos, cos], dim=-1)
+    sin = torch.cat([sin, sin], dim=-1)
+    out = x * cos + torch.cat([-x[..., r:], x[..., :r]], dim=-1) * sin
 
     if needs_reshape:
         out = out.swapaxes(1, 2).reshape(b, t, -1)
@@ -11834,6 +12001,24 @@ def _ltx2_cross_modality_gated_forward(orig_forward, guidance_state):
     return forward
 
 
+def _ltx2_precomputed_rope_forward(orig_forward, rope_state, module_name):
+    """
+    Forward for an `LTX2AudioVideoRotaryPosEmbed` that returns the (cos, sin) pair held in
+    `rope_state[module_name]` when there is one, and computes it from the coordinates otherwise.
+
+    Original (`LTX2AudioVideoRotaryPosEmbed.forward`):
+    https://github.com/huggingface/diffusers/blob/v0.40.0/src/diffusers/models/transformers/transformer_ltx2.py#L1003-L1078
+    """
+
+    def forward(coords, device=None):
+        freqs = rope_state.get(module_name)
+        if freqs is None:
+            return orig_forward(coords, device=device)
+        return freqs
+
+    return forward
+
+
 class LTX2TransformerPatcher(ModelPatcher):
     """
     Export patcher for the LTX2 transformer: installs the trace-safe attention processor and
@@ -11844,6 +12029,10 @@ class LTX2TransformerPatcher(ModelPatcher):
     tensor inputs, since a static IR cannot branch on them at runtime: `cross_modality_gate` scales
     the audio<->video cross-attention residuals, and `stg_perturbation_mask` holds one blend weight
     per block for the self-attentions of perturbable blocks. Both are neutral (all ones) by default.
+
+    RoPE is traced from precomputed (cos, sin) inputs (`LTX2_ROPE_INPUTS`) rather than from
+    `video_coords`/`audio_coords`, so the large rotary angles are never computed in the graph, where
+    an f16 inference precision would destroy them.
     """
 
     def __enter__(self):
@@ -11888,6 +12077,16 @@ class LTX2TransformerPatcher(ModelPatcher):
         # Wrap forward to return dict (needed for output naming) and force return_dict=False internally
         self._orig_model_forward = self._model.forward
 
+        # RoPE is traced from precomputed (cos, sin) inputs instead of the coordinates; see
+        # `LTX2_ROPE_INPUTS`. Each rotary module hands back its pair when one is given.
+        self._rope_state = {}
+        self._orig_rope_forwards = []
+        for module_name in LTX2_ROPE_INPUTS:
+            module = getattr(self._model, module_name, None)
+            if module is not None:
+                self._orig_rope_forwards.append((module, module.forward))
+                module.forward = _ltx2_precomputed_rope_forward(module.forward, self._rope_state, module_name)
+
         # `sigma`/`audio_sigma` only exist on the transformer forward from the LTX-2.3 PR onwards.
         # On older diffusers (LTX-2.0 era) they are absent, so only forward them when supported —
         # this keeps LTX-2.0 export working across diffusers versions.
@@ -11910,19 +12109,37 @@ class LTX2TransformerPatcher(ModelPatcher):
             audio_sigma=None,
             encoder_attention_mask=None,
             audio_encoder_attention_mask=None,
-            num_frames=None,
-            height=None,
-            width=None,
-            fps=24.0,
-            audio_num_frames=None,
             video_coords=None,
             audio_coords=None,
             cross_modality_gate=None,
             stg_perturbation_mask=None,
+            video_rotary_cos=None,
+            video_rotary_sin=None,
+            audio_rotary_cos=None,
+            audio_rotary_sin=None,
+            video_cross_attn_rotary_cos=None,
+            video_cross_attn_rotary_sin=None,
+            audio_cross_attn_rotary_cos=None,
+            audio_cross_attn_rotary_sin=None,
             **kwargs,
         ):
             self._guidance_state["cross_modality_gate"] = cross_modality_gate
             self._guidance_state["stg_perturbation_mask"] = stg_perturbation_mask
+
+            rope_inputs = {
+                "rope": (video_rotary_cos, video_rotary_sin),
+                "audio_rope": (audio_rotary_cos, audio_rotary_sin),
+                "cross_attn_rope": (video_cross_attn_rotary_cos, video_cross_attn_rotary_sin),
+                "cross_attn_audio_rope": (audio_cross_attn_rotary_cos, audio_cross_attn_rotary_sin),
+            }
+            for module_name, freqs in rope_inputs.items():
+                self._rope_state[module_name] = freqs if freqs[0] is not None else None
+            # The rotary modules ignore the coordinates once given their (cos, sin), but the model
+            # still slices them and would otherwise try to build them from frame/size arguments.
+            if video_coords is None and video_rotary_cos is not None:
+                video_coords = hidden_states.new_zeros((1, 3, 1, 2))
+            if audio_coords is None and audio_rotary_cos is not None:
+                audio_coords = audio_hidden_states.new_zeros((1, 1, 1, 2))
 
             # `sigma`/`audio_sigma` drive the prompt cross-attention modulation path used when the
             # checkpoint sets cross_attn_mod=True (e.g. LTX-2.3). Both pipelines pass
@@ -11954,11 +12171,6 @@ class LTX2TransformerPatcher(ModelPatcher):
                 timestep=timestep,
                 encoder_attention_mask=encoder_attention_mask,
                 audio_encoder_attention_mask=audio_encoder_attention_mask,
-                num_frames=num_frames,
-                height=height,
-                width=width,
-                fps=fps,
-                audio_num_frames=audio_num_frames,
                 video_coords=video_coords,
                 audio_coords=audio_coords,
                 return_dict=False,
@@ -11979,6 +12191,9 @@ class LTX2TransformerPatcher(ModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._orig_model_forward
+
+        for module, orig_forward in self._orig_rope_forwards:
+            module.forward = orig_forward
 
         for attn, orig_forward in self._orig_cross_modality_forwards:
             attn.forward = orig_forward
