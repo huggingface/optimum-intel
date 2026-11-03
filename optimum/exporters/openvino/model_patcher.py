@@ -23,7 +23,6 @@ import re
 import types
 from collections import defaultdict
 from dataclasses import dataclass
-from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
@@ -9447,151 +9446,104 @@ class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
         )
 
 
-def _dflash_apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1):
-    cos = cos.unsqueeze(unsqueeze_dim)
-    sin = sin.unsqueeze(unsqueeze_dim)
-    q_len = q.size(-2)
-    q_embed = (q * cos[..., -q_len:, :]) + (qwen3_rotate_half(q) * sin[..., -q_len:, :])
-    k_embed = (k * cos) + (qwen3_rotate_half(k) * sin)
-    return q_embed, k_embed
-
-
-def _dflash_repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
-    """repeat_kv using reshape instead of unsqueeze to insert the group dim.
-
-    The GPU plugin's UnsqueezeBroadcastReshapeSDPAFusion matches a Reshape but not the
-    Unsqueeze from stock ``[:, :, None]`` (valid only atop a KVCache op the draft lacks).
-    Matching keeps the draft on native-GQA SDPA (micro kernel), not a materialized broadcast.
-    """
-    batch, num_key_value_heads, slen, head_dim = hidden_states.shape
-    if n_rep == 1:
-        return hidden_states
-    hidden_states = hidden_states.reshape(batch, num_key_value_heads, 1, slen, head_dim).expand(
-        batch, num_key_value_heads, n_rep, slen, head_dim
-    )
-    return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
-
-
-def _muse_glimmer_assistant_attention_mask(
-    query_states: torch.Tensor,
-    key_states: torch.Tensor,
-    sliding_window: Optional[int],
-    attention_mask: Optional[torch.Tensor],
-) -> Optional[torch.Tensor]:
-    """Bidirectional (optionally windowed) additive mask for the MuseGlimmer drafter.
-
-    Replaces the per-model ``mask_mapping``, which assumes keys are cache + context + window in every layer:
-    https://github.com/huggingface/transformers/blob/v5.15.1/src/transformers/models/muse_glimmer_assistant/modeling_muse_glimmer_assistant.py#L428-L441
-    The patched attention keeps the window out of the cache and trims sliding layers, so the mask is built per layer
-    from the actual ``key_states``. The window bound stays inclusive, as in transformers:
-    https://github.com/huggingface/transformers/blob/v5.15.1/src/transformers/masking_utils.py#L146-L149
-    """
-    q_len = query_states.shape[-2]
-    kv_len = key_states.shape[-2]
-    if attention_mask is not None:
-        # Keep the columns matching the (possibly trimmed) key set.
-        attention_mask = attention_mask[:, :, :, -kv_len:]
-    if sliding_window is None:
-        return attention_mask
-
-    dtype = query_states.dtype
-    device = query_states.device
-    query_positions = torch.arange(kv_len - q_len, kv_len, device=device)
-    key_positions = torch.arange(kv_len, device=device)
-    outside_window = (query_positions.reshape(-1, 1) - key_positions.reshape(1, -1)).abs() > sliding_window
-    window_mask = torch.zeros((q_len, kv_len), dtype=dtype, device=device)
-    window_mask = window_mask.masked_fill(outside_window, torch.finfo(dtype).min)
-    window_mask = window_mask[None, None, :, :].expand(query_states.shape[0], 1, -1, -1)
-
-    if attention_mask is None:
-        return window_mask
-    return attention_mask + window_mask
-
-
 def _muse_glimmer_assistant_attention_forward(
-    self,
+    attention,
     hidden_states: torch.Tensor,
-    context_hidden_states: torch.Tensor,
+    block_states: torch.Tensor,
+    block_rows: torch.Tensor,
     position_embeddings: Tuple[torch.Tensor, torch.Tensor],
-    attention_mask: Optional[torch.Tensor] = None,
+    attention_mask: Optional[torch.Tensor],
     past_key_values: Optional[Cache] = None,
     **kwargs,
-) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-    """MuseGlimmer drafter attention that keeps only the target context in the KV cache.
+) -> torch.Tensor:
+    """MuseGlimmer drafter attention in which only the block rows get a query, as in ``Qwen3DFlashAttention``.
 
-    The stock implementation appends the diffusion window to the cache alongside the
-    context and relies on ``DFlashCache.crop`` to evict it again on the next step. A
-    stateful OpenVINO model cannot roll its state back, so the window's K/V is instead
-    concatenated locally, after the cache update. The cache then only ever grows by the
-    accepted-token context, which is exactly the DFlash contract and needs no rollback.
+    hidden_states: [batch, seq, hidden], every row. block_states: [N, hidden], the block rows at the flattened
+    indices block_rows. Returns [N, hidden].
     """
     from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
     from transformers.models.muse_glimmer_assistant.modeling_muse_glimmer_assistant import (
-        eager_attention_forward as muse_glimmer_assistant_eager_attention_forward,
+        eager_attention_forward,
+        rotate_half,
     )
 
-    bsz, q_len = hidden_states.shape[:-1]
-    ctx_len = context_hidden_states.shape[1]
-    hidden_shape = (bsz, q_len, -1, self.head_dim)
-    kv_hidden_shape = (bsz, ctx_len + q_len, -1, self.head_dim)
+    batch_size, seq_len = hidden_states.shape[:2]
+    # literal head counts keep the head dimensions static for the GPU SDPA and RoPE fusions
+    num_heads, num_kv_heads, head_dim = (
+        attention.num_attention_heads,
+        attention.num_key_value_heads,
+        attention.head_dim,
+    )
 
-    kv_hidden_states = torch.cat([context_hidden_states, hidden_states], dim=1)
-    query_states = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
-    key_states = self.k_proj(kv_hidden_states).view(kv_hidden_shape).transpose(1, 2)
-    value_states = self.v_proj(kv_hidden_states).view(kv_hidden_shape).transpose(1, 2)
-    query_states = self.q_norm(query_states)
-    key_states = self.k_norm(key_states)
-
-    # `cos`/`sin` span the context plus the diffusion window; the queries are the window,
-    # so they take the trailing positions while the keys take all of them.
+    # keys and values for every row
+    kv_shape = (batch_size, seq_len, num_kv_heads, head_dim)
+    key_states = attention.k_norm(attention.k_proj(hidden_states).view(kv_shape)).transpose(1, 2)
+    value_states = attention.v_proj(hidden_states).view(kv_shape).transpose(1, 2)
     cos, sin = position_embeddings
-    query_states, key_states = _dflash_apply_rotary_pos_emb(query_states, key_states, cos, sin)
+    key_states = key_states * cos.unsqueeze(1) + rotate_half(key_states) * sin.unsqueeze(1)
 
-    context_key_states, block_key_states = key_states.split([ctx_len, q_len], dim=2)
-    context_value_states, block_value_states = value_states.split([ctx_len, q_len], dim=2)
+    # queries for the block rows only, with RoPE at their positions
+    query_shape = (1, block_states.shape[0], num_heads, head_dim)
+    query_states = attention.q_norm(attention.q_proj(block_states).view(query_shape)).transpose(1, 2)
+    block_cos, block_sin = (t.flatten(0, 1).index_select(0, block_rows)[None] for t in (cos, sin))
+    query_states = query_states * block_cos.unsqueeze(1) + rotate_half(query_states) * block_sin.unsqueeze(1)
+    # zero queries for the context rows: attention needs one query per key row
+    all_queries = query_states.new_zeros(batch_size * seq_len, num_heads, head_dim)
+    all_queries[block_rows] = query_states.transpose(1, 2)[0]
+    query_states = all_queries.view(batch_size, seq_len, num_heads, head_dim).transpose(1, 2)
+
     if past_key_values is not None:
-        context_key_states, context_value_states = past_key_values.update(
-            context_key_states, context_value_states, self.layer_idx
-        )
-
-    sliding_window = self.sliding_window if self.is_sliding else None
-    if sliding_window is not None:
-        # A window query attends back at most `sliding_window` positions, so older
-        # context can never be reached. Trimming keeps the concat and SDPA O(window).
-        context_key_states = context_key_states[:, :, -sliding_window:, :]
-        context_value_states = context_value_states[:, :, -sliding_window:, :]
-
-    key_states = torch.cat([context_key_states, block_key_states], dim=2)
-    value_states = torch.cat([context_value_states, block_value_states], dim=2)
-    attention_mask = _muse_glimmer_assistant_attention_mask(query_states, key_states, sliding_window, attention_mask)
-
-    attention_interface = muse_glimmer_assistant_eager_attention_forward
-    attention_module = self
-    if self.config._attn_implementation != "eager":
-        attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
-        if self.config._attn_implementation == "sdpa" and self.num_key_value_groups > 1:
-            # Same reasoning as the Qwen3 DFlash path: re-pin the KV head count with a
-            # literal-dim Reshape so the GPU plugin still dispatches native-GQA SDPA.
-            key_states = key_states.reshape(bsz, self.num_key_value_heads, -1, self.head_dim)
-            value_states = value_states.reshape(bsz, self.num_key_value_heads, -1, self.head_dim)
-            key_states = _dflash_repeat_kv(key_states, self.num_key_value_groups)
-            value_states = _dflash_repeat_kv(value_states, self.num_key_value_groups)
-            attention_module = SimpleNamespace(is_causal=False)
-
-    attn_output, attn_weights = attention_interface(
-        attention_module,
+        key_states, value_states = past_key_values.update(key_states, value_states, attention.layer_idx)
+    attention_interface = ALL_ATTENTION_FUNCTIONS.get_interface(
+        attention.config._attn_implementation, eager_attention_forward
+    )
+    attn_output, _ = attention_interface(
+        attention,
         query_states,
         key_states,
         value_states,
         attention_mask,
         dropout=0.0,
-        scaling=self.scaling,
-        sliding_window=None,
+        scaling=attention.scaling,
         **kwargs,
     )
-    attn_output = attn_output.reshape(bsz, q_len, -1).contiguous()
-    attn_output = self.o_proj(attn_output)
-    return attn_output, attn_weights
+    # keep the block rows; o_proj runs on them only
+    attn_output = attn_output.reshape(batch_size * seq_len, num_heads * head_dim)
+    return attention.o_proj(attn_output.index_select(0, block_rows))
+
+
+def _muse_glimmer_assistant_decoder_layer_forward(
+    layer,
+    target_hidden: torch.Tensor,
+    hidden_states: torch.Tensor,
+    block_rows: torch.Tensor,
+    position_embeddings: Tuple[torch.Tensor, torch.Tensor],
+    attention_mask: Optional[torch.Tensor],
+    past_key_values: Optional[Cache] = None,
+    **kwargs,
+) -> torch.Tensor:
+    # hidden_states holds only the block rows [N, hidden]: the norms, o_proj and MLP run on them alone.
+    # Context rows enter as target_hidden, which feeds only their keys and values.
+    residual = hidden_states
+    block_states = layer.input_layernorm(hidden_states)
+    # attention input of every row: target features, with the normalized block rows written in
+    attention_input = target_hidden.flatten(0, 1).clone()
+    attention_input[block_rows] = block_states
+    hidden_states = _muse_glimmer_assistant_attention_forward(
+        layer.self_attn,
+        attention_input.view_as(target_hidden),
+        block_states,
+        block_rows,
+        position_embeddings,
+        attention_mask,
+        past_key_values,
+        **kwargs,
+    )
+    hidden_states = residual + hidden_states
+
+    residual = hidden_states
+    hidden_states = layer.mlp(layer.post_attention_layernorm(hidden_states))
+    return residual + hidden_states
 
 
 @functools.lru_cache(maxsize=1)
@@ -9601,61 +9553,63 @@ def get_muse_glimmer_assistant_draft_model_class():
     Defined lazily because ``muse_glimmer_assistant`` only exists in transformers >= 5.15,
     while this module is imported eagerly.
 
-    The class exposes the same I/O contract as the Qwen3 DFlash export: the token
-    embedding and lm_head are intentionally absent, because the drafter borrows the
-    target's at runtime. ``inputs_embeds`` is the diffusion window (anchor token +
-    ``block_size - 1`` mask tokens) embedded with the target's *raw* lookup table, and
-    ``hidden_states`` is the target's hidden states at ``config.target_layer_ids``
-    concatenated on the last axis. The returned ``last_hidden_state`` drops the anchor
-    position so it aligns 1:1 with the drafted tokens the grafted lm_head will score.
+    The class runs the native MuseGlimmer modules with the I/O of the Qwen3 DFlash draft export (see
+    ``Qwen3DFlashDraftModel.forward``): ``inputs_embeds``, ``hidden_states``, ``position_ids`` and
+    ``token_type_ids`` cover the new rows [context; block], and ``last_hidden_state`` covers every row, zero in
+    the context rows. The token embedding and lm_head are intentionally absent: the drafter borrows the target's.
     """
     from transformers.models.muse_glimmer_assistant.modeling_muse_glimmer_assistant import MuseGlimmerAssistantModel
 
     class MuseGlimmerAssistantDFlashForCausalLM(MuseGlimmerAssistantModel):
-        def __init__(self, config):
-            super().__init__(config)
-            for layer in self.layers:
-                layer.self_attn.forward = types.MethodType(_muse_glimmer_assistant_attention_forward, layer.self_attn)
-
         def forward(
             self,
             inputs_embeds: torch.FloatTensor,
             hidden_states: torch.Tensor,
             position_ids: torch.LongTensor,
-            attention_mask: Optional[torch.Tensor] = None,
+            attention_mask: torch.Tensor,
+            token_type_ids: torch.LongTensor,
             past_key_values: Optional[Cache] = None,
             use_cache: Optional[bool] = True,
             **kwargs,
         ) -> BaseModelOutputWithPast:
-            noise_states = inputs_embeds
-            context_hidden_states = self.encoder(hidden_states.to(noise_states.dtype))
-
-            if is_transformers_version("<", "5"):
-                past_key_values = DynamicCache.from_legacy_cache(past_key_values)
-            else:
+            # target features of every row; the layers use them only for the context rows' keys and values
+            target_hidden = self.encoder(hidden_states.to(inputs_embeds.dtype))
+            # indices of the block rows in flattened [batch * seq] order, which fits both [1, seq] (stateful SDPA)
+            # and [tokens, 1] (PagedAttention); empty for a context-only prompt chunk
+            block_rows = torch.nonzero(token_type_ids.flatten() == 1).squeeze(-1)
+            if use_cache and not isinstance(past_key_values, Cache):
+                # no config: the sliding layers keep every row, and the caller rolls the block rows back
                 past_key_values = DynamicCache(past_key_values)
-
-            if attention_mask is not None and attention_mask.dim() == 2:
-                attention_mask = (1.0 - attention_mask[:, None, None, :].to(dtype=noise_states.dtype)) * torch.finfo(
-                    noise_states.dtype
-                ).min
-
-            position_embeddings = self.rotary_emb(noise_states, position_ids)
+            # the window is inclusive, abs(q_idx - kv_idx) <= sliding_window, so it spans sliding_window + 1 keys:
+            # https://github.com/huggingface/transformers/blob/v5.15.1/src/transformers/masking_utils.py#L146-L149
+            has_sliding_layers = any(layer.self_attn.is_sliding for layer in self.layers)
+            full_mask, sliding_mask = _dflash_attention_masks(
+                attention_mask,
+                token_type_ids,
+                self.config.sliding_window + 1 if has_sliding_layers else None,
+                inputs_embeds.dtype,
+            )
+            # cos/sin of every row: keys use all of them, queries pick the block rows
+            position_embeddings = self.rotary_emb(inputs_embeds, position_ids)
+            # from here on the residual stream holds only the block rows
+            noise_states = inputs_embeds.flatten(0, 1).index_select(0, block_rows)
             for layer in self.layers:
-                noise_states = layer(
-                    hidden_states=noise_states,
-                    context_hidden_states=context_hidden_states,
-                    position_embeddings=position_embeddings,
-                    attention_mask=attention_mask,
-                    past_key_values=past_key_values,
+                noise_states = _muse_glimmer_assistant_decoder_layer_forward(
+                    layer,
+                    target_hidden,
+                    noise_states,
+                    block_rows,
+                    position_embeddings,
+                    sliding_mask if layer.self_attn.is_sliding else full_mask,
+                    past_key_values,
                     **kwargs,
                 )
-
-            # Drop the anchor position so the emitted states align with the drafted tokens.
-            last_hidden_state = self.norm(noise_states)[:, 1:, :]
+            # write the block rows back into all rows; the caller ignores the context rows, which stay zero
+            last_hidden_state = target_hidden.new_zeros(target_hidden.shape).flatten(0, 1)
+            last_hidden_state[block_rows] = self.norm(noise_states)
             return BaseModelOutputWithPast(
-                last_hidden_state=last_hidden_state,
-                past_key_values=postprocess_past_key_values(past_key_values),
+                last_hidden_state=last_hidden_state.view_as(target_hidden),
+                past_key_values=past_key_values if use_cache else None,
             )
 
     return MuseGlimmerAssistantDFlashForCausalLM

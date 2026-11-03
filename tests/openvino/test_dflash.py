@@ -115,7 +115,8 @@ class DFlashExportTest(unittest.TestCase):
             # embeddings in and emits hidden states out - never token ids or logits.
             input_names = {inp.get_any_name() for inp in model.inputs}
             self.assertEqual(
-                input_names, {"inputs_embeds", "hidden_states", "position_ids", "attention_mask", "beam_idx"}
+                input_names,
+                {"inputs_embeds", "hidden_states", "position_ids", "attention_mask", "token_type_ids", "beam_idx"},
             )
             self.assertEqual({out.get_any_name() for out in model.outputs}, {"last_hidden_state"})
 
