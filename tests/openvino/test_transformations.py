@@ -320,6 +320,27 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "ConvertToSwishCPU",
         ],
     },
+    "muse_glimmer_assistant": {
+        "model_class": "OVAssistantForCausalLM",
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+            "TransposeConvert",
+        ],
+        "compile": [
+            "CommonDecompositions",
+            "LinOpSequenceFusion",
+            "MultiplyFusions",
+            "ConvertSoftMax8ToSoftMax1",
+            "ConvertBroadcast3",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusion",
+            "RMSFusion",
+            "ConvertMatMulToFC",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+        ],
+    },
     "minicpmv4_7": {
         "convert": [
             "SDPAFusion",
