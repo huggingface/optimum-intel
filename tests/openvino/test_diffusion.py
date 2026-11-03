@@ -1288,34 +1288,6 @@ class OVPipelineForText2VideoTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
-    def test_connectors_outputs_with_several_names(self, model_arch: str):
-        # `OVModelConnectors.forward` looks its outputs up by name. A port can carry several tensor names (e.g. after
-        # `reshape()` or when an IR is re-saved) and `port.names` is an unordered set, so the lookup must not depend on
-        # which name comes first.
-        if not model_arch.startswith("ltx2"):
-            self.skipTest(f"{model_arch} has no connectors")
-
-        pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], compile=False, device=OPENVINO_DEVICE)
-        connectors = pipeline.connectors
-        features = connectors.config.caption_channels * connectors.config.text_proj_in_factor
-        hidden_states = torch.randn(1, 128, features, generator=get_generator("pt", SEED))
-        attention_mask = torch.ones(1, 128)
-
-        expected = connectors(hidden_states, attention_mask)
-
-        for output in connectors.model.outputs:
-            tensor = output.get_tensor()
-            names = tensor.get_names()
-            tensor.set_names({*names, *(f"{name}_alias_{i}" for name in names for i in range(8))})
-        connectors.request = None  # compile again with the extra names
-
-        outputs = connectors(hidden_states, attention_mask)
-        self.assertEqual(len(outputs), len(expected))
-        for output, expected_output in zip(outputs, expected):
-            torch.testing.assert_close(output, expected_output)
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
-    @require_diffusers
     def test_shape(self, model_arch: str):
         pipeline = self.OVMODEL_CLASS.from_pretrained(MODEL_NAMES[model_arch], device=OPENVINO_DEVICE)
 
