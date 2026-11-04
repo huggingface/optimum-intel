@@ -812,8 +812,13 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
         )
 
         rng = np.random.default_rng(42)
-        inputs = {"videos": [ov.Tensor(rng.integers(0, 256, size=(5, 32, 32, 3), dtype=np.uint8))]}
-        question = "Why is this video funny?"
+        if target_model_name == "minicpm_ocr":
+            # GenAI has no video preprocessing for MiniCPM-OCR.
+            inputs = {"images": [ov.Tensor(rng.integers(0, 256, size=(32, 32, 3), dtype=np.uint8))]}
+            question = "What is written in this image?"
+        else:
+            inputs = {"videos": [ov.Tensor(rng.integers(0, 256, size=(5, 32, 32, 3), dtype=np.uint8))]}
+            question = "Why is this video funny?"
 
         # Before 2026.5, MTP verifier speculative decoding on linear-attention models
         # requires prefix caching to be disabled.
