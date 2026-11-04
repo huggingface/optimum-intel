@@ -94,11 +94,11 @@ jobs:
           uv pip install "transformers>=5.21"
           pytest tests/openvino/test_quantization.py tests/openvino/test_cb_compatible.py tests/openvino/test_dflash.py -k "minicpm_ocr" --durations=0
 
-      # The DSpark tests use the tiny MiniCPM-V 4.7 DSpark draft. test_genai runs single-request speculative decoding
-      # with it and the tiny MiniCPM-V 4.7 target against the nightly GenAI installed above, which runs it as a plain
-      # DFlash draft until it supports DSpark.
+      # The DSpark tests use the tiny MiniCPM-V 4.7 and MiniCPM-OCR DSpark drafts (MiniCPM-OCR needs transformers 5.21).
+      # test_genai runs single-request speculative decoding with each draft and its tiny target against the nightly
+      # GenAI installed above, which runs them as plain DFlash drafts until it supports DSpark.
       - name: DSpark Export and GenAI Speculative Decoding Validation
         if: ${{ matrix.test-pattern == '*export*' }}
         run: |
-          uv pip install "transformers>=5.18"
+          uv pip install "transformers>=5.21"
           pytest tests/openvino/test_exporters_cli.py tests/openvino/test_dflash.py tests/openvino/test_genai.py -k dspark --durations=0

@@ -526,6 +526,8 @@ DFLASH_VLM_MODELS = {
     "muse_glimmer": ("muse_glimmer_assistant", "muse_glimmer"),
     # GenAI without DSpark support runs this draft as a plain DFlash draft and ignores the Markov head.
     "minicpmv4_7_dspark": ("minicpmv4_7_dspark", "minicpmv4_7"),
+    # GenAI without pruned draft vocabulary support ignores d2t, so the target rejects this draft's tokens.
+    "minicpm_ocr_dspark": ("minicpm_ocr_dspark", "minicpm_ocr"),
 }
 
 # VLM-based Eagle3 draft models (AngelSlim Eagle3LlamaForCausalLM architecture).
@@ -856,6 +858,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "qwen3_dflash": {"model": 30},
     "qwen3_deepspec_dflash": {"model": 30},
     "minicpmv4_7_dspark": {"model": 30},
+    "minicpm_ocr_dspark": {"model": 32},
     "muse_glimmer_assistant": {"model": 30},
     "qwen3_vl_eagle3": {"model": 18},
     "qwen3_next": {"model": 100},
@@ -1275,6 +1278,7 @@ TEST_NAME_TO_MODEL_TYPE = {
     "qwen3_dflash": "qwen3",
     "qwen3_deepspec_dflash": "qwen3",
     "minicpmv4_7_dspark": "qwen3",
+    "minicpm_ocr_dspark": "qwen3",
     "qwen3_eagle3": "llama",
     "qwen3_eagle3_target": "qwen3",
     "qwen3_vl_eagle3": "llama",
