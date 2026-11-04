@@ -633,7 +633,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_model": 1,
         "vision_embeddings_merger_model": 10,
         "vision_embeddings_pos_model": 1,
-        "mtp_model": 18,
+        "mtp_model": 18 if is_transformers_version("<", "5.22") else 16,
     },
     "qwen3_5_moe": {
         "lm_model": 110,

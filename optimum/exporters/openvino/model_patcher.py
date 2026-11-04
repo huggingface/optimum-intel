@@ -68,8 +68,8 @@ from optimum.exporters.openvino.utils import (
     GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE,
     GRANITEMOEHYBRID_MAMBA_LAYER_TYPE,
     LTX2_ROPE_INPUTS,
-    has_ltx2_extended_guidance_inputs,
     get_qwen3_omni_thinker_text_model,
+    has_ltx2_extended_guidance_inputs,
 )
 from optimum.intel.utils.import_utils import (
     is_diffusers_version,

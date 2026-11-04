@@ -440,7 +440,7 @@ class OVQuantizerTest(unittest.TestCase):
                 num_samples=1,
             ),
             {
-                "lm_model": 13,
+                "lm_model": 14 if is_transformers_version("<", "5") else 13,
                 "text_embeddings_model": 0,
                 "vision_embeddings_model": 1,
                 "vision_embeddings_merger_model": 44,
@@ -463,7 +463,7 @@ class OVQuantizerTest(unittest.TestCase):
                 num_samples=1,
             ),
             {
-                "lm_model": 13,
+                "lm_model": 14 if is_transformers_version("<", "5") else 13,
                 "text_embeddings_model": 0,
                 "vision_embeddings_model": 1,
                 "vision_embeddings_merger_model": 44,
