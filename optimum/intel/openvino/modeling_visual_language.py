@@ -459,6 +459,16 @@ class OVNGramEmbeddings(OVModelPart):
 
     _model_name = "ngram_embeddings"
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # the exact 64-bit hash exists only in the CPU plugin, other plugins compute it wrong
+        self._device_override = "CPU"
+
+    def compile(self):
+        if "cpu" not in self.parent_model._device.lower():
+            self.ov_config = {}  # the options of the main device
+        super().compile()
+
     def forward(self, input_ids, ngram_history):
         self.compile()
         result = self.request({"input_ids": input_ids, "ngram_history": ngram_history})

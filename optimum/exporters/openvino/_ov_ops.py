@@ -278,7 +278,7 @@ def convert_recurrent_selective_ssm_cell(context):
 #
 # The torch.nn.Module classes below are analogues of the OpenVINO operations QSAPrepare-17, SparseAttentionIndexer-17 and
 # SparseAttention-17 (docs/articles_en/documentation/openvino-ir-format/operation-sets/operation-specs/sequence in the
-# OpenVINO repository), and of the n-gram hash NGramHashFunction, which has no OpenVINO operation. Each module:
+# OpenVINO repository). Each module:
 #   * keeps the operation attributes as Python attributes,
 #   * implements the reference semantics of the operation in `forward` (used while the model is traced),
 #   * provides `openvino_extensions()` that returns the `ModuleExtension` replacing the module by a single operation
@@ -289,8 +289,7 @@ def convert_recurrent_selective_ssm_cell(context):
 # The OpenVINO PyTorch frontend supports a single output per ModuleExtension, so the operations with several outputs
 # (QSAPrepare, SparseAttentionIndexer) return them packed into one tensor; `unpack()` restores the outputs of the spec
 # through `PackedOutput` modules, whose conversion returns the outputs of the operation itself: the packing does not
-# appear in the converted graph, and the public operations stay directly connected. NGramHashFunction is always
-# decomposed and unpacked by slicing.
+# appear in the converted graph, and the public operations stay directly connected.
 # ----------------------------------------------------------------------------------------------------------------------
 
 
@@ -995,188 +994,6 @@ class SparseAttention(_OVOperationModule):
         has_keys = ops.reduce_logical_or(mask, _const_i64(-1), True)
         output = ops.select(has_keys, output, ops.convert_like(ops.constant(np.float32(0.0)), output))
         return [output.output(0)]
-
-
-class NGramHashFunction(_OVOperationModule):
-    """
-    Analogue of the NGramHashFunction operation: rows of the packed hashed n-gram table for every token and hashed
-    head, `(XOR_k back(k) * multipliers[k]) % head_vocab_sizes[h] + head_offsets[h]` with exact int64 math, where
-    `back(k)` is the token k steps back, or `eos_token_id` before the start of the history or across an EOS.
-
-    Inputs: token_ids [N, L], history [N, ngram_size - 1].
-    Outputs: row_ids [N, L, H] of int32 and new_history [N, ngram_size - 1] of the type of `history`. They are
-             returned packed into one 1D tensor of the type of `history` (lossless: the row ids are below 2^31),
-             flattened and concatenated, see `unpack()`.
-    """
-
-    _OP_TYPE = "NGramHashFunction"
-
-    def __init__(
-        self,
-        ngram_size: int,
-        heads_per_ngram: int,
-        multipliers: Sequence[int],
-        head_vocab_sizes: Sequence[int],
-        head_offsets: Sequence[int],
-        eos_token_id: int,
-    ):
-        super().__init__()
-        self.ngram_size = ngram_size
-        self.heads_per_ngram = heads_per_ngram
-        self.multipliers = [int(m) for m in multipliers]
-        self.head_vocab_sizes = [int(s) for s in head_vocab_sizes]
-        self.head_offsets = [int(o) for o in head_offsets]
-        self.eos_token_id = int(eos_token_id)
-
-    @property
-    def context_length(self):
-        return self.ngram_size - 1
-
-    @property
-    def num_heads(self):
-        return self.context_length * self.heads_per_ngram
-
-    def unpack(self, packed: torch.Tensor, token_ids: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        batch_size, seq_len = token_ids.shape
-        num_rows = batch_size * seq_len * self.num_heads
-        row_ids = packed[:num_rows].reshape(batch_size, seq_len, self.num_heads)
-        new_history = packed[num_rows:].reshape(batch_size, self.context_length)
-        return row_ids.to(torch.int32), new_history
-
-    def forward(self, token_ids, history):
-        context, seq_len = self.context_length, token_ids.shape[1]
-        sequence = torch.cat([history.long(), token_ids.long()], dim=1)  # [N, c + L]
-        shifted = [sequence[:, context - k : context - k + seq_len] for k in range(context + 1)]
-        is_eos = [s == self.eos_token_id for s in shifted]
-        # back(k) is the token k steps back, unless an EOS lies strictly between it and the current token
-        back = [shifted[0]]
-        valid = torch.ones_like(shifted[0], dtype=torch.bool)
-        for k in range(1, context + 1):
-            back.append(torch.where(valid, shifted[k], torch.full_like(shifted[k], self.eos_token_id)))
-            valid = valid & ~is_eos[k]
-
-        rows = []
-        mix = back[0] * self.multipliers[0]
-        for order in range(2, self.ngram_size + 1):
-            mix = torch.bitwise_xor(mix, back[order - 1] * self.multipliers[order - 1])
-            for e in range(self.heads_per_ngram):
-                head = (order - 2) * self.heads_per_ngram + e
-                rows.append(torch.remainder(mix, self.head_vocab_sizes[head]) + self.head_offsets[head])
-        row_ids = torch.stack(rows, dim=-1)
-        new_history = sequence[:, -context:]
-        return torch.cat([row_ids.flatten(), new_history.flatten()]).to(history.dtype)
-
-    def _conversion_attributes(self):
-        return {
-            "ngram_size": self.ngram_size,
-            "heads_per_ngram": self.heads_per_ngram,
-            "multipliers": self.multipliers,
-            "head_vocab_sizes": self.head_vocab_sizes,
-            "head_offsets": self.head_offsets,
-            "eos_token_id": self.eos_token_id,
-        }
-
-    @staticmethod
-    def _convert(context, ngram_size, heads_per_ngram, multipliers, head_vocab_sizes, head_offsets, eos_token_id):
-        # The hash needs exact 63-bit integer math, but plugins execute i64 arithmetic in i32 (the CPU plugin lowers
-        # i64 to i32) and evaluate i32 Divide, FloorMod and comparisons through f32, which is exact only below 2^24.
-        # The decomposition below is therefore built from i32 operations that stay exact on the full i32 range:
-        # Add, Subtract, Multiply (without overflow), BitwiseXor, BitwiseAnd and BitwiseRightShift.
-        #   * every 64-bit value is kept as little-endian limbs of `limb_bits` bits,
-        #   * a product token * multiplier is computed limb by limb with carries (shift / mask),
-        #   * XOR is applied limb-wise,
-        #   * the remainder modulo p is accumulated with Horner steps `acc = (acc * 2^limb_bits + limb) % p`, where
-        #     the reduction of `acc < p * 2^limb_bits` is a sequence of branch-free conditional subtractions of
-        #     `p * 2^j`, j = limb_bits - 1 .. 0.
-        # The limb width keeps every intermediate value below 2^31: `p * 2^limb_bits <= 2^31`, limb products < 2^22.
-        from openvino.opset15 import bitwise_right_shift
-
-        if max(head_vocab_sizes) >= 2**30 or max(head_offsets) + max(head_vocab_sizes) >= 2**31:
-            raise ValueError("NGramHashFunction decomposition supports head vocabularies and table rows below 2^31")
-        limb_bits = min(11, 31 - max(head_vocab_sizes).bit_length())
-        limb_base = 1 << limb_bits
-        num_limbs = -(-64 // limb_bits)  # limbs of a 64-bit value
-        num_token_limbs = -(-31 // limb_bits)  # limbs of a non-negative i32 token id
-
-        def const_i32(value):
-            return ops.constant(np.array(value, dtype=np.int32))
-
-        def low_bits(x):
-            return ops.bitwise_and(x, const_i32(limb_base - 1))
-
-        def high_bits(x, shift=limb_bits):
-            return bitwise_right_shift(x, const_i32(shift))
-
-        def reduce_mod(x, modulus):
-            # x % modulus for 0 <= x < modulus * 2^limb_bits
-            for j in reversed(range(limb_bits)):
-                step = const_i32(modulus << j)
-                diff = ops.subtract(x, step)
-                negative = high_bits(diff, 31)  # -1 if diff < 0 else 0
-                x = ops.add(diff, ops.bitwise_and(step, negative))
-            return x
-
-        history_input = context.get_input(1)
-        token_ids = ops.convert(context.get_input(0), "i32")
-        history = ops.convert(history_input, "i32")
-        num_context = ngram_size - 1
-        sequence = ops.concat([history, token_ids], 1)  # [N, c + L]
-        seq_len = _dim(ops.shape_of(token_ids, "i64"), 1)
-        eos = const_i32(eos_token_id)
-        axis = _const_i64([1])
-
-        def shifted(k):
-            start = _const_i64([num_context - k])
-            stop = ops.unsqueeze(ops.add(seq_len, _const_i64(num_context - k)), _const_i64(0))
-            return ops.slice(sequence, start, stop, _const_i64([1]), axis)
-
-        # back(k): the token k steps back, or EOS if an EOS lies strictly between it and the current token
-        back = [shifted(0)]
-        valid = None
-        for k in range(1, num_context + 1):
-            token = shifted(k)
-            back.append(token if valid is None else ops.select(valid, token, eos))
-            not_eos = ops.not_equal(token, eos)
-            valid = not_eos if valid is None else ops.logical_and(valid, not_eos)
-
-        def product_limbs(token, multiplier):
-            # limbs of token * multiplier (exact, < 2^63 by the operation contract)
-            token_limbs = [low_bits(high_bits(token, limb_bits * j)) for j in range(num_token_limbs)]
-            multiplier_limbs = [(multiplier >> (limb_bits * i)) & (limb_base - 1) for i in range(num_limbs)]
-            limbs, carry = [], None
-            for c in range(num_limbs):
-                column = carry
-                for j in range(min(c + 1, num_token_limbs)):
-                    if multiplier_limbs[c - j]:
-                        term = ops.multiply(token_limbs[j], const_i32(multiplier_limbs[c - j]))
-                        column = term if column is None else ops.add(column, term)
-                if column is None:
-                    column = ops.multiply(token, const_i32(0))
-                limbs.append(low_bits(column))
-                carry = high_bits(column)
-            return limbs
-
-        rows = []
-        mix = product_limbs(back[0], multipliers[0])
-        for order in range(2, ngram_size + 1):
-            term = product_limbs(back[order - 1], multipliers[order - 1])
-            mix = [ops.bitwise_xor(a, b) for a, b in zip(mix, term)]
-            for e in range(heads_per_ngram):
-                head = (order - 2) * heads_per_ngram + e
-                remainder = None
-                for limb in reversed(mix):
-                    remainder = (
-                        limb if remainder is None else ops.add(ops.multiply(remainder, const_i32(limb_base)), limb)
-                    )
-                    remainder = reduce_mod(remainder, head_vocab_sizes[head])
-                row = ops.add(remainder, const_i32(head_offsets[head]))
-                rows.append(ops.unsqueeze(row, _const_i64(-1)))
-        row_ids = ops.concat(rows, -1)  # [N, L, H]
-        new_history = ops.slice(sequence, _const_i64([-num_context]), _const_i64([_I64_MAX]), _const_i64([1]), axis)
-        flat = _const_i64([-1])
-        packed = ops.concat([ops.reshape(row_ids, flat, False), ops.reshape(new_history, flat, False)], 0)
-        # packed into the type of history, which is the type of new_history; unpack() restores int32 row ids
-        return [ops.convert_like(packed, history_input).output(0)]
 
 
 def get_openvino_extensions(modules: Sequence[_OVOperationModule]):

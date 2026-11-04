@@ -13743,10 +13743,58 @@ class Qwen4ExpLanguageModelPatcher(OVDecoderModelPatcher):
                 _unpatch_qwen4_exp_experts(decoder_layer.mlp.experts)
 
 
+class Qwen4ExpNGramHash(torch.nn.Module):
+    """
+    Rows of the packed hashed n-gram table for every token and hashed head of a PLE layer. For every order o:
+        mix = (back(0) * multipliers[0]) ^ ... ^ (back(o - 1) * multipliers[o - 1])
+        rows = mix % head_vocab_sizes + head_offsets
+    with wrapping int64 math, where `back(k)` is the token k steps back, or `eos_token_id` before the start of the history
+    or across an EOS.
+
+    The plain int64 graph with one block per order is what `NGramHashFunctionFusion` of OpenVINO replaces by the
+    NGramHashFunction operation, which keeps the 64-bit math inside. Only the CPU plugin has this operation: other plugins
+    lower int64 to int32 and compute the hash wrong, so the n-gram embeddings model runs on CPU.
+
+    Inputs: token_ids [N, L], history [N, ngram_size - 1].
+    Outputs: row_ids [N, L, H], new_history [N, ngram_size - 1].
+    """
+
+    def __init__(self, ngram_module):
+        super().__init__()
+        self.ngram_size = ngram_module.ngram_size
+        self.heads_per_ngram = ngram_module.heads_per_ngram
+        self.multipliers = [int(m) for m in ngram_module.layer_multipliers.tolist()]
+        self.head_vocab_sizes = [int(s) for s in ngram_module.head_vocab_sizes]
+        self.head_offsets = [int(o) for o in ngram_module.head_offsets]
+        self.eos_token_id = int(ngram_module.eos_token_id)
+
+    def forward(self, token_ids, history):
+        context, seq_len = self.ngram_size - 1, token_ids.shape[1]
+        sequence = torch.cat([history, token_ids], dim=1)  # [N, context + L]
+        shifted = [sequence[:, context - k : context - k + seq_len] for k in range(context + 1)]
+        # back(k) is the token k steps back, unless an EOS lies strictly between it and the current token
+        back = shifted[:2]
+        valid = shifted[1] != self.eos_token_id
+        for k in range(2, context + 1):
+            back.append(torch.where(valid, shifted[k], torch.full_like(shifted[k], self.eos_token_id)))
+            valid = valid & (shifted[k] != self.eos_token_id)
+
+        rows = []
+        mix = back[0] * self.multipliers[0]
+        for order in range(2, self.ngram_size + 1):
+            mix = torch.bitwise_xor(mix, back[order - 1] * self.multipliers[order - 1])
+            first_head = (order - 2) * self.heads_per_ngram
+            heads = range(first_head, first_head + self.heads_per_ngram)
+            vocab_sizes = torch.tensor([self.head_vocab_sizes[head] for head in heads], dtype=torch.int64)
+            offsets = torch.tensor([self.head_offsets[head] for head in heads], dtype=torch.int64)
+            rows.append(torch.remainder(mix.unsqueeze(-1), vocab_sizes) + offsets)
+        return torch.cat(rows, dim=-1), sequence[:, -context:]
+
+
 class Qwen4ExpNGramEmbeddings(torch.nn.Module):
     """
     The hashed n-gram embeddings of all PLE layers of Qwen3.8-Flash-Next, exported as a separate model:
-    NGramHashFunction (rows of the packed n-gram table of every hashed head) -> Gather from the n-gram table.
+    n-gram hash (rows of the packed n-gram table of every hashed head) -> Gather from the n-gram table.
 
     Inputs: input_ids [N, L], ngram_history [N, ngram_size - 1] (the previous tokens, EOS for a new sequence).
     Outputs: ngram_embeddings [N, L, num_ple_layers, ple_embed_dim], ngram_history [N, ngram_size - 1] for the next
@@ -13754,45 +13802,18 @@ class Qwen4ExpNGramEmbeddings(torch.nn.Module):
     """
 
     def __init__(self, text_model):
-        from ._ov_ops import NGramHashFunction
-
         super().__init__()
         self.config = text_model.config
         ngram_modules = [layer.ple.ple_embedding for layer in text_model.layers if layer.ple is not None]
         self.ngram_embeddings = torch.nn.ModuleList([module.ngram_embedding for module in ngram_modules])
-        self.hash_functions = torch.nn.ModuleList(
-            [
-                NGramHashFunction(
-                    ngram_size=module.ngram_size,
-                    heads_per_ngram=module.heads_per_ngram,
-                    multipliers=module.layer_multipliers.tolist(),
-                    head_vocab_sizes=module.head_vocab_sizes,
-                    head_offsets=module.head_offsets,
-                    eos_token_id=module.eos_token_id,
-                )
-                for module in ngram_modules
-            ]
-        )
+        self.hash_functions = torch.nn.ModuleList([Qwen4ExpNGramHash(module) for module in ngram_modules])
 
     def forward(self, input_ids, ngram_history):
         embeddings, new_history = [], None
         for hash_function, ngram_embedding in zip(self.hash_functions, self.ngram_embeddings):
-            row_ids, new_history = hash_function.unpack(hash_function(input_ids, ngram_history), input_ids)
+            row_ids, new_history = hash_function(input_ids, ngram_history)
             embeddings.append(ngram_embedding(row_ids).flatten(-2))
         return torch.stack(embeddings, dim=2), new_history
-
-
-class Qwen4ExpNGramEmbeddingsPatcher(ModelPatcher):
-    def __init__(
-        self,
-        config: "OpenVINOConfig",
-        model: "PreTrainedModel",
-        model_kwargs: Optional[Dict[str, Any]] = None,
-    ):
-        from ._ov_ops import get_openvino_extensions
-
-        super().__init__(config, model, model_kwargs)
-        self.module_extensions, self.conversion_extensions = get_openvino_extensions(list(model.hash_functions))
 
 
 class Qwen4ExpMTPModule(nn.Module):

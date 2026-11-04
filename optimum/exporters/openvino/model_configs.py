@@ -231,7 +231,6 @@ from optimum.exporters.openvino.model_patcher import (
     Qwen4ExpMTPModelPatcher,
     Qwen4ExpMTPModule,
     Qwen4ExpNGramEmbeddings,
-    Qwen4ExpNGramEmbeddingsPatcher,
     QwenImage21I2ITextEncoderModelPatcher,
     QwenImage21TextEncoderModelPatcher,
     QwenImage21TransformerModelPatcher,
@@ -8251,7 +8250,7 @@ class Qwen4ExpOpenVINOConfig(Qwen3_5OpenVINOConfig):
     def patch_model_for_export(self, model: Union["PreTrainedModel"], model_kwargs: Optional[Dict[str, Any]] = None):
         model_kwargs = model_kwargs or {}
         if self._behavior == Qwen4ExpConfigBehavior.NGRAM_EMBEDDINGS:
-            return Qwen4ExpNGramEmbeddingsPatcher(self, model, model_kwargs)
+            return ModelPatcher(self, model, model_kwargs)
         return super().patch_model_for_export(model, model_kwargs)
 
     @property
