@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import json
+import shutil
 import subprocess
 import unittest
 from pathlib import Path
@@ -28,6 +29,7 @@ from transformers import (
     PreTrainedTokenizerFast,
     T5Tokenizer,
 )
+from transformers.utils import cached_file
 from utils_tests import (
     _ARCHITECTURES_TO_EXPECTED_INT8,
     HUB_MODEL_NAMES,
@@ -36,7 +38,6 @@ from utils_tests import (
     REMOTE_CODE_MODELS,
     TEST_NAME_TO_MODEL_TYPE,
     check_compression_state_per_model,
-    get_dspark_model_path,
     get_num_quantized_nodes,
     get_supported_model_for_library,
     is_model_type_transformers_compatible,
@@ -109,11 +110,6 @@ def _task_and_model_type_name(testcase_func, param_num, params):
     return f"{testcase_func.__name__}_{param_num}_{safe_name(task)}_{safe_name(model_type)}"
 
 
-def _model_name_or_path(model_type: str) -> str:
-    # The tiny DSpark draft has no Hub checkpoint; it is created locally.
-    return get_dspark_model_path() if model_type == "qwen3_dspark" else MODEL_NAMES[model_type]
-
-
 class OVCLIExportTestCase(unittest.TestCase):
     """
     Integration tests ensuring supported models are correctly exported.
@@ -163,7 +159,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "qwen3_dflash"),
         ("text-generation-with-past", "muse_glimmer_assistant"),
         ("text-generation-with-past", "qwen3_deepspec_dflash"),
-        ("text-generation-with-past", "qwen3_dspark"),
+        ("text-generation-with-past", "minicpmv4_7_dspark"),
         ("text-generation-with-past", "zamba2"),
         ("text-generation-with-past", "exaone4"),
         ("text-generation-with-past", "ouro"),
@@ -1077,9 +1073,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         if model_type in REMOTE_CODE_MODELS:
             loading_kwargs["trust_remote_code"] = True
 
-        self._openvino_export(
-            _model_name_or_path(model_type), task, model_kwargs=model_kwargs, loading_kwargs=loading_kwargs
-        )
+        self._openvino_export(MODEL_NAMES[model_type], task, model_kwargs=model_kwargs, loading_kwargs=loading_kwargs)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES, name_func=_task_and_model_type_name)
     def test_exporters_cli(self, task: str, model_type: str):
@@ -1092,7 +1086,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 add_ops = "--trust-remote-code"
 
             subprocess.run(
-                f"optimum-cli export openvino --model {_model_name_or_path(model_type)} --task {task} {add_ops} {tmpdir}",
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {add_ops} {tmpdir}",
                 shell=True,
                 check=True,
             )
@@ -1299,7 +1293,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 add_ops = "--trust-remote-code"
 
             subprocess.run(
-                f"optimum-cli export openvino --model {_model_name_or_path(model_type)} --task {task} {add_ops} --weight-format fp16 {tmpdir}",
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {add_ops} --weight-format fp16 {tmpdir}",
                 shell=True,
                 check=True,
             )
@@ -1320,7 +1314,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 add_ops = "--trust-remote-code"
 
             subprocess.run(
-                f"optimum-cli export openvino --model {_model_name_or_path(model_type)} --task {task} {add_ops} --weight-format int8 {tmpdir}",
+                f"optimum-cli export openvino --model {MODEL_NAMES[model_type]} --task {task} {add_ops} --weight-format int8 {tmpdir}",
                 shell=True,
                 check=True,
             )
@@ -1764,8 +1758,8 @@ class OVCLIExportTestCase(unittest.TestCase):
                 and list(op.get_output_shape(0)) == [config["vocab_size"], config["markov_rank"]]
             }
 
-        model_path = get_dspark_model_path()
-        config = json.loads((Path(model_path) / "config.json").read_text())
+        model_path = MODEL_NAMES["minicpmv4_7_dspark"]
+        config = json.loads(Path(cached_file(model_path, "config.json")).read_text())
         float_types = {ov.Type.f32, ov.Type.bf16, ov.Type.f16}
         cases = (
             [],
@@ -1815,22 +1809,31 @@ class OVCLIExportTestCase(unittest.TestCase):
                     self.assertEqual(markov_types, checkpoint_types)
 
     def test_exporters_cli_dspark_does_not_export_tokenizer(self):
-        for with_tokenizer in (True, False):
-            model_path = get_dspark_model_path(with_tokenizer=with_tokenizer)
-            with self.subTest(with_tokenizer=with_tokenizer), TemporaryDirectory() as tmpdir:
-                subprocess.run(
-                    [
-                        "optimum-cli",
-                        "export",
-                        "openvino",
-                        "--model",
-                        model_path,
-                        "--task",
-                        "text-generation-with-past",
-                        "--trust-remote-code",
-                        tmpdir,
-                    ],
-                    check=True,
-                )
-                self.assertTrue((Path(tmpdir) / "openvino_markov_head_model.xml").exists())
-                self.assertEqual(sorted(path.name for path in Path(tmpdir).glob("*tokenizer*")), [])
+        draft_path = MODEL_NAMES["minicpmv4_7_dspark"]
+        with TemporaryDirectory() as draft_with_tokenizer:
+            # The published DSpark drafts have no tokenizer; this copy of the draft has the target's one.
+            for model_name_or_path, file_name in (
+                (draft_path, "config.json"),
+                (draft_path, "model.safetensors"),
+                (MODEL_NAMES["minicpmv4_7"], "tokenizer.json"),
+                (MODEL_NAMES["minicpmv4_7"], "tokenizer_config.json"),
+            ):
+                shutil.copy(cached_file(model_name_or_path, file_name), draft_with_tokenizer)
+            for with_tokenizer, model_path in ((False, draft_path), (True, draft_with_tokenizer)):
+                with self.subTest(with_tokenizer=with_tokenizer), TemporaryDirectory() as tmpdir:
+                    subprocess.run(
+                        [
+                            "optimum-cli",
+                            "export",
+                            "openvino",
+                            "--model",
+                            model_path,
+                            "--task",
+                            "text-generation-with-past",
+                            "--trust-remote-code",
+                            tmpdir,
+                        ],
+                        check=True,
+                    )
+                    self.assertTrue((Path(tmpdir) / "openvino_markov_head_model.xml").exists())
+                    self.assertEqual(sorted(path.name for path in Path(tmpdir).glob("*tokenizer*")), [])

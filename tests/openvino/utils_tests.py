@@ -11,15 +11,12 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
-import atexit
 import json
 import os
-import shutil
 import tempfile
 import time
 import unittest
 from contextlib import contextmanager
-from copy import deepcopy
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -147,59 +144,6 @@ def _create_tiny_kokoro_model():
     return str(output_dir)
 
 
-def _save_tiny_qwen3_tokenizer(output_dir: Path) -> None:
-    from transformers import AutoTokenizer
-
-    AutoTokenizer.from_pretrained("optimum-intel-internal-testing/tiny-random-qwen3").save_pretrained(output_dir)
-
-
-_DSPARK_MODEL_PATHS = {}
-
-
-def get_dspark_model_path(sample_from_anchor: bool = True, with_tokenizer: bool = True):
-    """Create a tiny DSpark checkpoint with a vanilla Markov head, once per process."""
-    key = (sample_from_anchor, with_tokenizer)
-    if key in _DSPARK_MODEL_PATHS:
-        return _DSPARK_MODEL_PATHS[key]
-
-    from transformers import AutoConfig
-
-    from optimum.exporters.openvino.model_patcher import Qwen3DSparkForCausalLM
-
-    target_config = AutoConfig.from_pretrained("optimum-intel-internal-testing/tiny-random-qwen3")
-    target_num_hidden_layers = target_config.num_hidden_layers
-    config = deepcopy(target_config)
-    config.num_hidden_layers = min(2, target_num_hidden_layers)
-    config.num_target_layers = target_num_hidden_layers
-    if getattr(config, "layer_types", None):
-        config.layer_types = list(config.layer_types[: config.num_hidden_layers])
-    config.architectures = ["Qwen3DSparkModel"]
-    config.block_size = 4
-    config.mask_token_id = config.vocab_size - 1
-    config.target_layer_ids = [0, target_num_hidden_layers - 1]
-    config.markov_rank = 8
-    config.markov_head_type = "vanilla"
-    config.enable_confidence_head = False
-    config.sample_from_anchor = sample_from_anchor
-
-    output_dir = Path(tempfile.mkdtemp(prefix="optimum_intel_tiny_random_qwen3_dspark_"))
-    atexit.register(shutil.rmtree, output_dir, ignore_errors=True)
-    with torch.random.fork_rng():
-        torch.manual_seed(0)
-        model = Qwen3DSparkForCausalLM(config).eval()
-        # The default initializer makes the Markov bias negligible next to the draft logits,
-        # which would let tests pass without the head ever changing a sampled token.
-        torch.nn.init.normal_(model.markov_head.markov_w1.weight, std=1.0)
-        torch.nn.init.normal_(model.markov_head.markov_w2.weight, std=1.0)
-        model.save_pretrained(output_dir)
-    model.config.architectures = ["Qwen3DSparkModel"]
-    model.config.save_pretrained(output_dir)
-    if with_tokenizer:
-        _save_tiny_qwen3_tokenizer(output_dir)
-    _DSPARK_MODEL_PATHS[key] = str(output_dir)
-    return _DSPARK_MODEL_PATHS[key]
-
-
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -323,6 +267,7 @@ HUB_MODEL_NAMES = {
     "minicpm3": "optimum-intel-internal-testing/tiny-random-minicpm3",
     "minicpmv": "optimum-intel-internal-testing/tiny-random-minicpmv-2_6",
     "minicpmv4_7": "optimum-intel-internal-testing/tiny-random-minicpmv47",
+    "minicpmv4_7_dspark": "optimum-intel-internal-testing/tiny-random-minicpmv47-dspark",
     "minicpm_ocr": "optimum-intel-internal-testing/tiny-random-minicpm-ocr",
     "minicpmo": "optimum-intel-internal-testing/tiny-random-MiniCPM-o-2_6",
     "minicpm_v4_5": "optimum-intel-internal-testing/tiny-random-minicpm-v-4_5",
@@ -491,8 +436,6 @@ EAGLE3_MODELS = {"qwen3_eagle3": ("qwen3_eagle3", "qwen3_eagle3_target")}
 DFLASH_MODELS = {
     "qwen3_dflash": ("qwen3_dflash", "qwen3"),
     "qwen3_deepspec_dflash": ("qwen3_deepspec_dflash", "qwen3"),
-    # GenAI without DSpark support runs this draft as a plain DFlash draft and ignores the Markov head.
-    "qwen3_dspark": ("qwen3_dspark", "qwen3"),
 }
 
 DFLASH_VLM_MODELS = {
@@ -500,6 +443,8 @@ DFLASH_VLM_MODELS = {
     "qwen3_5_moe_dflash": ("qwen3_5_moe_dflash", "qwen3_5_moe"),
     "gemma4_dflash": ("gemma4_dflash", "gemma4"),
     "muse_glimmer": ("muse_glimmer_assistant", "muse_glimmer"),
+    # GenAI without DSpark support runs this draft as a plain DFlash draft and ignores the Markov head.
+    "minicpmv4_7_dspark": ("minicpmv4_7_dspark", "minicpmv4_7"),
 }
 
 # VLM-based Eagle3 draft models (AngelSlim Eagle3LlamaForCausalLM architecture).
@@ -814,7 +759,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "qwen3_eagle3": {"model": 20},
     "qwen3_dflash": {"model": 30},
     "qwen3_deepspec_dflash": {"model": 30},
-    "qwen3_dspark": {"model": 30},
+    "minicpmv4_7_dspark": {"model": 30},
     "muse_glimmer_assistant": {"model": 30},
     "qwen3_vl_eagle3": {"model": 18},
     "qwen3_next": {"model": 100},
@@ -1226,7 +1171,7 @@ TEST_NAME_TO_MODEL_TYPE = {
     "qwen3_5_moe_mtp_legacy_weights": "qwen3_5_moe",
     "qwen3_dflash": "qwen3",
     "qwen3_deepspec_dflash": "qwen3",
-    "qwen3_dspark": "qwen3",
+    "minicpmv4_7_dspark": "qwen3",
     "qwen3_eagle3": "llama",
     "qwen3_eagle3_target": "qwen3",
     "qwen3_vl_eagle3": "llama",

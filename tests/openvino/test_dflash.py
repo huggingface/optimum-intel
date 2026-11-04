@@ -25,7 +25,7 @@ from parameterized import parameterized
 from PIL import Image
 from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText, AutoProcessor
 from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
-from utils_tests import F32_CONFIG, MODEL_NAMES, get_dspark_model_path
+from utils_tests import F32_CONFIG, MODEL_NAMES
 
 from optimum.exporters.openvino import export_from_model, main_export
 from optimum.exporters.openvino.convert import _get_submodels_and_export_configs, export_models
@@ -219,7 +219,9 @@ class DSparkExportTest(unittest.TestCase):
 
     @staticmethod
     def _model(sample_from_anchor=True):
-        return Qwen3DSparkForCausalLM.from_pretrained(get_dspark_model_path(sample_from_anchor)).eval()
+        return Qwen3DSparkForCausalLM.from_pretrained(
+            MODEL_NAMES["minicpmv4_7_dspark"], sample_from_anchor=sample_from_anchor
+        ).eval()
 
     @staticmethod
     def _dspark_config(**fields):
