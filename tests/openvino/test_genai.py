@@ -1,16 +1,19 @@
 """
 Test OpenVINO GenAI inference on models exported with optimum-intel
 
-- OpenVINO device can be set by environment variable OPENVINO_TEST_DEVICE
-  - For NPU, Text2Speech test is not supported; for LLM and VLM only a limited list of models is currently supported. This will be expanded. Only the latest supported transformers/OpenVINO/optimum-intel versions are tested.
-  - For GPU, there are known failed tests on some GPUs. This is under investigation.
+- OpenVINO device can be set by setting environment variable OPENVINO_TEST_DEVICE to CPU, GPU or NPU
+  - For NPU, Text2Speech test is not supported; for LLM and VLM only a limited list of models is currently supported.
+    This will be expanded.
 """
 
 # ruff: noqa: I001  # Avoid black/ruff conflict: ruff isort wants 2 blank lines after imports, black collapses to 1
 
 import gc
+import logging
 import os
+import psutil
 import shutil
+import sys
 import tempfile
 import traceback as traceback_mod
 import unittest
@@ -22,10 +25,11 @@ import pytest
 import requests
 import torch
 from openvino_genai import (
+    ASRPipeline,
     LLMPipeline,
+    SchedulerConfig,
     Text2SpeechPipeline,
     VLMPipeline,
-    WhisperPipeline,
     draft_model,
 )
 from parameterized import parameterized
@@ -39,12 +43,17 @@ from transformers import (
     AutoTokenizer,
     set_seed,
 )
+import test_decoder as _test_decoder
+import test_seq2seq as _test_seq2seq
+import test_tts as _test_tts
 from utils_tests import (
     DFLASH_MODELS,
+    DFLASH_VLM_MODELS,
     EAGLE3_MODELS,
     EAGLE3_VLM_MODELS,
     F32_CONFIG,
     MODEL_NAMES,
+    MTP_VLM_MODELS,
     OPENVINO_DEVICE,
     REMOTE_CODE_MODELS,
     TEST_IMAGE_URL,
@@ -53,6 +62,7 @@ from utils_tests import (
 )
 
 from optimum.exporters.openvino import main_export
+from optimum.intel import OVConfig
 from optimum.intel.openvino import (
     OVModelForCausalLM,
     OVModelForSpeechSeq2Seq,
@@ -63,10 +73,67 @@ from optimum.intel.openvino.modeling_visual_language import MODEL_TYPE_TO_CLS_MA
 from optimum.intel.utils.import_utils import is_openvino_version
 from optimum.utils import is_transformers_version
 
-# NPU does not support f32 inference
-TEST_CONFIG = {"CACHE_DIR": ""} if OPENVINO_DEVICE == "NPU" else {**F32_CONFIG, "CACHE_DIR": ""}
+logger = logging.getLogger(__name__)
+
+if OPENVINO_DEVICE == "NPU":
+    TEST_CONFIG = {"CACHE_DIR": ""}
+else:
+    TEST_CONFIG = {**F32_CONFIG, "CACHE_DIR": ""}
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+
+TOP_K_TOLERANCE = 3  # Accept divergences where the alternative token is in the top-K of the reference logits
+
+
+def _assert_tokens_match(test_case, ref_ids, ref_top_k, test_ids, ref_label, test_label):
+    """Assert that test_ids match ref_ids, tolerating near-tied logit divergences.
+
+    When tokens differ at a position, checks whether the test token ranks within
+    TOP_K_TOLERANCE of the reference logit distribution at that step. If it does,
+    it means the model was ambivalent (near-tied logits) and the divergence is
+    acceptable. Only fails if a test token is far from the reference top-K.
+
+    After the first divergence, subsequent tokens are not compared (since the
+    autoregressive cascade makes them meaningless).
+
+    Args:
+        test_case: unittest.TestCase instance (for assertions)
+        ref_ids: list of token IDs from the reference backend
+        ref_top_k: list of top-K token ID lists (one per generated position) from the reference;
+                   can be None if scores unavailable (falls back to strict equality)
+        test_ids: list of token IDs from the backend under test
+        ref_label: name of reference backend (e.g. "Transformers")
+        test_label: name of test backend (e.g. "OpenVINO GenAI")
+    """
+    if ref_ids == test_ids:
+        return
+
+    if ref_top_k is None:
+        test_case.assertEqual(ref_ids, test_ids, f"{ref_label} ids and {test_label} ids are not the same")
+        return
+
+    for pos, (ref_tok, test_tok) in enumerate(zip(ref_ids, test_ids)):
+        if ref_tok == test_tok:
+            continue
+
+        top_k_tokens = ref_top_k[pos]
+
+        test_case.assertIn(
+            test_tok,
+            top_k_tokens,
+            f"{ref_label} vs {test_label}: token mismatch at position {pos}. "
+            f"{ref_label} chose {ref_tok}, {test_label} chose {test_tok}, "
+            f"but {test_tok} is not in {ref_label}'s top-{TOP_K_TOLERANCE} "
+            f"(top-{TOP_K_TOLERANCE}: {top_k_tokens}). "
+            f"This indicates a real inference divergence, not a near-tied logit flip.",
+        )
+        # After first divergence, the autoregressive cascade makes further comparisons meaningless
+        return
+
+    # Matching tokens with unequal lengths means one output is a strict prefix of the other.
+    test_case.assertEqual(len(ref_ids), len(test_ids), f"{ref_label} ids and {test_label} ids are not the same")
+
 
 _temp_dirs = []  # Collect temp dirs for batch cleanup after all tests finish
 
@@ -120,71 +187,55 @@ def temp_dir_fixture(request):
     tmp_path = tempfile.mkdtemp()
     request.instance.temp_dir = tmp_path
     yield
+    gc.collect()
     try:
         shutil.rmtree(tmp_path)
     except (PermissionError, OSError):
         _temp_dirs.append(tmp_path)
 
 
+_GENAI_LLM_UNSUPPORTED_ARCHITECTURES = (
+    # seq2seq models — not supported by LLMPipeline
+    "bart",
+    "bigbird_pegasus",
+    "blenderbot",
+    "blenderbot-small",
+    "marian",
+    "mbart",
+    "pegasus",
+    # SSM / hybrid models
+    "mamba",
+    "falcon_mamba",
+    "zamba2",
+    # not supported by GenAI
+    "afmoe",
+    "biogpt",
+    "gemma3n_text",
+    # tiny test model issues
+    "gpt_neo",  # missing generation_config.json
+    "mpt",  # output mismatch with GenAI
+    # quantized variant tested via gpt_oss
+    "gpt_oss_mxfp4",
+)
+
+
 class LLMPipelineTestCase(unittest.TestCase):
-    ALL_SUPPORTED_ARCHITECTURES = (
-        "gpt_bigcode",
-        "bloom",
-        "codegen",
-        "gpt2",
-        "gptj",
-        "gpt_neox",
-        "llama",
-        "mistral",
-        "mixtral",
-        "phi",
-        "falcon",
-        "persimmon",
-        "xglm",
-        "gemma",
-        "olmo",
-        "stablelm",
-        "starcoder2",
-        "cohere",
-        "qwen2",
-        "qwen2_moe",
-        "gemma2",
-        "granite",
-        "granitemoe",
-        "glm",
-        "mistral-nemo",
-        "opt",
-        "cohere2",
-        "gemma3_text",
-        "qwen3",
-        "qwen3_moe",
-        "glm4",
-        "arcee",
-        "gpt_oss",
-        "smollm3",
-        "phi3",
-        "phimoe",
-        "exaone4",
-        "exaone",
-        "decilm",
-        "internlm2",
-        "orion",
-        "aquila2",
-        "jais",
-        "aquila",
-        "internlm",
-        "dbrx",
+    ALL_SUPPORTED_ARCHITECTURES = tuple(
+        arch
+        for arch in _test_decoder.OVModelForCausalLMIntegrationTest.SUPPORTED_ARCHITECTURES
+        if arch not in _GENAI_LLM_UNSUPPORTED_ARCHITECTURES
     )
 
     # remote modeling incompatible with v5 but not filtered as CodeGenOpenVINOConfig is compatible (codegen)
     if is_transformers_version("<", "5"):
         ALL_SUPPORTED_ARCHITECTURES += ("codegen2",)
 
-    # to be expanded, other architectures work on NPU too
-    # qwen2, phi and phi3 tests are flaky on NPU, not including for now
-    NPU_SUPPORTED_ARCHITECTURES = ("gpt2", "glm", "opt", "qwen3_moe", "gpt_oss")
+    # To be expanded, other architectures work on NPU too.
+    # lfm2 and qwen3 are kept here on purpose although their tiny models currently crash on NPU:
+    # the crash is what we want to keep track of. phi3 is left out because its tiny model crashes
+    # with transformers 5.5 only (no issue with 5.0).
+    NPU_SUPPORTED_ARCHITECTURES = ("glm", "gptj", "qwen3_moe", "gpt_oss", "gemma2", "lfm2", "qwen3")
 
-    # for now we do not test NPU with old transformers versions
     SUPPORTED_ARCHITECTURES = NPU_SUPPORTED_ARCHITECTURES if OPENVINO_DEVICE == "NPU" else ALL_SUPPORTED_ARCHITECTURES
     # filter architectures depending on min/max transformers supported versions
     SUPPORTED_ARCHITECTURES = tuple(
@@ -193,33 +244,18 @@ class LLMPipelineTestCase(unittest.TestCase):
         if TEST_NAME_TO_MODEL_TYPE.get(arch, arch) in get_supported_model_for_library("transformers")
     )
 
-    REMOTE_CODE_MODELS = (
-        "minicpm",
-        "jais",
-        "qwen",
-        "internlm2",
-        "orion",
-        "aquila",
-        "aquila2",
-        "internlm",
-        "codegen2",
-        "arctic",
-        "chatglm4",
-        "exaone",
-        "exaone4",
-        "decilm",
-        "minicpm3",
-        "deepseek",
-    )
     NO_CACHE_MODELS = (  # mostly remote that are broken with past key values
         "aquila",
         "aquila2",
+        "baichuan2",
+        "baichuan2-13b",
         "decilm",
         "internlm",
         "internlm2",
         "orion",
         "jais",
         "qwen",
+        "xverse",
     )
 
     GEN_KWARGS = {
@@ -229,87 +265,122 @@ class LLMPipelineTestCase(unittest.TestCase):
         "num_beams": 1,
     }
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     def test_compare_outputs(self, model_arch):
-        if model_arch in (
-            "xglm",
-            "persimmon",
-        ) and is_openvino_version(">=", "2026.1.0"):
-            self.skipTest("CVS-185350: OpenVINO 2026.1.0 inference results mismatch")
-        if (
-            model_arch in ("mixtral", "qwen2_moe", "qwen3_moe", "gpt_oss")
-            and is_openvino_version(">=", "2026.1.0")
-            and is_transformers_version(">=", "5.0.0")
-        ):
-            self.skipTest("CVS-185350: OpenVINO 2026.1.0 inference results mismatch")
-
+        logger.info("Testing %s on device=%s", model_arch, OPENVINO_DEVICE)
         model_id = MODEL_NAMES[model_arch]
         use_cache = model_arch not in self.NO_CACHE_MODELS
-        trust_remote_code = model_arch in self.REMOTE_CODE_MODELS
-
-        set_seed(42)
-        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=trust_remote_code).eval()
-
-        set_seed(42)
-        main_export(
-            model_name_or_path=model_id,
-            task="text-generation-with-past",
-            trust_remote_code=trust_remote_code,
-            convert_tokenizer=True,
-            output=self.temp_dir,
-        )
-        genai_model = LLMPipeline(self.temp_dir, device=OPENVINO_DEVICE, **TEST_CONFIG)
-
+        trust_remote_code = model_arch in REMOTE_CODE_MODELS
         prompt = "Paris is the capital of"
-        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
-        inputs = tokenizer(prompt, return_tensors="pt")
-        input_len = inputs["input_ids"].shape[-1]
 
-        with torch.no_grad():
-            transformers_ids = transformers_model.generate(**inputs, use_cache=use_cache, **self.GEN_KWARGS)
-            transformers_ids = transformers_ids.squeeze()[input_len:]
+        # BitNet uses torch.compile for custom ternary weight ops, which requires a C++ compiler (cl.exe on Windows)
+        original_dynamo_disable = torch._dynamo.config.disable
+        if model_arch == "bitnet":
+            torch._dynamo.config.disable = True
 
-        if OPENVINO_DEVICE != "NPU":
-            optimum_model = OVModelForCausalLM.from_pretrained(
-                self.temp_dir, trust_remote_code=trust_remote_code, device=OPENVINO_DEVICE, ov_config=TEST_CONFIG
+        transformers_model = optimum_model = genai_model = None
+        try:
+            set_seed(42)
+            transformers_model = AutoModelForCausalLM.from_pretrained(
+                model_id, trust_remote_code=trust_remote_code
+            ).eval()
+
+            # fixed in https://github.com/huggingface/transformers/pull/43445, still needed for v5.0
+            if model_arch == "phimoe" and is_transformers_version("==", "5.0"):
+                transformers_model.model.rotary_emb.short_mscale = transformers_model.config.rope_parameters[
+                    "short_mscale"
+                ]
+                transformers_model.model.rotary_emb.long_mscale = transformers_model.config.rope_parameters[
+                    "long_mscale"
+                ]
+
+            set_seed(42)
+            # For NPU, convert to fp16 explicitly
+            export_ov_config = OVConfig(dtype="fp16") if OPENVINO_DEVICE == "NPU" else None
+            main_export(
+                model_name_or_path=model_id,
+                task="text-generation-with-past",
+                trust_remote_code=trust_remote_code,
+                convert_tokenizer=True,
+                output=self.temp_dir,
+                ov_config=export_ov_config,
             )
-            optimum_ids = optimum_model.generate(**inputs, use_cache=use_cache, **self.GEN_KWARGS)
-            optimum_ids = optimum_ids.squeeze()[input_len:]
-            self.assertEqual(
-                transformers_ids.squeeze().tolist(),
-                optimum_ids.squeeze().tolist(),
-                "Transformers ids and Optimum ids are not the same",
-            )
+            genai_model = LLMPipeline(self.temp_dir, device=OPENVINO_DEVICE, **TEST_CONFIG)
 
-        genai_ids = genai_model(
-            ov.Tensor(inputs["input_ids"].numpy()), apply_chat_template=False, **self.GEN_KWARGS
-        ).tokens[0]
+            tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
+            inputs = tokenizer(prompt, return_tensors="pt")
+            input_len = inputs["input_ids"].shape[-1]
 
-        del genai_model
-        del transformers_model
-        if OPENVINO_DEVICE != "NPU":
-            del optimum_model
-        gc.collect()
+            with torch.no_grad():
+                output = transformers_model.generate(
+                    **inputs, use_cache=use_cache, output_scores=True, return_dict_in_generate=True, **self.GEN_KWARGS
+                )
+                transformers_ids = output.sequences.squeeze()[input_len:].tolist()
+                transformers_top_k = [s.squeeze(0).topk(TOP_K_TOLERANCE).indices.tolist() for s in output.scores]
+            transformers_model = None
 
-        self.assertEqual(
-            transformers_ids.tolist(), genai_ids, "Transformers ids and OpenVINO GenAI ids are not the same"
-        )
+            if OPENVINO_DEVICE != "NPU":
+                optimum_model = OVModelForCausalLM.from_pretrained(
+                    self.temp_dir, trust_remote_code=trust_remote_code, device=OPENVINO_DEVICE, ov_config=TEST_CONFIG
+                )
+                optimum_ids = optimum_model.generate(**inputs, use_cache=use_cache, **self.GEN_KWARGS)
+                optimum_ids = optimum_ids.squeeze()[input_len:].tolist()
+                optimum_model = None
+                _assert_tokens_match(
+                    self, transformers_ids, transformers_top_k, optimum_ids, "Transformers", "Optimum"
+                )
+
+            mem = psutil.virtual_memory()
+            logger.info(f"Memory before GenAI call: {mem.percent}% used, {mem.available // (1024**2)} MB available")
+            genai_ids = genai_model(
+                ov.Tensor(inputs["input_ids"].numpy()), apply_chat_template=False, **self.GEN_KWARGS
+            ).tokens[0]
+        finally:
+            # Release on failure too: a failing test's traceback keeps its frame locals alive for the
+            # rest of the session, which would leave OpenVINO objects (and their file handles) around.
+            transformers_model = optimum_model = genai_model = None
+            gc.collect()
+            torch._dynamo.config.disable = original_dynamo_disable
+
+        _assert_tokens_match(self, transformers_ids, transformers_top_k, genai_ids, "Transformers", "OpenVINO GenAI")
+
+
+_GENAI_VLM_UNSUPPORTED_ARCHITECTURES = (
+    "gemma3n",  # Supported from 2026.3.0 but known issue
+    "idefics3",
+    "got_ocr2",
+    "internvl_chat",  # AssertionError in model's remote code during inference
+    "llama4",
+    "maira2",
+    "minicpmv",  # transformers output is empty with tiny model on transformers 4.57
+    "minicpm_v4_5",  # tokenizer argument unsupported by this generic test
+    "smolvlm",
+    "videochat_flash_qwen",  # GenAI requires video input; image-only not supported
+    "qwen3_omni_moe",
+    "mistral3",
+    "ministral3",
+    "muse_glimmer",
+)
+
+# Gemma 4 version requirements for OpenVINO GenaAI are documented at:
+# https://openvinotoolkit.github.io/openvino.genai/docs/supported-models/#vision-language-models-vlms
+if not (is_transformers_version(">=", "5.5") and is_transformers_version("<", "5.6")):
+    _GENAI_VLM_UNSUPPORTED_ARCHITECTURES += ("gemma4", "gemma4_moe")
+if not (is_transformers_version(">=", "5.10") and is_transformers_version("<", "5.11")):
+    _GENAI_VLM_UNSUPPORTED_ARCHITECTURES += ("gemma4_unified",)
 
 
 class VLMPipelineTestCase(unittest.TestCase):
-    ALL_SUPPORTED_ARCHITECTURES = (
-        "llava_next",
-        # "minicpmv", # output is truncated for some reason
-        "qwen2_vl",
-        "llava_next_mistral",
-        "qwen2_5_vl",
-        "gemma3",
-        "llava",
-        "llava_next_video",
+    GENAI_UNSUPPORTED_ARCHITECTURES = _GENAI_VLM_UNSUPPORTED_ARCHITECTURES
+
+    ALL_SUPPORTED_ARCHITECTURES = tuple(
+        arch
+        for arch in _test_seq2seq.OVModelForVisualCausalLMIntegrationTest.SUPPORTED_ARCHITECTURES
+        if arch not in _GENAI_VLM_UNSUPPORTED_ARCHITECTURES
     )
 
     # for now we do not test NPU with old transformers versions
-    NPU_SUPPORTED_ARCHITECTURES = ("qwen2_vl", "qwen2_5_vl")
+    NPU_SUPPORTED_ARCHITECTURES = ("qwen2_vl", "qwen2_5_vl", "gemma3", "gemma4")
 
     SUPPORTED_ARCHITECTURES = NPU_SUPPORTED_ARCHITECTURES if OPENVINO_DEVICE == "NPU" else ALL_SUPPORTED_ARCHITECTURES
     # filter architectures depending on min/max transformers supported versions
@@ -317,14 +388,6 @@ class VLMPipelineTestCase(unittest.TestCase):
         arch
         for arch in SUPPORTED_ARCHITECTURES
         if TEST_NAME_TO_MODEL_TYPE.get(arch, arch) in get_supported_model_for_library("transformers")
-    )
-
-    REMOTE_CODE_MODELS = (
-        "minicpmv",
-        "minicpmo",
-        "llava-qwen2",
-        "phi3_v",
-        "phi4mm",
     )
 
     GEN_KWARGS = {
@@ -337,107 +400,122 @@ class VLMPipelineTestCase(unittest.TestCase):
     IMAGE = Image.open(requests.get(TEST_IMAGE_URL, stream=True).raw).convert("RGB")
 
     def _get_model_class(self, model_arch):
-        if model_arch in {
-            "llava",
-            "llava_next",
-            "llava_next_mistral",
-            "qwen2_vl",
-            "qwen2_5_vl",
-            "gemma3",
-        }:
-            from transformers import AutoModelForImageTextToText
-
-            return AutoModelForImageTextToText
-        elif model_arch == "llava_next_video":
+        if model_arch == "llava_next_video":
             from transformers import LlavaNextVideoForConditionalGeneration
 
             return LlavaNextVideoForConditionalGeneration
-        elif model_arch == "llava":
-            from transformers import LlavaForConditionalGeneration
+        elif model_arch in REMOTE_CODE_MODELS:
+            from transformers import AutoModel
 
-            return LlavaForConditionalGeneration
-        elif model_arch in {"llava_next", "llava_next_mistral"}:
-            from transformers import LlavaNextForConditionalGeneration
-
-            return LlavaNextForConditionalGeneration
-        elif model_arch == "qwen2_vl":
-            from transformers import Qwen2VLForConditionalGeneration
-
-            return Qwen2VLForConditionalGeneration
+            return AutoModel
         else:
-            return AutoModelForCausalLM
+            from transformers import AutoModelForImageTextToText
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+            return AutoModelForImageTextToText
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     def test_compare_outputs(self, model_arch):
+        logger.info("Testing %s on device=%s", model_arch, OPENVINO_DEVICE)
         model_id = MODEL_NAMES[model_arch]
-        trust_remote_code = model_arch in self.REMOTE_CODE_MODELS
+        trust_remote_code = model_arch in REMOTE_CODE_MODELS
 
         set_seed(42)
         transformers_class = self._get_model_class(model_arch)
-        transformers_model = transformers_class.from_pretrained(model_id, trust_remote_code=trust_remote_code).eval()
 
-        set_seed(42)
-        main_export(
-            model_name_or_path=model_id,
-            trust_remote_code=trust_remote_code,
-            task="image-text-to-text",
-            convert_tokenizer=True,
-            output=self.temp_dir,
-        )
-        genai_model = VLMPipeline(self.temp_dir, device=OPENVINO_DEVICE, **TEST_CONFIG)
+        transformers_model = optimum_model = genai_model = None
+        try:
+            transformers_model = transformers_class.from_pretrained(
+                model_id, trust_remote_code=trust_remote_code
+            ).eval()
 
-        image = self.IMAGE
-        prompt = "A photo of a cat sitting on a"
-        config = AutoConfig.from_pretrained(model_id, trust_remote_code=trust_remote_code)
-        tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
-        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=trust_remote_code)
-        # On NPU, the optimum models cannot be loaded, so we use the preprocess_inputs method from the model class directly
-        model_cls = MODEL_TYPE_TO_CLS_MAPPING[config.model_type]
-        inputs = model_cls.preprocess_inputs(
-            text=prompt, image=image, tokenizer=tokenizer, processor=processor, config=config
-        )
-        full_prompt = tokenizer.decode(inputs["input_ids"][0], skip_special_tokens=True)
-
-        with torch.no_grad():
-            transformers_ids = transformers_model.generate(**inputs, **self.GEN_KWARGS)
-        transformers_output = tokenizer.decode(transformers_ids[0], skip_special_tokens=True)
-        transformers_output = transformers_output[len(full_prompt) :].strip()
-
-        if OPENVINO_DEVICE != "NPU":
-            optimum_model = OVModelForVisualCausalLM.from_pretrained(
-                self.temp_dir, device=OPENVINO_DEVICE, ov_config=TEST_CONFIG, trust_remote_code=trust_remote_code
+            set_seed(42)
+            # For NPU, convert to fp16 explicitly
+            export_ov_config = OVConfig(dtype="fp16") if OPENVINO_DEVICE == "NPU" else None
+            main_export(
+                model_name_or_path=model_id,
+                trust_remote_code=trust_remote_code,
+                task="image-text-to-text",
+                convert_tokenizer=True,
+                output=self.temp_dir,
+                ov_config=export_ov_config,
             )
-            optimum_ids = optimum_model.generate(**inputs, **self.GEN_KWARGS)
-            optimum_output = tokenizer.decode(optimum_ids[0], skip_special_tokens=True)
-            optimum_output = optimum_output[len(full_prompt) :].strip()
-            self.assertTrue(optimum_output)
-            self.assertEqual(transformers_output, optimum_output, "Transformers and Optimum outputs are not the same")
+            genai_model = VLMPipeline(self.temp_dir, device=OPENVINO_DEVICE, **TEST_CONFIG)
 
-        # apply_chat_template is set to True because it is also set in preprocess_inputs()
-        genai_output = genai_model.generate(
-            prompt, images=[ov.Tensor(np.array(image))], ignore_eos=True, apply_chat_template=True, **self.GEN_KWARGS
-        ).texts[0]
+            image = self.IMAGE
+            prompt = "A photo of a cat sitting on a"
+            config = AutoConfig.from_pretrained(model_id, trust_remote_code=trust_remote_code)
+            # For remote code models, transformers sets _name_or_path to the local snapshot path which may
+            # be incomplete (missing auxiliary .py files). Reset to the hub ID so the model can download them.
+            if trust_remote_code:
+                config._name_or_path = model_id
+            tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
+            processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=trust_remote_code)
+            # On NPU, the optimum models cannot be loaded, so we use the preprocess_inputs method
+            # from the model class directly
+            model_cls = MODEL_TYPE_TO_CLS_MAPPING[config.model_type]
+            inputs = model_cls.preprocess_inputs(
+                text=prompt, image=image, tokenizer=tokenizer, processor=processor, config=config
+            )
+            input_len = inputs["input_ids"].shape[-1]
+            with torch.no_grad():
+                output = transformers_model.generate(
+                    **inputs, output_scores=True, return_dict_in_generate=True, **self.GEN_KWARGS
+                )
+                transformers_ids = output.sequences.squeeze()[input_len:].tolist()
+                transformers_top_k = [s.squeeze(0).topk(TOP_K_TOLERANCE).indices.tolist() for s in output.scores]
+            transformers_output = tokenizer.decode(transformers_ids, skip_special_tokens=True).strip()
+            transformers_model = None
 
-        del genai_model
-        del transformers_model
-        if OPENVINO_DEVICE != "NPU":
-            del optimum_model
-        gc.collect()
+            if OPENVINO_DEVICE != "NPU":
+                optimum_model = OVModelForVisualCausalLM.from_pretrained(
+                    self.temp_dir, device=OPENVINO_DEVICE, ov_config=TEST_CONFIG, trust_remote_code=trust_remote_code
+                )
+                optimum_ids = optimum_model.generate(**inputs, **self.GEN_KWARGS)
+                optimum_ids = optimum_ids.squeeze()[input_len:].tolist()
+                optimum_model = None
+                self.assertTrue(optimum_ids)
+                _assert_tokens_match(
+                    self, transformers_ids, transformers_top_k, optimum_ids, "Transformers", "Optimum"
+                )
+
+            # Match preprocess_inputs(): models without a chat template need the image token in the prompt.
+            # preprocess_inputs() checks the processor's chat template (not the tokenizer's), since newer
+            # transformers versions no longer always mirror it onto the tokenizer.
+            apply_chat_template = getattr(processor, "chat_template", None) is not None
+            genai_prompt = prompt
+            if not apply_chat_template:
+                image_token = getattr(processor, "image_token", "<|image|>")
+                if image_token not in genai_prompt:
+                    genai_prompt = f"{image_token}{genai_prompt}"
+            genai_output = genai_model.generate(
+                genai_prompt,
+                images=[ov.Tensor(np.array(image))],
+                ignore_eos=True,
+                apply_chat_template=apply_chat_template,
+                **self.GEN_KWARGS,
+            ).texts[0]
+        finally:
+            # Release on failure too: a failing test's traceback keeps its frame locals alive for the
+            # rest of the session, which would leave OpenVINO objects (and their file handles) around.
+            transformers_model = optimum_model = genai_model = None
+            gc.collect()
 
         # assert they are not empty
         self.assertTrue(transformers_output)
         self.assertTrue(genai_output)
 
-        # compare outputs
-        self.assertEqual(transformers_output, genai_output, "Transformers and OpenVINO GenAI outputs are not the same")
+        # GenAI VLM only returns text; compare decoded outputs
+        if transformers_output != genai_output:
+            # Tokenize both to find divergence point and check against top-K
+            genai_ids = tokenizer.encode(genai_output, add_special_tokens=False)
+            _assert_tokens_match(
+                self, transformers_ids, transformers_top_k, genai_ids, "Transformers", "OpenVINO GenAI"
+            )
 
 
-@pytest.mark.skipif(
-    OPENVINO_DEVICE == "NPU" and is_transformers_version(">=", "5.0"),
-    reason="Speech2Text test on NPU is only supported with transformers < 5.0",
-)
+@pytest.mark.skipif(is_openvino_version("<", "2026.3"), reason="ASRPipeline requires OpenVINO >= 2026.3.")
 class Speech2TextPipelineTestCase(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ("whisper",)
+    SUPPORTED_ARCHITECTURES = _test_seq2seq.OVModelForSpeechSeq2SeqIntegrationTest.SUPPORTED_ARCHITECTURES
 
     GEN_KWARGS = {
         "max_new_tokens": 10,
@@ -452,54 +530,63 @@ class Speech2TextPipelineTestCase(unittest.TestCase):
         audio = 0.5 * np.sin(2 * np.pi * 220 * t)
         return audio
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     def test_compare_outputs(self, model_arch):
+        logger.info("Testing %s on device=%s", model_arch, OPENVINO_DEVICE)
         model_id = MODEL_NAMES[model_arch]
 
-        set_seed(42)
-        transformers_model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id).eval()
+        transformers_model = optimum_model = genai_model = None
+        try:
+            set_seed(42)
+            transformers_model = AutoModelForSpeechSeq2Seq.from_pretrained(model_id).eval()
 
-        set_seed(42)
-        main_export(
-            model_name_or_path=model_id,
-            task="automatic-speech-recognition-with-past",
-            convert_tokenizer=True,
-            output=self.temp_dir,
-        )
-
-        genai_model = WhisperPipeline(self.temp_dir, device=OPENVINO_DEVICE, **TEST_CONFIG)
-
-        audio = self._get_audio()
-        processor = AutoProcessor.from_pretrained(model_id)
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        inputs = processor(audio, sampling_rate=16000, return_tensors="pt")
-
-        with torch.no_grad():
-            transformers_ids = transformers_model.generate(**inputs, **self.GEN_KWARGS)
-            transformers_output = tokenizer.decode(transformers_ids[0], skip_special_tokens=True)
-
-        if OPENVINO_DEVICE != "NPU":
-            optimum_model = OVModelForSpeechSeq2Seq.from_pretrained(
-                self.temp_dir, device=OPENVINO_DEVICE, ov_config=TEST_CONFIG
+            set_seed(42)
+            # For NPU, convert to fp16 explicitly
+            export_ov_config = OVConfig(dtype="fp16") if OPENVINO_DEVICE == "NPU" else None
+            main_export(
+                model_name_or_path=model_id,
+                task="automatic-speech-recognition-with-past",
+                convert_tokenizer=True,
+                output=self.temp_dir,
+                ov_config=export_ov_config,
             )
-            optimum_ids = optimum_model.generate(**inputs, **self.GEN_KWARGS)
-            optimum_output = tokenizer.decode(optimum_ids[0], skip_special_tokens=True)
-            self.assertEqual(transformers_output, optimum_output)
 
-        genai_output = genai_model.generate(inputs["input_features"].flatten().tolist(), **self.GEN_KWARGS).texts[0]
+            genai_model = ASRPipeline(self.temp_dir, device=OPENVINO_DEVICE, **TEST_CONFIG)
 
-        del genai_model
-        del transformers_model
-        if OPENVINO_DEVICE != "NPU":
-            del optimum_model
-        gc.collect()
+            audio = self._get_audio()
+            processor = AutoProcessor.from_pretrained(model_id)
+            tokenizer = AutoTokenizer.from_pretrained(model_id)
+            inputs = processor(audio, sampling_rate=16000, return_tensors="pt")
+
+            with torch.no_grad():
+                transformers_ids = transformers_model.generate(**inputs, **self.GEN_KWARGS)
+                transformers_output = tokenizer.decode(transformers_ids[0], skip_special_tokens=True)
+            transformers_model = None
+
+            if OPENVINO_DEVICE != "NPU":
+                optimum_model = OVModelForSpeechSeq2Seq.from_pretrained(
+                    self.temp_dir, device=OPENVINO_DEVICE, ov_config=TEST_CONFIG
+                )
+                optimum_ids = optimum_model.generate(**inputs, **self.GEN_KWARGS)
+                optimum_output = tokenizer.decode(optimum_ids[0], skip_special_tokens=True)
+                optimum_model = None
+                self.assertEqual(transformers_output, optimum_output)
+
+            genai_output = genai_model.generate(inputs["input_features"].flatten().tolist(), **self.GEN_KWARGS).texts[
+                0
+            ]
+        finally:
+            # Release on failure too: a failing test's traceback keeps its frame locals alive for the
+            # rest of the session, which would leave OpenVINO objects (and their file handles) around.
+            transformers_model = optimum_model = genai_model = None
+            gc.collect()
 
         self.assertEqual(transformers_output, genai_output)
 
 
 @pytest.mark.skipif(OPENVINO_DEVICE == "NPU", reason="Text2Speech test is not yet supported on NPU")
 class Text2SpeechPipelineTestCase(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = ("speecht5",)
+    SUPPORTED_ARCHITECTURES = _test_tts.OVModelForTextToSpeechSeq2SeqIntegrationTest.SUPPORTED_ARCHITECTURES
     VOCODER = "fxmarty/speecht5-hifigan-tiny"
 
     GEN_KWARGS = {
@@ -523,55 +610,60 @@ class Text2SpeechPipelineTestCase(unittest.TestCase):
         speaker_embedding = np.random.randn(1, 512).astype(np.float32)
         return torch.tensor(speaker_embedding)
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES)
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     def test_compare_outputs(self, model_arch):
-        if model_arch in ("speecht5",) and is_openvino_version(">=", "2026.1.0"):
-            self.skipTest("CVS-185350: OpenVINO 2026.1.0 inference results mismatch")
+        logger.info("Testing %s on device=%s", model_arch, OPENVINO_DEVICE)
         model_id = MODEL_NAMES[model_arch]
 
-        set_seed(42)
-        transformers_model = AutoModelForTextToSpectrogram.from_pretrained(model_id).eval()
+        transformers_model = optimum_model = genai_model = None
+        try:
+            set_seed(42)
+            transformers_model = AutoModelForTextToSpectrogram.from_pretrained(model_id).eval()
 
-        set_seed(42)
-        main_export(
-            model_name_or_path=model_id,
-            task="text-to-audio-with-past",
-            model_kwargs={"vocoder": self.VOCODER},
-            convert_tokenizer=True,
-            output=self.temp_dir,
-        )
-        optimum_model = OVModelForTextToSpeechSeq2Seq.from_pretrained(
-            self.temp_dir, device=OPENVINO_DEVICE, ov_config=TEST_CONFIG
-        )
-        genai_model = Text2SpeechPipeline(self.temp_dir, device=OPENVINO_DEVICE, **TEST_CONFIG)
+            set_seed(42)
+            # For NPU, convert to fp16 explicitly
+            export_ov_config = OVConfig(dtype="fp16") if OPENVINO_DEVICE == "NPU" else None
+            main_export(
+                model_name_or_path=model_id,
+                task="text-to-audio-with-past",
+                model_kwargs={"vocoder": self.VOCODER},
+                convert_tokenizer=True,
+                output=self.temp_dir,
+                ov_config=export_ov_config,
+            )
+            optimum_model = OVModelForTextToSpeechSeq2Seq.from_pretrained(
+                self.temp_dir, device=OPENVINO_DEVICE, ov_config=TEST_CONFIG
+            )
+            genai_model = Text2SpeechPipeline(self.temp_dir, device=OPENVINO_DEVICE, **TEST_CONFIG)
 
-        text = "Hello, how are you?"
-        processor = AutoProcessor.from_pretrained(model_id)
-        speaker_embeddings = self._generate_speaker_embedding()
-        vocoder = self._get_vocoder(self.VOCODER, model_arch).eval()
-        inputs = processor(text=text, return_tensors="pt")
-        inputs["speaker_embeddings"] = speaker_embeddings
+            text = "Hello, how are you?"
+            processor = AutoProcessor.from_pretrained(model_id)
+            speaker_embeddings = self._generate_speaker_embedding()
+            vocoder = self._get_vocoder(self.VOCODER, model_arch).eval()
+            inputs = processor(text=text, return_tensors="pt")
+            inputs["speaker_embeddings"] = speaker_embeddings
 
-        with torch.no_grad():
-            transformers_output = transformers_model.generate(**inputs, **self.GEN_KWARGS, vocoder=vocoder)
-            transformers_output = transformers_output.squeeze(0)  # collapse batch dimension (if any)
+            with torch.no_grad():
+                transformers_output = transformers_model.generate(**inputs, **self.GEN_KWARGS, vocoder=vocoder)
+                transformers_output = transformers_output.squeeze(0)  # collapse batch dimension (if any)
 
-        optimum_output = optimum_model.generate(**inputs, **self.GEN_KWARGS)
-        optimum_output = optimum_output.squeeze(0)  # collapse batch dimension (if any)
+            optimum_output = optimum_model.generate(**inputs, **self.GEN_KWARGS)
+            optimum_output = optimum_output.squeeze(0)  # collapse batch dimension (if any)
 
-        genai_output = genai_model.generate(text, **self.GEN_KWARGS).speeches[0]
-        genai_output = torch.from_numpy(genai_output.data).squeeze(0)  # collapse batch dimension (if any)
-
-        del genai_model
-        del optimum_model
-        del transformers_model
-        gc.collect()
+            genai_output = genai_model.generate(text, **self.GEN_KWARGS).speeches[0]
+            genai_output = torch.from_numpy(genai_output.data).squeeze(0)  # collapse batch dimension (if any)
+        finally:
+            # Release on failure too: a failing test's traceback keeps its frame locals alive for the
+            # rest of the session, which would leave OpenVINO objects (and their file handles) around.
+            transformers_model = optimum_model = genai_model = None
+            gc.collect()
 
         torch.testing.assert_close(transformers_output, optimum_output, rtol=1e-2, atol=1e-3)
         torch.testing.assert_close(transformers_output, genai_output, rtol=1e-2, atol=1e-3)
 
 
 # NOTE: DFlash has been merged to 2026.4 release
+@pytest.mark.skipif(sys.platform == "win32", reason="Access violation on Windows")
 @pytest.mark.skipif(OPENVINO_DEVICE == "NPU", reason="Speculative decoding tests are not yet supported on NPU")
 class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
     GEN_KWARGS = {
@@ -580,28 +672,56 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
         "do_sample": False,
         "num_beams": 1,
     }
-    SPECULATIVE_DECODING_MODELS = [
-        (model_arch, model_pair, "Eagle3", None, "2026.0") for model_arch, model_pair in EAGLE3_MODELS.items()
-    ] + [(model_arch, model_pair, "DFlash", "4.57", "2026.4") for model_arch, model_pair in DFLASH_MODELS.items()]
+    SUPPORTED_TYPES = get_supported_model_for_library("transformers")
 
-    @parameterized.expand(SPECULATIVE_DECODING_MODELS)
+    def _filter_models(models, supported=SUPPORTED_TYPES):
+        return [m for m in models if all(TEST_NAME_TO_MODEL_TYPE.get(n, n) in supported for n in m[1])]
+
+    SPECULATIVE_DECODING_MODELS = _filter_models(
+        [(model_arch, model_pair, "Eagle3", "2026.0") for model_arch, model_pair in EAGLE3_MODELS.items()]
+        + [(model_arch, model_pair, "DFlash", "2026.4") for model_arch, model_pair in DFLASH_MODELS.items()]
+    )
+    SPECULATIVE_DECODING_VLM_MODELS = _filter_models(
+        [
+            (model_arch, model_pair, "Eagle3", "2026.4", "image-text-to-text")
+            for model_arch, model_pair in EAGLE3_VLM_MODELS.items()
+        ]
+        + [
+            # Muse-Glimmer dflash is supported starting with 2026.5.
+            (
+                model_arch,
+                model_pair,
+                "DFlash",
+                "2026.5" if model_arch == "muse_glimmer" else "2026.4",
+                "text-generation-with-past",
+            )
+            for model_arch, model_pair in DFLASH_VLM_MODELS.items()
+        ]
+        + [
+            # The MTP head is exported inside the model, so the draft is the same
+            # image-text-to-text export as the target.
+            (model_arch, model_pair, "MTP", "2026.4", "image-text-to-text")
+            for model_arch, model_pair in MTP_VLM_MODELS.items()
+        ]
+    )
+
+    @parameterized.expand(SPECULATIVE_DECODING_MODELS, skip_on_empty=True)
     def test_compare_outputs(
         self,
         model_arch,
         model_pair,
         speculative_decoding_type,
-        min_transformers_version,
         min_openvino_version,
     ):
-        if min_transformers_version is not None and is_transformers_version("<", min_transformers_version):
-            self.skipTest(f"{speculative_decoding_type} requires transformers >= {min_transformers_version}")
         if is_openvino_version("<", min_openvino_version):
             self.skipTest(f"{speculative_decoding_type} requires openvino-genai >= {min_openvino_version}")
 
-        draft_model_id, target_model_id = model_pair
+        draft_model_name, target_model_name = model_pair
+        draft_model_id, target_model_id = MODEL_NAMES[draft_model_name], MODEL_NAMES[target_model_name]
         trust_remote_code = model_arch in REMOTE_CODE_MODELS
 
         # export main and draft models and initialize OV LLM pipelines w/o speculative decoding
+        export_ov_config = OVConfig(dtype="fp16") if OPENVINO_DEVICE == "NPU" else None
         draft_model_path = Path(self.temp_dir) / "draft_model"
         main_model_path = Path(self.temp_dir) / "main_model"
         main_export(
@@ -610,19 +730,31 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
             trust_remote_code=trust_remote_code,
             convert_tokenizer=False,
             output=draft_model_path,
+            ov_config=export_ov_config,
         )
         main_export(
             model_name_or_path=target_model_id,
             task="text-generation-with-past",
             convert_tokenizer=True,
             output=main_model_path,
+            ov_config=export_ov_config,
         )
 
         prompt = "Paris is the capital of"
 
         # Phase 1: generate with speculative decoding
         ov_draft_model = draft_model(draft_model_path, "CPU")
-        ov_speculative_pipe = LLMPipeline(main_model_path, OPENVINO_DEVICE, draft_model=ov_draft_model, **TEST_CONFIG)
+        speculative_pipeline_kwargs = dict(TEST_CONFIG)
+        if speculative_decoding_type == "DFlash":
+            scheduler_config = SchedulerConfig()
+            scheduler_config.enable_prefix_caching = False
+            speculative_pipeline_kwargs["scheduler_config"] = scheduler_config
+        ov_speculative_pipe = LLMPipeline(
+            main_model_path,
+            OPENVINO_DEVICE,
+            draft_model=ov_draft_model,
+            **speculative_pipeline_kwargs,
+        )
         genai_speculative_output = str(
             ov_speculative_pipe.generate(
                 prompt, echo=True, apply_chat_template=False, ignore_eos=True, **self.GEN_KWARGS
@@ -633,7 +765,12 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
         gc.collect()
 
         # Phase 2: generate without speculative decoding
-        ov_pipe = LLMPipeline(main_model_path, OPENVINO_DEVICE, **TEST_CONFIG)
+        baseline_pipeline_kwargs = dict(TEST_CONFIG)
+        if speculative_decoding_type == "DFlash":
+            scheduler_config = SchedulerConfig()
+            scheduler_config.enable_prefix_caching = False
+            baseline_pipeline_kwargs["scheduler_config"] = scheduler_config
+        ov_pipe = LLMPipeline(main_model_path, OPENVINO_DEVICE, **baseline_pipeline_kwargs)
         genai_output = str(
             ov_pipe.generate(prompt, echo=True, apply_chat_template=False, ignore_eos=True, **self.GEN_KWARGS)
         )
@@ -647,59 +784,93 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
         # compare outputs
         self.assertEqual(genai_speculative_output, genai_output)
 
-    @parameterized.expand(EAGLE3_VLM_MODELS.items())
-    def test_compare_outputs_vlm(self, model_arch, model_pair):
-        if is_transformers_version(">=", "5.0.0"):
-            self.skipTest("Eagle3 VLM requires transformers >= 4.57 and < 5.0.0")
-        if is_openvino_version("<", "2026.999"):
-            self.skipTest(
-                "Eagle3 requires openvino-genai >= 2026.999. Need to get PR https://github.com/openvinotoolkit/openvino.genai/pull/3330 merged."
-            )
+    @parameterized.expand(SPECULATIVE_DECODING_VLM_MODELS, skip_on_empty=True)
+    def test_compare_outputs_vlm(
+        self,
+        model_arch,
+        model_pair,
+        speculative_decoding_type,
+        min_openvino_version,
+        draft_task,
+    ):
+        logger.info("Testing %s VLM %s on device=%s", speculative_decoding_type, model_arch, OPENVINO_DEVICE)
+        if is_openvino_version("<", min_openvino_version):
+            self.skipTest(f"{speculative_decoding_type} VLM requires openvino-genai >= {min_openvino_version}")
 
-        draft_model_id, target_model_id = model_pair
+        draft_model_name, target_model_name = model_pair
+        draft_model_id, target_model_id = MODEL_NAMES[draft_model_name], MODEL_NAMES[target_model_name]
         trust_remote_code = model_arch in REMOTE_CODE_MODELS
 
-        # export main (VLM) and draft (Eagle3) models
+        # export main (VLM) and speculative draft models
+        # For NPU (not yet supported), convert to fp16 explicitly
+        export_ov_config = OVConfig(dtype="fp16") if OPENVINO_DEVICE == "NPU" else None
         draft_model_path = Path(self.temp_dir) / "draft_model"
         main_model_path = Path(self.temp_dir) / "main_model"
         main_export(
             model_name_or_path=draft_model_id,
-            task="image-text-to-text",
+            task=draft_task,
             trust_remote_code=trust_remote_code,
             convert_tokenizer=False,
             output=draft_model_path,
+            ov_config=export_ov_config,
         )
         main_export(
             model_name_or_path=target_model_id,
             task="image-text-to-text",
             convert_tokenizer=True,
             output=main_model_path,
+            ov_config=export_ov_config,
         )
 
-        # Use a small deterministic random video tensor: (num_frames, H, W, 3) uint8
         rng = np.random.default_rng(42)
-        input_video = ov.Tensor(rng.integers(0, 256, size=(5, 32, 32, 3), dtype=np.uint8))
+        inputs = {"videos": [ov.Tensor(rng.integers(0, 256, size=(5, 32, 32, 3), dtype=np.uint8))]}
         question = "Why is this video funny?"
 
-        # Phase 1: generate with Eagle3 speculative decoding
+        # Qwen3.5 is a linear-attention model; both DFlash and MTP verifier speculative decoding
+        # require prefix caching to be disabled.
+        speculative_pipeline_kwargs = dict(TEST_CONFIG)
+        if speculative_decoding_type in ("DFlash", "MTP"):
+            scheduler_config = SchedulerConfig()
+            scheduler_config.enable_prefix_caching = False
+            speculative_pipeline_kwargs["scheduler_config"] = scheduler_config
+
+        # MTP speculative decoding requires the number of tokens proposed by the draft (the
+        # Multi-Token Prediction head) to be set explicitly.
+        speculative_gen_kwargs = dict(self.GEN_KWARGS)
+        if speculative_decoding_type == "MTP":
+            speculative_gen_kwargs["num_assistant_tokens"] = 1
+
+        # Phase 1: generate with speculative decoding
         ov_draft_model = draft_model(draft_model_path, "CPU")
-        ov_eagle3_pipe = VLMPipeline(main_model_path, OPENVINO_DEVICE, draft_model=ov_draft_model, **TEST_CONFIG)
-        genai_eagle3_output = ov_eagle3_pipe.generate(prompt=question, videos=[input_video], **self.GEN_KWARGS).texts[
-            0
-        ]
-        del ov_eagle3_pipe
+        ov_speculative_pipe = VLMPipeline(
+            main_model_path,
+            OPENVINO_DEVICE,
+            draft_model=ov_draft_model,
+            **speculative_pipeline_kwargs,
+        )
+        genai_speculative_output = ov_speculative_pipe.generate(
+            prompt=question,
+            **inputs,
+            **speculative_gen_kwargs,
+        ).texts[0]
+        del ov_speculative_pipe
         del ov_draft_model
         gc.collect()
 
-        # Phase 2: generate without Eagle3
-        ov_pipe = VLMPipeline(main_model_path, OPENVINO_DEVICE, **TEST_CONFIG)
-        genai_output = ov_pipe.generate(prompt=question, videos=[input_video], **self.GEN_KWARGS).texts[0]
+        # Phase 2: generate without speculative decoding
+        baseline_pipeline_kwargs = dict(TEST_CONFIG)
+        if speculative_decoding_type in ("DFlash", "MTP"):
+            scheduler_config = SchedulerConfig()
+            scheduler_config.enable_prefix_caching = False
+            baseline_pipeline_kwargs["scheduler_config"] = scheduler_config
+        ov_pipe = VLMPipeline(main_model_path, OPENVINO_DEVICE, **baseline_pipeline_kwargs)
+        genai_output = ov_pipe.generate(prompt=question, **inputs, **self.GEN_KWARGS).texts[0]
         del ov_pipe
         gc.collect()
 
         # assert they are not empty
-        self.assertTrue(genai_eagle3_output)
+        self.assertTrue(genai_speculative_output)
         self.assertTrue(genai_output)
 
         # compare outputs
-        self.assertEqual(genai_eagle3_output, genai_output)
+        self.assertEqual(genai_speculative_output, genai_output)

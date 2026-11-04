@@ -81,6 +81,7 @@ from .modeling import (
     OVModelForZeroShotImageClassification,
 )
 from .modeling_decoder import OVModelForCausalLM
+from .modeling_dflash import OVAssistantForCausalLM
 from .modeling_open_clip import (
     OVModelOpenCLIPForZeroShotImageClassification,
     OVModelOpenCLIPText,
@@ -95,7 +96,11 @@ from .modeling_seq2seq import (
     OVModelForVision2Seq,
 )
 from .modeling_text2speech import OVModelForTextToSpeechSeq2Seq
-from .modeling_visual_language import OVModelForMultimodalLM, OVModelForVisualCausalLM
+from .modeling_visual_language import (
+    OVModelForMultimodalLM,
+    OVModelForVisualCausalLM,
+    OVModelForVisualSequenceClassification,
+)
 
 
 if is_diffusers_available():
@@ -117,6 +122,8 @@ if is_diffusers_available():
         OVPipelineForInpainting,
         OVPipelineForText2Image,
         OVPipelineForText2Video,
+        OVQwenImage21Img2ImgPipeline,
+        OVQwenImage21Pipeline,
         OVQwenImagePipeline,
         OVSanaPipeline,
         OVSanaSprintPipeline,
@@ -129,6 +136,9 @@ if is_diffusers_available():
         OVStableDiffusionXLImg2ImgPipeline,
         OVStableDiffusionXLInpaintPipeline,
         OVStableDiffusionXLPipeline,
+        OVZImageImg2ImgPipeline,
+        OVZImageInpaintPipeline,
+        OVZImagePipeline,
     )
 
 

@@ -27,7 +27,7 @@ from requests.exceptions import ConnectionError as RequestsConnectionError
 from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
 from transformers.utils import is_torch_available
 
-from openvino import Core, Type, save_model
+from openvino import Core, Model, Type, save_model
 from optimum.exporters.openvino.base import OpenVINOConfig
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
@@ -36,19 +36,24 @@ from optimum.intel.utils.import_utils import (
     is_diffusers_available,
     is_nncf_available,
     is_openvino_tokenizers_available,
+    is_openvino_version,
     is_transformers_version,
 )
 from optimum.intel.utils.modeling_utils import (
     _infer_library_from_model_name_or_path,
     _KokoroForTextToSpeech,
     _OpenClipForZeroShotImageClassification,
+    _Qwen3TTSForTextToSpeech,
 )
 
 from .utils import (
     _MAX_UNCOMPRESSED_SIZE,
     MULTI_MODAL_TEXT_GENERATION_MODELS,
+    check_transformers_version_compatibility,
     clear_class_registry,
     deduce_diffusers_dtype,
+    is_auto_compression_disabled,
+    keep_mixed_precision_parameters,
     load_preprocessors,
     patch_qwenvl_configs,
 )
@@ -88,13 +93,21 @@ def infer_task(
     if task == "auto":
         if library_name == "open_clip":
             task = "zero-shot-image-classification"
-        elif library_name == "kokoro":
+        elif library_name in ("kokoro", "qwen3_tts"):
             task = "text-to-audio"
         elif library_name == "funasr":
             # Use the with-past task so the encoder-decoder export is stateful (KV cache hidden in
             # OpenVINO state). Without the `-with-past` suffix the decoder is exported stateless and
             # incremental generation breaks (only the first token is correct).
-            task = "automatic-speech-recognition-with-past"
+            from optimum.intel.openvino.modeling_funasr import _is_sensevoice_source
+
+            if _is_sensevoice_source(
+                model_name_or_path, cache_dir=cache_dir, token=token, subfolder=subfolder, revision=revision
+            ):
+                # SenseVoiceSmall is a non-autoregressive (CTC encoder-only) model exported as a single stateless graph.
+                task = "automatic-speech-recognition"
+            else:
+                task = "automatic-speech-recognition-with-past"
         else:
             try:
                 task = TasksManager._infer_task_from_model_name_or_path(
@@ -163,6 +176,8 @@ def infer_task(
                     raise e
             else:
                 raise
+        if original_task == "auto" and (config.architectures or [None])[0] in _NATIVE_DRAFT_MODEL_CLASSES:
+            task = "text-generation-with-past"
         if hasattr(config, "export_model_type"):
             model_type = config.export_model_type
         else:
@@ -219,8 +234,26 @@ def _ensure_qwen3_omni_rope_scaling(config):
 _CUSTOM_DRAFT_MODEL_MAP = {
     "LlamaForCausalLMEagle3": ("LlamaEagle3Model", "LlamaEagle3ForCausalLM"),
     "Eagle3LlamaForCausalLM": ("LlamaEagle3Model", "LlamaEagle3ForCausalLM"),
-    "DFlashDraftModel": ("Qwen3DFlashDraftModel", "Qwen3DFlashForCausalLM"),
 }
+
+# Maps config.architectures[0] to the model_patcher export class of DFlash draft models, or to a
+# function building that class. They are loaded directly, so unlike `_CUSTOM_DRAFT_MODEL_MAP` they
+# need no `auto_map` indirection (and no `trust_remote_code`).
+_NATIVE_DRAFT_MODEL_CLASSES = {
+    "DFlashDraftModel": "Qwen3DFlashForCausalLM",
+    "Qwen3DSparkModel": "Qwen3DSparkForCausalLM",
+    "MuseGlimmerAssistantModel": "get_muse_glimmer_assistant_draft_model_class",
+}
+
+
+def load_native_draft_model(architecture: str, model_name_or_path: str, **kwargs):
+    from optimum.exporters.openvino import model_patcher
+
+    model_class = getattr(model_patcher, _NATIVE_DRAFT_MODEL_CLASSES[architecture])
+    # The MuseGlimmer drafter class is built lazily because it needs transformers >= 5.15.
+    if not isinstance(model_class, type):
+        model_class = model_class()
+    return model_class.from_pretrained(model_name_or_path, **kwargs)
 
 
 def update_config_for_custom_draft_model(config, auto_model, auto_model_for_causal_lm):
@@ -412,10 +445,28 @@ def main_export(
             dtype = torch.bfloat16
             loading_kwargs["quantization_config"] = Mxfp4Config(dequantize=True)
 
-        supported_quant_methods = ["gptq", "awq", "bitnet"]
+        supported_quant_methods = ["gptq", "awq", "bitnet", "compressed-tensors"]
         do_quant_patching = quant_method in supported_quant_methods
         do_gptq_patching = quant_method == "gptq"
         do_bitnet_patching = quant_method == "bitnet"
+        do_ct_patching = quant_method == "compressed-tensors"
+
+        # compressed-tensors export relies on the OpenVINO PyTorch frontend
+        # compressed-tensors patcher, which is only available since 2026.3.
+        if do_ct_patching and is_openvino_version("<", "2026.3"):
+            raise RuntimeError(
+                "Exporting compressed-tensors quantized models requires OpenVINO 2026.3 or newer, "
+                "but the installed OpenVINO does not meet this requirement. "
+                "Please upgrade OpenVINO, e.g. `pip install --upgrade openvino`."
+            )
+
+        # Loading a compressed-tensors model and keeping its packed weights intact
+        # requires the `compressed_tensors` package.
+        if do_ct_patching and importlib.util.find_spec("compressed_tensors") is None:
+            raise RuntimeError(
+                "Exporting compressed-tensors quantized models requires the `compressed_tensors` "
+                "package, which is not installed. Please install it, e.g. `pip install compressed_tensors`."
+            )
 
         if is_transformers_version(">=", "4.56") and config.model_type in {"qwen2_vl_text", "qwen2_5_vl_text"}:
             patch_qwenvl_configs()
@@ -458,6 +509,11 @@ def main_export(
             raise ValueError(
                 f"Asked to export a {model_type} model for the task {task}{autodetected_message}, but the Optimum OpenVINO exporter only supports the tasks {', '.join(model_tasks.keys())} for {model_type}. Please use a supported task. Please open an issue at https://github.com/huggingface/optimum-intel/issues if you would like the task {task} to be supported in the OpenVINO export for {model_type}."
             )
+        if model_type in TasksManager._SUPPORTED_MODEL_TYPE:
+            export_config_constructor = TasksManager.get_exporter_config_constructor(
+                exporter="openvino", task=task, model_type=model_type, library_name=library_name
+            )
+            check_transformers_version_compatibility(export_config_constructor)
 
         # some models force flash_attn attention by default that does not support load model on cpu
         if model_type in FORCE_ATTN_MODEL_CLASSES:
@@ -550,6 +606,32 @@ def main_export(
                     return state_dict
 
                 AutoBitLinear.load_hook = bitnet_load_hook
+            if do_ct_patching:
+                from transformers.quantizers.quantizer_compressed_tensors import (
+                    CompressedTensorsHfQuantizer,
+                )
+
+                orig_ct_process = CompressedTensorsHfQuantizer._process_model_after_weight_loading
+
+                # Skip decompression so that weight_packed buffers remain intact for
+                # the OV PT frontend compressed-tensors patcher (quantized.py) to
+                # convert them to u4 constants during tracing.
+                CompressedTensorsHfQuantizer._process_model_after_weight_loading = lambda self, model, **kwargs: model
+
+                # In compressed-tensors >= 0.15, compress_model() installs a forward
+                # pre-hook (ct_decompress_hook) that lazily decompresses weights on
+                # the first forward pass.  We must suppress it so that weight_packed
+                # buffers stay intact for the OV traced graph. Older versions do not
+                # define the method, so nothing needs to be patched there.
+                orig_add_decompress_hook = None
+                try:
+                    from compressed_tensors import ModelCompressor
+
+                    if hasattr(ModelCompressor, "add_decompress_hook"):
+                        orig_add_decompress_hook = ModelCompressor.add_decompress_hook
+                        ModelCompressor.add_decompress_hook = lambda self, model: None
+                except ImportError:
+                    pass
     elif library_name == "diffusers":
         _loading_kwargs = {} if variant is None else {"variant": variant}
         if dtype == "auto" or dtype is None:
@@ -572,6 +654,7 @@ def main_export(
         if dtype in [torch.float16, torch.bfloat16]:
             loading_kwargs["torch_dtype"] = dtype
             patch_16bit = True
+            keep_mixed_precision_parameters()
         if loading_kwargs.get("torch_dtype") == "auto":
             loading_kwargs["torch_dtype"] = dtype
 
@@ -581,9 +664,48 @@ def main_export(
         elif library_name == "kokoro":
             model = _KokoroForTextToSpeech.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
         elif library_name == "funasr":
-            from optimum.intel.openvino.modeling_funasr import _FunASRForSpeechSeq2Seq
+            from optimum.intel.openvino.modeling_funasr import (
+                _FunASRForSpeechSeq2Seq,
+                _is_sensevoice_source,
+                _SenseVoiceForCTC,
+            )
 
-            model = _FunASRForSpeechSeq2Seq.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
+            if _is_sensevoice_source(
+                model_name_or_path, cache_dir=cache_dir, token=token, subfolder=subfolder, revision=revision
+            ):
+                model = _SenseVoiceForCTC.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
+            else:
+                model = _FunASRForSpeechSeq2Seq.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
+        elif (
+            library_name == "transformers"
+            and (getattr(config, "architectures", None) or [None])[0] in _NATIVE_DRAFT_MODEL_CLASSES
+        ):
+            model = load_native_draft_model(
+                config.architectures[0],
+                model_name_or_path,
+                subfolder=subfolder,
+                revision=revision,
+                cache_dir=cache_dir,
+                token=token,
+                local_files_only=local_files_only,
+                force_download=force_download,
+                **loading_kwargs,
+            )
+        elif library_name == "qwen3_tts":
+            # Without an explicit request the checkpoint's own precision is kept, so the IRs
+            # come out at the precision the model was published in rather than upcast. A
+            # floating-point --weight-format still pins the precision it names.
+            if ov_config is not None and ov_config.dtype in {"fp16", "fp32"}:
+                loading_kwargs.setdefault("torch_dtype", torch.float16 if ov_config.dtype == "fp16" else torch.float32)
+            model = _Qwen3TTSForTextToSpeech.from_pretrained(
+                model_name_or_path,
+                cache_dir=cache_dir,
+                token=token,
+                revision=revision,
+                local_files_only=local_files_only,
+                force_download=force_download,
+                **loading_kwargs,
+            )
         else:
             # remote code models like phi3_v internvl2, minicpmv, internvl2, nanollava, maira2 should be loaded using AutoModelForCausalLM and not AutoModelForImageTextToText
             # TODO: use config.auto_map to load remote code models instead (for other models we can directly use config.architectures)
@@ -663,6 +785,10 @@ def main_export(
         if convert_tokenizer:
             maybe_convert_tokenizers(library_name, output, model, preprocessors, task=task)
 
+        # Evaluated before `del model`: the size-based quantization below is skipped for some model
+        # types, and by the time it runs the object is gone.
+        skip_auto_compression = is_auto_compression_disabled(model)
+
         clear_class_registry()
         del model
         gc.collect()
@@ -670,7 +796,12 @@ def main_export(
         # TODO: Remove GPT-OSS workaround when possible
         quantization_config = None if ov_config is None else ov_config.quantization_config
         if not quantization_config or isinstance(quantization_config, _GPTOSSQuantizationConfig):
-            _apply_model_size_based_quantization(submodel_paths, ov_config, output)
+            better_quality_config = (
+                _get_better_quality_config(model_name_or_path, skip_auto_compression) if ov_config is None else None
+            )
+            _apply_model_size_based_quantization(
+                submodel_paths, ov_config, output, skip_auto_compression, better_quality_config
+            )
     finally:
         # Unpatch modules after quantized model export
         if do_quant_patching:
@@ -679,6 +810,10 @@ def main_export(
                 GPTQQuantizer.post_init_model = orig_post_init_model
             if do_bitnet_patching:
                 AutoBitLinear.load_hook = orig_load_hook
+            if do_ct_patching:
+                CompressedTensorsHfQuantizer._process_model_after_weight_loading = orig_ct_process
+                if orig_add_decompress_hook is not None:
+                    ModelCompressor.add_decompress_hook = orig_add_decompress_hook
 
 
 def _main_quantize(
@@ -730,6 +865,8 @@ def _main_quantize(
             `model_kwargs={"output_attentions": True}` is passed).
 
     """
+    from optimum.intel.openvino.configuration import OVWeightQuantizationConfig
+    from optimum.intel.openvino.modeling_dflash import is_dflash_draft_model
     from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
 
     # Step 0. Infer task and library name if needed
@@ -795,6 +932,13 @@ def _main_quantize(
             model_cls_name = _HEAD_TO_AUTOMODELS[task.replace("-with-past", "")]
             if library_name == "sentence_transformers":
                 model_cls_name = "OVSentenceTransformer"
+            elif (
+                library_name == "transformers"
+                and task == "text-classification"
+                and model_type in MULTI_MODAL_TEXT_GENERATION_MODELS
+            ):
+                # a VLM with a sequence classification head is exported as VLM parts
+                model_cls_name = "OVModelForVisualSequenceClassification"
             model_cls = getattr(__import__("optimum.intel", fromlist=[model_cls_name]), model_cls_name)
         except (AttributeError, ImportError, KeyError) as e:
             raise RuntimeError(f"Wasn't able to locate OpenVINO class for task {original_task} ({task}).") from e
@@ -810,6 +954,16 @@ def _main_quantize(
     )
 
     # Step 3. Apply quantization and save the quantized model
+    if (
+        isinstance(quantization_config, OVWeightQuantizationConfig)
+        and quantization_config.bits == 4
+        and quantization_config.all_layers is None
+        and isinstance(getattr(model, "model", None), Model)
+        and is_dflash_draft_model(model.model)
+    ):
+        # DFlash drafts have no embeddings or lm_head, so NNCF's "last MatMul stays int8" rule would hit a decoder layer.
+        quantization_config = quantization_config.clone()
+        quantization_config.all_layers = True
     model._apply_quantization(
         quantization_config,
         compile_only=False,
@@ -840,7 +994,28 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
     from optimum.exporters.openvino.convert import export_tokenizer
 
     if is_openvino_tokenizers_available():
-        if library_name != "diffusers" and preprocessors:
+        if (
+            library_name == "funasr"
+            and model is not None
+            and getattr(model.config, "export_model_type", None) == "sense_voice"
+        ):
+            # SenseVoiceSmall ships a SentencePiece BPE model rather than a transformers tokenizer, so it
+            # is not among ``preprocessors``. It has no text input, so build only the OV detokenizer IR from
+            # that BPE model.
+            from optimum.intel.openvino.modeling_funasr import export_sensevoice_tokenizers
+
+            source = getattr(model, "_sensevoice_source", None)
+            if source is None:
+                logger.warning("SenseVoice source path unknown; OpenVINO detokenizer model won't be generated.")
+            else:
+                try:
+                    export_sensevoice_tokenizers(source, output)
+                except Exception as exception:
+                    logger.warning(
+                        "Could not convert the SenseVoice tokenizer. OpenVINO detokenizer "
+                        f"model won't be generated. Exception: {exception}"
+                    )
+        elif library_name != "diffusers" and preprocessors:
             processor_chat_template = None
             tokenizer = next(filter(lambda it: isinstance(it, PreTrainedTokenizerBase), preprocessors), None)
             if len(preprocessors) > 1:
@@ -865,19 +1040,84 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
                 tokenizer = getattr(model, tokenizer_name, None)
                 if tokenizer:
                     export_tokenizer(tokenizer, output / tokenizer_name, task=task)
+            # Some diffusion pipelines (e.g. QwenImage2.1) register a `processor` instead of a bare
+            # `tokenizer`; its tokenizer files are saved under the `processor` subfolder, so the OV
+            # tokenizer/detokenizer IRs must be written there too.
+            processor = getattr(model, "processor", None)
+            processor_tokenizer = getattr(processor, "tokenizer", None) if processor is not None else None
+            if processor_tokenizer is not None:
+                processor_chat_template = getattr(processor, "chat_template", None)
+                export_tokenizer(
+                    processor_tokenizer,
+                    output / "processor",
+                    task=task,
+                    processor_chat_template=processor_chat_template,
+                )
     else:
         logger.warning("Tokenizer won't be converted.")
 
 
-def _apply_model_size_based_quantization(submodel_paths: List[str], ov_config: "OVConfig", output: Union[str, Path]):
+def _get_better_quality_config(model_name_or_path: str, skip_auto_compression: bool) -> Optional[Dict[str, Any]]:
+    """
+    Returns the config to compress the large submodels with when no weight format is given, instead of the generic
+    int8_asym one, which costs too much quality for the models excluded from the automatic int8 compression (LTX-2).
+    Only such models can have it: it is the int8 config registered for the model in `_DEFAULT_8BIT_WQ_CONFIGS`, which
+    is tuned to keep the quality. If the installed NNCF version does not support it, the model is not compressed and a
+    warning to install the latest NNCF version is printed.
+    """
+    if not skip_auto_compression:
+        return None
+
+    from optimum.intel.openvino.configuration import (
+        _DEFAULT_8BIT_WQ_CONFIGS,
+        _find_model_config,
+        _get_missing_nncf_version,
+    )
+
+    better_quality_config = _find_model_config(model_name_or_path, _DEFAULT_8BIT_WQ_CONFIGS)
+    missing_nncf_version = _get_missing_nncf_version(better_quality_config)
+    if missing_nncf_version is not None:
+        logger.warning(
+            "The model weights are not compressed, since the int8 config tuned to keep the quality of this model "
+            f"needs nncf>={missing_nncf_version}. With it, the large submodels of the model are compressed to int8 by "
+            "default, which roughly halves their size. Please install the latest nncf version, e.g. with "
+            "`pip install -U nncf`."
+        )
+        return None
+    return better_quality_config
+
+
+def _apply_model_size_based_quantization(
+    submodel_paths: List[str],
+    ov_config: "OVConfig",
+    output: Union[str, Path],
+    skip_auto_compression: bool = False,
+    better_quality_config: Optional[Dict[str, Any]] = None,
+):
     """
     Apply weight-only quantization to int8_asym to submodels larger than 1B parameters.
+
+    Models for which `is_auto_compression_disabled` holds are left uncompressed: they are large
+    enough to always cross the threshold, but lose too much quality at int8 for that to be a silent
+    default. If such a model has an int8 config registered in `_DEFAULT_8BIT_WQ_CONFIGS`, given as
+    `better_quality_config`, its submodels larger than 1B parameters that have an entry in it, matched by the
+    submodel directory name, are quantized with that entry, which is tuned to keep the quality.
+    An explicitly requested weight format is unaffected -- it does not reach this branch.
     """
+    if skip_auto_compression and ov_config is None and better_quality_config is None:
+        logger.info(
+            "Automatic int8 weight compression is skipped for this model. Export with "
+            "`--weight-format int8` to compress the weights anyway."
+        )
+        return
+
     # TODO: Refactor the code below in the following way:
     #   1. Create a OVPipelineQuantizationConfig based on each submodel size
     #   2. Run _main_quantize() with the created quantization config
     # TODO: Apply default int8 and ignored scope configs from configuration.py if matches
+    #       (not only for skip_auto_compressed models)
     for submodel_path in submodel_paths:
+        submodel_name = Path(submodel_path).parent.name  # the submodel directory of a diffusers pipeline
         submodel_path = Path(output) / submodel_path
 
         if (not submodel_path.is_file()) or (submodel_path.stat().st_size == 0):
@@ -896,8 +1136,15 @@ def _apply_model_size_based_quantization(submodel_paths: List[str], ov_config: "
                 del op
             if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
                 if is_nncf_available():
-                    quantization_config = {"bits": 8, "sym": False}
-                    logger.info("The model weights will be quantized to int8_asym.")
+                    if better_quality_config is None:
+                        quantization_config = {"bits": 8, "sym": False}
+                        logger.info("The model weights will be quantized to int8_asym.")
+                    else:
+                        quantization_config = better_quality_config.get("quantization_configs", {}).get(submodel_name)
+                        if quantization_config is not None:
+                            logger.info(
+                                f"The {submodel_name} weights will be quantized to int8 with config {quantization_config}."
+                            )
                 else:
                     logger.warning(
                         "The model will be converted with no weights quantization. Quantization of the weights to int8 "

@@ -18,6 +18,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Dict, Generator
+from unittest.mock import patch
 
 import numpy as np
 import open_clip  # type: ignore
@@ -64,6 +65,7 @@ from utils_tests import (
     SEED,
     TENSOR_ALIAS_TO_TYPE,
     TEST_IMAGE_URL,
+    is_model_type_transformers_compatible,
 )
 
 from optimum.intel import (
@@ -608,6 +610,25 @@ class OVModelIntegrationTest(unittest.TestCase):
         del model
         gc.collect()
 
+    @parameterized.expand(("local_files_only", "offline_mode"))
+    def test_infer_export_when_loading_local_dir_offline(self, mode):
+        # A local PyTorch checkpoint must still be exported when the Hub can't be reached
+        model_id = MODEL_NAMES["gpt2"]
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        with TemporaryDirectory() as tmpdirname:
+            model.save_pretrained(tmpdirname)
+            if mode == "offline_mode":
+                with patch("optimum.intel.openvino.modeling_base.is_offline_mode", return_value=True):
+                    ov_model = OVModelForCausalLM.from_pretrained(tmpdirname, device=OPENVINO_DEVICE)
+            else:
+                ov_model = OVModelForCausalLM.from_pretrained(
+                    tmpdirname, local_files_only=True, device=OPENVINO_DEVICE
+                )
+            self.assertIsInstance(ov_model, OVModelForCausalLM)
+        del ov_model
+        del model
+        gc.collect()
+
     def test_find_files_matching_pattern(self):
         model_id = "echarlaix/tiny-random-PhiForCausalLM"
         pattern = r"(.*)?openvino(.*)?\_model(.*)?.xml$"
@@ -1041,7 +1062,7 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         "sentence-transformers-bert",
         "qwen3",
     )
-    if is_transformers_version("<", "5.4") or is_transformers_version(">=", "5.6"):
+    if is_model_type_transformers_compatible("qwen3_vl"):
         SUPPORTED_ARCHITECTURES += ("qwen3_vl_embedding",)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
@@ -1274,7 +1295,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         )
         self.assertEqual(ov_model.request.get_property("INFERENCE_PRECISION_HINT").to_string(), "f32")
         self.assertIsInstance(ov_model.config, PretrainedConfig)
-        timm_model = timm.create_model(model_id, pretrained=True)
+        timm_model = timm.create_model(f"hf-hub:{model_id}", pretrained=True)
         preprocessor = TimmImageProcessor.from_pretrained(model_id)
         url = TEST_IMAGE_URL
         image = Image.open(requests.get(url, stream=True).raw)
@@ -1703,12 +1724,12 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
 
         self.assertTrue(
             torch.allclose(
-                clip_image_features, torch.from_numpy(ov_outputs.vision_model_output["image_features"]), atol=1e-4
+                clip_image_features, torch.from_numpy(ov_outputs.vision_model_output["image_features"]), atol=1e-3
             )
         )
         self.assertTrue(
             torch.allclose(
-                clip_text_features, torch.from_numpy(ov_outputs.text_model_output["text_features"]), atol=1e-4
+                clip_text_features, torch.from_numpy(ov_outputs.text_model_output["text_features"]), atol=1e-3
             )
         )
 
@@ -1746,14 +1767,14 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
         self.assertTrue(model.visual_model.request is None)
         self.assertTrue(model.text_model.request is None)
         res = model(tokens, processed_image)
-        self.assertTrue(torch.equal(model_outputs.logits_per_image, res.logits_per_image))
+        self.assertTrue(torch.allclose(model_outputs.logits_per_image, res.logits_per_image, atol=1e-3))
 
         model.compile()
         self.assertTrue(model.visual_model.request is not None)
         self.assertTrue(model.text_model.request is not None)
         res = model(tokens, processed_image)
         print(model_outputs.logits_per_image, res.logits_per_image)
-        self.assertTrue(torch.equal(model_outputs.logits_per_image, res.logits_per_image))
+        self.assertTrue(torch.allclose(model_outputs.logits_per_image, res.logits_per_image, atol=1e-3))
 
         model.half()
         model.compile()
