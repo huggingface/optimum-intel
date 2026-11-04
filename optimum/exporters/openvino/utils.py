@@ -973,6 +973,24 @@ def load_preprocessors(
     return preprocessors
 
 
+def get_qwen3_omni_thinker_text_model(thinker):
+    """
+    Returns the Qwen3-Omni Thinker text decoder (the module taking `inputs_embeds` and exposing `embed_tokens`).
+
+    Older transformers: `thinker.model` is the text model itself.
+    Newer transformers: `thinker.model` is a wrapper holding `visual`, `audio_tower` and `language_model`.
+    """
+    return getattr(thinker.model, "language_model", thinker.model)
+
+
+def get_qwen3_omni_thinker_encoders_owner(thinker):
+    """
+    Returns the module that owns the `visual` and `audio_tower` encoders of a Qwen3-Omni Thinker
+    (`thinker` on older transformers, `thinker.model` on newer ones).
+    """
+    return thinker.model if hasattr(thinker.model, "visual") else thinker
+
+
 # TODO: remove load_minicpmv4_7_processor once official 4.7 checkpoints are published
 def load_minicpmv4_7_processor(model_name_or_path: Union[str, Path], subfolder: str = ""):
     from transformers import (

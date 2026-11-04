@@ -69,6 +69,7 @@ from optimum.exporters.openvino.utils import (
     GRANITEMOEHYBRID_MAMBA_LAYER_TYPE,
     LTX2_ROPE_INPUTS,
     has_ltx2_extended_guidance_inputs,
+    get_qwen3_omni_thinker_text_model,
 )
 from optimum.intel.utils.import_utils import (
     is_diffusers_version,
@@ -5167,7 +5168,7 @@ class Qwen3OmniMoeLanguageModelPatcher(_Qwen3OmniMoeLMPatcherMixin, OVDecoderMod
             use_cache=True,
         ):
             pkv = DynamicCache(past_key_values)
-            outputs = self.thinker.model(
+            outputs = get_qwen3_omni_thinker_text_model(self.thinker)(
                 inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
                 position_ids=position_ids,
@@ -5186,7 +5187,7 @@ class Qwen3OmniMoeLanguageModelPatcher(_Qwen3OmniMoeLMPatcherMixin, OVDecoderMod
         model.__orig_forward = model.forward
         model.forward = types.MethodType(lm_forward, model)
 
-        thinker_model = model.thinker.model
+        thinker_model = get_qwen3_omni_thinker_text_model(model.thinker)
         thinker_model.__orig_deepstack_process = thinker_model._deepstack_process
         thinker_model._deepstack_process = types.MethodType(_deepstack_process_patched, thinker_model)
 
@@ -5195,7 +5196,7 @@ class Qwen3OmniMoeLanguageModelPatcher(_Qwen3OmniMoeLMPatcherMixin, OVDecoderMod
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model.__orig_forward
-        thinker_model = self._model.thinker.model
+        thinker_model = get_qwen3_omni_thinker_text_model(self._model.thinker)
         thinker_model._deepstack_process = thinker_model.__orig_deepstack_process
 
 
