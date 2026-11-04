@@ -88,6 +88,7 @@ from optimum.intel.openvino.utils import (
 from optimum.intel.utils.import_utils import (
     compare_versions,
     is_compressed_tensors_available,
+    is_diffusers_version,
     is_openvino_tokenizers_available,
     is_openvino_version,
     is_qwen_tts_available,
@@ -139,6 +140,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("image-to-video", "ltx2"),
         ("text-to-video", "ltx2.3"),
         ("image-to-video", "ltx2.3"),
+        ("text-to-video", "ltx2.5"),
+        ("image-to-video", "ltx2.5"),
         ("feature-extraction", "sam"),
         ("text-to-audio", "speecht5"),
         ("zero-shot-image-classification", "clip"),
@@ -152,6 +155,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("feature-extraction", "qwen3_vl_embedding"),
         ("text-generation-with-past", "qwen3_eagle3"),
         ("text-generation-with-past", "qwen3_dflash"),
+        ("text-generation-with-past", "muse_glimmer_assistant"),
         ("text-generation-with-past", "qwen3_deepspec_dflash"),
         ("text-generation-with-past", "zamba2"),
         ("text-generation-with-past", "exaone4"),
@@ -177,6 +181,10 @@ class OVCLIExportTestCase(unittest.TestCase):
         for task, model_type in SUPPORTED_ARCHITECTURES
         if TEST_NAME_TO_MODEL_TYPE.get(model_type, model_type)
         in get_supported_model_for_library("transformers") | get_supported_model_for_library("diffusers")
+        and (
+            model_type != "ltx2.5"
+            or (is_transformers_version(">=", "5.10.0") and is_diffusers_version(">=", "0.40.0"))
+        )
     ]
 
     # Add custom model types
@@ -222,6 +230,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "ltx-video-0.9.5": 2,
         "ltx2": 2,
         "ltx2.3": 2,
+        "ltx2.5": 4,  # the text encoder's tokenizer plus the prompt enhancer's processor tokenizer
         "sam": 0,  # no tokenizer
         "speecht5": 2,
         "kokoro": 0,  # uses g2p, no tokenizer
@@ -1318,7 +1327,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 not task.endswith("with-past") or model.decoder.stateful
             ):
                 expected_int8.pop("decoder_with_past", None)
-            if task == "text-to-video" and model_type.startswith("ltx2"):
+            if task == "text-to-video" and model_type in ["ltx2", "ltx2.3", "ltx2.5"]:
                 # Only the LTX-2 image-to-video pipeline loads a VAE encoder, to encode the input image.
                 del expected_int8["vae_encoder"]
             check_compression_state_per_model(self, model.ov_models, expected_int8)
