@@ -1270,12 +1270,13 @@ def _get_submodels_and_export_configs(
     )
     stateful_per_model = [stateful] * len(models_for_export)
 
-    # Models exported next to the main one, such as the Markov head of a DSpark draft.
-    for behavior in getattr(export_config, "SUPPORTED_BEHAVIORS", []):
-        models_for_export[f"{behavior}_model"] = (
-            export_config.get_model_for_behavior(model, behavior),
-            export_config.with_behavior(behavior),
+    # The Markov head of a DSpark draft is exported next to the draft backbone.
+    if "markov_head" in getattr(export_config, "SUPPORTED_BEHAVIORS", []):
+        models_for_export["markov_head_model"] = (
+            export_config.get_model_for_behavior(model, "markov_head"),
+            export_config.with_behavior("markov_head"),
         )
+        # Only models with a KV cache are stateful; the Markov head has none.
         stateful_per_model.append(False)
 
     # VLM Eagle3 models need stateful KV cache despite model_type being "llama"
