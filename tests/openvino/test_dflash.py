@@ -219,6 +219,8 @@ class DSparkExportTest(unittest.TestCase):
 
     @staticmethod
     def _model(sample_from_anchor=True):
+        if is_transformers_version("<", "5"):
+            raise unittest.SkipTest("DSpark drafts require transformers>=5")
         return Qwen3DSparkForCausalLM.from_pretrained(
             MODEL_NAMES["minicpmv4_7_dspark"], sample_from_anchor=sample_from_anchor
         ).eval()
@@ -450,7 +452,7 @@ class DSparkExportTest(unittest.TestCase):
             self.assertGreaterEqual(len(self._markov_weights(markov_head_ir, config)), 2)
             self.assertLess((output_dir / "openvino_markov_head_model.bin").stat().st_size, 3 * table_bytes)
 
-            compiled_markov_head = core.compile_model(markov_head_ir, "CPU")
+            compiled_markov_head = core.compile_model(markov_head_ir, "CPU", F32_CONFIG)
             for prev_token_ids, block_lengths in ((torch.tensor([7]), [1]), (torch.tensor([0, 5, 9]), [4, 2])):
                 with self.subTest(num_prev_tokens=prev_token_ids.numel(), block_lengths=block_lengths):
                     markov_head_inputs = {
@@ -497,7 +499,8 @@ class DSparkExportTest(unittest.TestCase):
             markov_step_ir = self._keep_computation(markov_head_ir, ["prev_token_ids"], ["markov_bias"])
             self.assertFalse(any(op.get_type_name() == "TopK" for op in markov_step_ir.get_ops()))
             prev_token_ids = torch.tensor([0, 5, config.vocab_size - 1])
-            ov_bias = core.compile_model(markov_step_ir, "CPU")({"prev_token_ids": prev_token_ids.numpy()})[0]
+            compiled_markov_step = core.compile_model(markov_step_ir, "CPU", F32_CONFIG)
+            ov_bias = compiled_markov_step({"prev_token_ids": prev_token_ids.numpy()})[0]
             with torch.no_grad():
                 reference_bias = markov_head.markov_bias(prev_token_ids)
             torch.testing.assert_close(torch.from_numpy(np.array(ov_bias)), reference_bias, rtol=1e-4, atol=1e-4)
@@ -514,7 +517,7 @@ class DSparkExportTest(unittest.TestCase):
                     )
                     expected_top_k = top_k or MARKOV_HEAD_DEFAULT_TOP_K
                     self.assertEqual(lattice_ir.output("candidate_ids").partial_shape[1], expected_top_k)
-                    compiled_lattice = core.compile_model(lattice_ir, "CPU")
+                    compiled_lattice = core.compile_model(lattice_ir, "CPU", F32_CONFIG)
                     ov_outputs = compiled_lattice({name: value.numpy() for name, value in lattice_inputs.items()})
                     ov_candidate_ids = torch.from_numpy(np.array(ov_outputs[compiled_lattice.output("candidate_ids")]))
                     ov_edges = torch.from_numpy(np.array(ov_outputs[compiled_lattice.output("edge_scores")]))
@@ -591,7 +594,7 @@ class DSparkExportTest(unittest.TestCase):
 
             markov_w1 = model.markov_head.markov_w1.weight.float()
             markov_w2 = model.markov_head.markov_w2.weight.float()
-            compiled_markov_head = core.compile_model(markov_head_ir, "CPU")
+            compiled_markov_head = core.compile_model(markov_head_ir, "CPU", F32_CONFIG)
             lattice_inputs = self._packed_blocks([3], config.vocab_size)
             ov_outputs = compiled_markov_head(
                 {

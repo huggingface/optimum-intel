@@ -187,6 +187,8 @@ class OVCLIExportTestCase(unittest.TestCase):
             model_type != "ltx2.5"
             or (is_transformers_version(">=", "5.10.0") and is_diffusers_version(">=", "0.40.0"))
         )
+        # DSpark drafts describe their RoPE in the rope_parameters of transformers 5, which earlier versions misread.
+        and (model_type != "minicpmv4_7_dspark" or is_transformers_version(">=", "5"))
     ]
 
     # Add custom model types
@@ -1747,6 +1749,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             for component in ["text_encoder", "tokenizer", "unet", "vae_encoder", "vae_decoder"]:
                 self.assertIsNotNone(getattr(model, component))
 
+    @unittest.skipIf(is_transformers_version("<", "5"), reason="DSpark drafts require transformers>=5")
     def test_exporters_cli_dspark_markov_package(self):
         import openvino as ov
 
@@ -1808,6 +1811,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                     checkpoint_types = checkpoint_types or markov_types
                     self.assertEqual(markov_types, checkpoint_types)
 
+    @unittest.skipIf(is_transformers_version("<", "5"), reason="DSpark drafts require transformers>=5")
     def test_exporters_cli_dspark_does_not_export_tokenizer(self):
         draft_path = MODEL_NAMES["minicpmv4_7_dspark"]
         with TemporaryDirectory() as draft_with_tokenizer:
