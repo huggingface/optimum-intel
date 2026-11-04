@@ -136,6 +136,83 @@ class OVASRTest(unittest.TestCase):
 
     @pytest.mark.skipif(
         is_transformers_version("<", "4.57") or is_transformers_version(">=", "4.58"),
+        reason="Currently, we support Qwen3-ASR and FunASR only for transformers==4.57 since they are trust-remote-code models.",
+    )
+    def test_fun_asr_audio_features_truncated_to_prompt_length(self):
+        """Regression test for the FunASR OpenVINO decoder runaway / WER inflation.
+
+        The exported audio encoder emits one feature per frame, which can be longer than the
+        number of audio placeholder tokens the prompt reserves (``fake_token_len`` in native
+        FunASR). Native inference splices only the first ``fake_token_len`` adaptor frames into
+        the LLM input embeddings. The OpenVINO path used to instead *expand* the audio
+        placeholder run up to the full encoder length, feeding extra, misaligned audio frames
+        into the decoder. On some utterances this made greedy decoding fall into a repetition
+        loop (e.g. "shame on you ... on you on you ...") and inflated WER. The fix truncates the
+        encoder features to the prompt's placeholder count; this test asserts that invariant.
+        """
+        from optimum.intel.openvino import modeling_seq2seq
+
+        model_id = MODEL_NAMES["fun_asr"]
+        set_seed(SEED)
+        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
+            model_id, export=True, trust_remote_code=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+        audio_token_id = getattr(ov_model.config, "audio_token_id", 0)
+
+        audio_data, sample_rate = self._generate_audio_data()
+        inputs = ov_model.preprocess_input(audio_data, sample_rate, language="中文")
+        input_features = inputs["input_features"]
+
+        # Number of audio feature frames produced by the exported encoder.
+        encoder_outputs = ov_model.encoder(input_ids=input_features)
+        enc_hidden = (
+            encoder_outputs.last_hidden_state if hasattr(encoder_outputs, "last_hidden_state") else encoder_outputs[0]
+        )
+        num_encoder_features = enc_hidden.shape[1]
+        self.assertGreater(num_encoder_features, 1)
+
+        # Build a prompt whose audio placeholder run is shorter than the encoder output,
+        # reproducing the native situation where fake_token_len < encoder length.
+        target_audio_tokens = max(1, num_encoder_features // 2)
+        self.assertLess(target_audio_tokens, num_encoder_features)
+        decoder_input_ids = torch.tensor(
+            [[1, 2, 3] + [audio_token_id] * target_audio_tokens + [4, 5]], dtype=torch.long
+        )
+        decoder_attention_mask = torch.ones_like(decoder_input_ids)
+
+        # Capture what the FunASR forward passes down to the base seq2seq forward.
+        captured = {}
+        orig_forward = modeling_seq2seq.OVModelForSpeechSeq2Seq.forward
+
+        def capturing_forward(self, *args, **kwargs):
+            did = kwargs.get("decoder_input_ids")
+            enc_out = kwargs.get("encoder_outputs")
+            enc_h = enc_out.last_hidden_state if hasattr(enc_out, "last_hidden_state") else enc_out[0]
+            captured["audio_count"] = int((did == audio_token_id).sum(dim=-1).max())
+            captured["encoder_len"] = int(torch.as_tensor(enc_h).shape[1])
+            return orig_forward(self, *args, **kwargs)
+
+        modeling_seq2seq.OVModelForSpeechSeq2Seq.forward = capturing_forward
+        try:
+            ov_model.forward(
+                input_features=input_features,
+                decoder_input_ids=decoder_input_ids,
+                decoder_attention_mask=decoder_attention_mask,
+            )
+        finally:
+            modeling_seq2seq.OVModelForSpeechSeq2Seq.forward = orig_forward
+
+        # Native behavior: the placeholder run is kept as-is (NOT expanded to the encoder
+        # length) and the encoder features are truncated to match the placeholder count.
+        self.assertEqual(captured["audio_count"], target_audio_tokens)
+        self.assertEqual(captured["encoder_len"], target_audio_tokens)
+        self.assertNotEqual(captured["encoder_len"], num_encoder_features)
+
+        del ov_model
+        gc.collect()
+
+    @pytest.mark.skipif(
+        is_transformers_version("<", "4.57") or is_transformers_version(">=", "4.58"),
         reason="Currently, we support FunASR only for transformers==4.57 since it is a trust-remote-code model.",
     )
     def test_fun_asr_activations_scale_factor(self):
