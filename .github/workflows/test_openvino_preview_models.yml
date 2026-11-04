@@ -93,3 +93,8 @@ jobs:
         run: |
           uv pip install "transformers>=5.21"
           pytest tests/openvino/test_quantization.py tests/openvino/test_cb_compatible.py -k "minicpm_ocr" --durations=0
+
+      - name: MiniCPM-V-4.6 Validation
+        run: |
+          uv pip install "transformers>=5.7,<5.8"
+          pytest tests/openvino/${{ matrix.test-pattern }} -k "minicpmv4_6" --durations=0

@@ -609,6 +609,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "ministral3",
         "muse_glimmer",
         "deepseek_ocr2",
+        "minicpmv4_6",
         "minicpmv4_7",
         "minicpm_ocr",
     ]
@@ -685,6 +686,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "gemma4_unified",
             "gemma4_unified-it",
             "muse_glimmer",
+            "minicpmv4_6",
             "minicpmv4_7",
             "minicpm_ocr",
         ]:
