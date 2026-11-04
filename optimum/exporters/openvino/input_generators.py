@@ -235,10 +235,10 @@ class Eagle3DummyGenerator(DummyInputGenerator):
 
     SUPPORTED_INPUT_NAMES = (
         "hidden_states",
-        "prev_token_ids",
-        "draft_logits",
-        "anchor_token_ids",
-        "subsequence_begins",
+        "prev_token_ids",  # previous tokens
+        "draft_logits",  # draft logits of all blocks
+        "anchor_token_ids",  # token before each block
+        "subsequence_begins",  # start row of each block
     )
 
     def __init__(

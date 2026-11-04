@@ -661,18 +661,19 @@ class DSparkMarkovHeadOpenVINOConfig(OpenVINOConfig):
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         return {
-            "prev_token_ids": {0: "num_prev_tokens"},
-            "draft_logits": {0: "num_draft_rows"},
-            "anchor_token_ids": {0: "num_draft_blocks"},
+            "prev_token_ids": {0: "num_prev_tokens"},  # previous tokens
+            "draft_logits": {0: "num_draft_rows"},  # draft logits of all blocks
+            "anchor_token_ids": {0: "num_draft_blocks"},  # token before each block
+            # start row of each block, so that blocks of different lengths can be scored in one call
             "subsequence_begins": {0: "num_draft_blocks + 1"},
         }
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
         return {
-            "markov_bias": {0: "num_prev_tokens"},
-            "edge_scores": {0: "num_draft_rows"},
-            "candidate_ids": {0: "num_draft_rows"},
+            "markov_bias": {0: "num_prev_tokens"},  # logit bias for each previous token
+            "edge_scores": {0: "num_draft_rows"},  # candidate scores given the previous row's candidates
+            "candidate_ids": {0: "num_draft_rows"},  # Top-K candidate tokens of each row
         }
 
 
