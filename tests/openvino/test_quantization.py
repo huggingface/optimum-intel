@@ -1329,7 +1329,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 OVLTX2Pipeline,
                 "ltx2.5",
                 8,
-                _DEFAULT_8BIT_WQ_CONFIGS["Lightricks/LTX-2.5-Diffusers"],
+                _DEFAULT_8BIT_WQ_CONFIGS_FOR_OLDER_NNCF["Lightricks/LTX-2.5-Diffusers"],
                 {
                     "transformer": {"int8": 192},
                     "text_encoder": {"int8": 28},
