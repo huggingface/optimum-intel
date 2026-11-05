@@ -217,7 +217,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "qwen2_moe": 4,
         "arctic": 4,
         "phi3": 2,
-        "gemma2": 4,
+        "gemma2": 0 if is_transformers_version(">=", "5.21") else 4,
         "exaone": 8,
         "exaone4": 1,
         "granite": 6,

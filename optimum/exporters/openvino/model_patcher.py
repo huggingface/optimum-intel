@@ -5679,11 +5679,15 @@ class SanaTextEncoderModelPatcher(ModelPatcher):
         super().__enter__()
 
         self._model.config._orig_attn_implementation = self._model.config._attn_implementation
-        self._model.config._attn_implementation = "sdpa"
+        # gemma2 does not support sdpa since transformers 5.21
+        self._use_sdpa = is_transformers_version("<", "5.21")
+        if self._use_sdpa:
+            self._model.config._attn_implementation = "sdpa"
 
         # starting from 4.53, we get unmatching outputs if we use the boolean mask
         # TODO: This is an openvino issue (inconsistency between boolean and float masks)
-        ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
+        if self._use_sdpa:
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -5692,7 +5696,8 @@ class SanaTextEncoderModelPatcher(ModelPatcher):
         del self._model.config._orig_attn_implementation
 
         # remove the eager_mask_without_vmap from the ALL_MASK_ATTENTION_FUNCTIONS
-        ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
+        if self._use_sdpa:
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
 
 
 class MiniCPMModelPatcher(OVDecoderModelPatcher):
