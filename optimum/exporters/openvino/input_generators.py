@@ -2091,10 +2091,11 @@ class Lfm2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         return past_key_values
 
 
-class Lfm3DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
+class DummyLfm3TextInputGenerator(DummyPastKeyValuesGenerator):
     """
-    Generates dummy cache_params inputs for LFM3 architectures: one conv state per `conv` layer followed by
-    a key/value pair per attention layer (both `full_attention` and `sliding_attention` layers keep a full KV cache).
+    Generates the `cache_params` of the LFM3 language model, also the one of LFM3-VL and LFM3-Omni: one conv state per
+    `conv` layer followed by a key/value pair per attention layer (`full_attention` and `sliding_attention` layers
+    both keep a full KV cache).
     """
 
     SUPPORTED_INPUT_NAMES = ("cache_params",)
@@ -2136,13 +2137,18 @@ class Lfm3DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         return past_key_values
 
 
-class DummyLfm3VlVisionInputGenerator(DummyInputGenerator):
+class DummyLfm3VlInputGenerator(DummyInputGenerator):
     """
-    Generates LFM3-VL vision encoder inputs: `pixel_values` of shape (num_images, grid_height, grid_width, patch_dim),
-    i.e. Qwen-style flattened patches rearranged to raster order, one 2D patch grid per temporal patch.
+    Generates the `pixel_values` of the LFM3-VL and LFM3-Omni vision encoder, of shape (num_images, grid_height,
+    grid_width, patch_dim): Qwen-style flattened patches in raster order, one 2D patch grid per temporal patch.
     """
 
     SUPPORTED_INPUT_NAMES = ("pixel_values",)
+
+    # The grid size in merge blocks, so that it is divisible by the merge size. Any size works, height != width keeps
+    # the two axes from being mixed up in the traced graph.
+    GRID_HEIGHT_IN_MERGE_BLOCKS = 4
+    GRID_WIDTH_IN_MERGE_BLOCKS = 6
 
     def __init__(self, task: str, normalized_config: NormalizedVisionConfig, batch_size: int = 2, **kwargs):
         self.task = task
@@ -2150,65 +2156,63 @@ class DummyLfm3VlVisionInputGenerator(DummyInputGenerator):
         config = normalized_config.config
         vision_config = getattr(config, "vision_config", None)
         if vision_config is not None:
-            # the released LFM3-VL keeps the vision settings in a nested vision_config
-            patch_dim = vision_config.in_channels * vision_config.temporal_patch_size * vision_config.patch_size**2
+            self.patch_dim = (
+                vision_config.in_channels * vision_config.temporal_patch_size * vision_config.patch_size**2
+            )
             merge_size = config.downsample_factor
         else:
-            patch_dim, merge_size = config.vision_patch_dim, config.vision_spatial_merge_size
-        self.patch_dim = patch_dim
-        # the patch grid must be divisible by the spatial merge size
-        self.grid_size = 4 * merge_size
+            # the LFM3-VL partner checkpoint (lfm3-vl-1.9b-rl) keeps the vision settings in its flat config
+            self.patch_dim = config.vision_patch_dim
+            merge_size = config.vision_spatial_merge_size
+        self.grid_height = self.GRID_HEIGHT_IN_MERGE_BLOCKS * merge_size
+        self.grid_width = self.GRID_WIDTH_IN_MERGE_BLOCKS * merge_size
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        shape = [self.batch_size, self.grid_size, self.grid_size + 2 * 2, self.patch_dim]
+        shape = [self.batch_size, self.grid_height, self.grid_width, self.patch_dim]
         return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
 
 
-class DummyLfm3OmniInputGenerator(DummyInputGenerator):
+class DummyLfm3AudioInputGenerator(DummyInputGenerator):
     """
-    Generates the inputs of the LFM3-Omni submodels other than the language model: the vision encoder
-    (`pixel_values`, as for LFM3-VL), the speech encoder (`input_features`), the speech frame embeddings and the depth
-    decoder (`codes`, `hidden_states`, `masked`) and the codec decoder (`audio_codes`).
+    Generates the inputs of the LFM3-Omni speech submodels: the speech encoder (`input_features`), the speech frame
+    embeddings and the depth decoder (`codes`, `hidden_states`, `masked`) and the codec decoder (`audio_codes`).
     """
 
-    SUPPORTED_INPUT_NAMES = ("pixel_values", "input_features", "codes", "hidden_states", "masked", "audio_codes")
+    SUPPORTED_INPUT_NAMES = ("input_features", "codes", "hidden_states", "masked", "audio_codes")
+
+    # The speech encoder and the codec decoder are run per clip. Any length works; the number of log-mel frames is not
+    # a multiple of the stride (8) of the speech encoder downsampler.
+    NUM_CLIPS = 1
+    NUM_MEL_FRAMES = 59
+    NUM_SPEECH_FRAMES = 5
 
     def __init__(self, task: str, normalized_config: NormalizedVisionConfig, batch_size: int = 2, **kwargs):
-        config = normalized_config.config
         self.task = task
         self.batch_size = batch_size
-        vision_config = config.vision_config
-        self.patch_dim = vision_config.in_channels * vision_config.temporal_patch_size * vision_config.patch_size**2
-        # the patch grid must be divisible by the projector downsample factor
-        self.grid_size = 4 * config.downsample_factor
+        config = normalized_config.config
         self.num_mel_bins = config.audio_encoder_config.num_mel_bins
         self.hidden_size = config.text_config.hidden_size
         self.num_codebooks = config.num_codebooks
-        # the last code of every codebook is the end-of-speech code, the codec decodes only the others
         self.codebook_size = config.codebook_size
+        self.audio_eos_code = config.audio_eos_code
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        if input_name == "pixel_values":
-            shape = [self.batch_size, self.grid_size, self.grid_size + 2 * 2, self.patch_dim]
-            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
         if input_name == "input_features":
-            # the clip length is not a multiple of the stride 8 of the downsampler
-            shape = [1, self.num_mel_bins, 8 * 7 + 3]
+            shape = [self.NUM_CLIPS, self.num_mel_bins, self.NUM_MEL_FRAMES]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "hidden_states":
+            shape = [self.batch_size, self.hidden_size]
             return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
         if input_name == "codes":
-            shape = [self.batch_size + 1, self.num_codebooks]
+            shape = [self.batch_size, self.num_codebooks]
             return self.random_int_tensor(shape, max_value=self.codebook_size, framework=framework, dtype=int_dtype)
-        if input_name == "hidden_states":
-            shape = [self.batch_size + 1, self.hidden_size]
-            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
         if input_name == "masked":
-            shape = [self.batch_size + 1, self.num_codebooks]
-            return self.random_int_tensor(shape, max_value=2, framework=framework, dtype="int64").bool()
+            # the first pass of the depth decoder: all the codebooks of the frame are hidden
+            return torch.ones((self.batch_size, self.num_codebooks), dtype=torch.bool)
         if input_name == "audio_codes":
-            shape = [1, self.num_codebooks, 5]
-            return self.random_int_tensor(
-                shape, max_value=self.codebook_size - 1, framework=framework, dtype=int_dtype
-            )
+            # the end-of-speech code is never passed to the codec
+            shape = [self.NUM_CLIPS, self.num_codebooks, self.NUM_SPEECH_FRAMES]
+            return self.random_int_tensor(shape, max_value=self.audio_eos_code, framework=framework, dtype=int_dtype)
         raise ValueError(f"Unsupported input {input_name} for {self.__class__.__name__}")
 
 

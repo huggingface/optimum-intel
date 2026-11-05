@@ -52,8 +52,9 @@ from optimum.exporters.openvino.input_generators import (
     DummyGemma4UnifiedVisionInputGenerator,
     DummyGemma4VisionInputGenerator,
     DummyKokoroInputGenerator,
-    DummyLfm3OmniInputGenerator,
-    DummyLfm3VlVisionInputGenerator,
+    DummyLfm3AudioInputGenerator,
+    DummyLfm3TextInputGenerator,
+    DummyLfm3VlInputGenerator,
     DummyLLavaMultiModalProjectorInputGenerator,
     DummyMiniCPMV4_7LMInputGenerator,
     DummyMiniCPMV4_7VisionInputGenerator,
@@ -102,7 +103,6 @@ from optimum.exporters.openvino.input_generators import (
     Gemma4DummyPastKeyValuesGenerator,
     GPTBigCodeDummyPastKeyValuesGenerator,
     Lfm2DummyPastKeyValuesGenerator,
-    Lfm3DummyPastKeyValuesGenerator,
     LTX2AudioVaeDecoderDummyInputGenerator,
     LTX2ConnectorsDummyInputGenerator,
     LTX2TransformerDummyInputGenerator,
@@ -7718,8 +7718,8 @@ class LFM3OpenVINOConfig(LFM2OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "5.12.0"
     MAX_TRANSFORMERS_VERSION = None
     _MODEL_PATCHER = Lfm3ModelPatcher
-    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Lfm3DummyPastKeyValuesGenerator)
-    DUMMY_PKV_GENERATOR_CLASS = Lfm3DummyPastKeyValuesGenerator
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, DummyLfm3TextInputGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = DummyLfm3TextInputGenerator
 
     def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
         if direction not in ["inputs", "outputs"]:
@@ -7778,7 +7778,7 @@ class LFM3OpenVINOConfig(LFM2OpenVINOConfig):
 class LFM3VlOpenVINOConfig(BaseVLMOpenVINOConfig):
     # LFM3-VL is available as remote code only (LiquidAI/lfm3-vl-1.9b-rl), validated with transformers 5.20
     MIN_TRANSFORMERS_VERSION = "5.12.0"
-    DUMMY_INPUT_GENERATOR_CLASSES = (DummyLfm3VlVisionInputGenerator,)
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyLfm3VlInputGenerator,)
 
     def __init__(
         self,
@@ -7883,7 +7883,7 @@ class LFM3OmniOpenVINOConfig(BaseVLMOpenVINOConfig):
     # LFM3-Omni is available as remote code only (LiquidAI/LFM3-Omni-2.2B), validated with transformers 5.20
     MIN_TRANSFORMERS_VERSION = "5.12.0"
     SUPPORTED_BEHAVIORS = [behavior.value for behavior in Lfm3OmniConfigBehavior]
-    DUMMY_INPUT_GENERATOR_CLASSES = (DummyLfm3OmniInputGenerator,)
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyLfm3VlInputGenerator, DummyLfm3AudioInputGenerator)
 
     _INPUTS = {
         Lfm3OmniConfigBehavior.VISION_EMBEDDINGS: {
