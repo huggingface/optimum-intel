@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
+from transformers.dynamic_module_utils import get_class_from_dynamic_module
 from transformers.utils import is_torch_available
 
 from openvino import Core, Model, Type, save_model
@@ -560,6 +561,13 @@ def main_export(
             if dtype in [torch.float16, torch.bfloat16]:
                 patch_16bit = True
             loading_kwargs["torch_dtype"] = dtype
+            if getattr(config, "model_type", "") == "minicpm5_moe" and trust_remote_code:
+                # The f32 `e_score_correction_bias` of the router has values like 255.35: bf16 rounds them all to 255,
+                # which changes the experts selected for a token
+                model_class = get_class_from_dynamic_module(
+                    config.auto_map["AutoModelForCausalLM"], model_name_or_path
+                )
+                model_class._keep_in_fp32_modules_strict = ["gate"]
         # Patch the modules to export of GPTQ models w/o GPU
         if do_quant_patching:
             orig_cuda_check = torch.cuda.is_available
