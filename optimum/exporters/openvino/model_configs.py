@@ -7714,9 +7714,9 @@ class LFM2MoeOpenVINOConfig(LFM2OpenVINOConfig):
     library_name="transformers",
 )
 class LFM3OpenVINOConfig(LFM2OpenVINOConfig):
-    # LFM3 is available as remote code only (LiquidAI/LFM3-1.7B-RL), validated with transformers 5.20
+    # the LFM3 remote code (LiquidAI/LFM3-1.7B) supports this transformers version only
     MIN_TRANSFORMERS_VERSION = "5.12.0"
-    MAX_TRANSFORMERS_VERSION = None
+    MAX_TRANSFORMERS_VERSION = "5.12.0"
     _MODEL_PATCHER = Lfm3ModelPatcher
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Lfm3DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = Lfm3DummyPastKeyValuesGenerator
@@ -7776,8 +7776,9 @@ class LFM3OpenVINOConfig(LFM2OpenVINOConfig):
 
 @register_in_tasks_manager("lfm3_vl", *["image-text-to-text"], library_name="transformers")
 class LFM3VlOpenVINOConfig(BaseVLMOpenVINOConfig):
-    # LFM3-VL is available as remote code only (LiquidAI/lfm3-vl-1.9b-rl), validated with transformers 5.20
-    MIN_TRANSFORMERS_VERSION = "5.12.0"
+    # the LFM3-VL remote code (LiquidAI/LFM3-VL-2B) supports this transformers version only
+    MIN_TRANSFORMERS_VERSION = "5.20.0"
+    MAX_TRANSFORMERS_VERSION = "5.20.0"
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyLfm3VlInputGenerator,)
 
     def __init__(
@@ -7880,8 +7881,9 @@ class Lfm3OmniLMConfigHelper(LMInputEmbedsConfigHelper):
 
 @register_in_tasks_manager("lfm3_omni", *["image-text-to-text"], library_name="transformers")
 class LFM3OmniOpenVINOConfig(BaseVLMOpenVINOConfig):
-    # LFM3-Omni is available as remote code only (LiquidAI/LFM3-Omni-2.2B), validated with transformers 5.20
-    MIN_TRANSFORMERS_VERSION = "5.12.0"
+    # the LFM3-Omni remote code (LiquidAI/LFM3-Omni-2.2B) supports this transformers version only
+    MIN_TRANSFORMERS_VERSION = "5.20.0"
+    MAX_TRANSFORMERS_VERSION = "5.20.0"
     SUPPORTED_BEHAVIORS = [behavior.value for behavior in Lfm3OmniConfigBehavior]
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyLfm3VlInputGenerator, DummyLfm3AudioInputGenerator)
 

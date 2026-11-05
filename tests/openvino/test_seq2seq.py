@@ -1474,7 +1474,10 @@ class OVModelForMultimodalLMIntegrationTest(unittest.TestCase):
         del model
         gc.collect()
 
-    @pytest.mark.skipif(is_transformers_version("<", "5.12"), reason="lfm3_omni requires transformers >= 5.12")
+    @pytest.mark.skipif(
+        not is_model_type_transformers_compatible("lfm3_omni"),
+        reason="lfm3_omni is not supported by the installed transformers version",
+    )
     def test_lfm3_omni_return_audio(self):
         # any-to-any call as for Qwen3-Omni: text + image + audio in, (sequences, waveform) out
         model_id = MODEL_NAMES["lfm3_omni"]
