@@ -57,6 +57,7 @@ from transformers.utils import ModelOutput
 
 from optimum.exporters.openvino._ov_ops import convert_recurrent_attention_cell, convert_recurrent_selective_ssm_cell
 from optimum.exporters.openvino.base import OpenVINOConfig
+from optimum.exporters.openvino.dflash_utils import parse_and_validate_dspark_config
 from optimum.exporters.openvino.patching_utils import (
     ModelPatcher,
     eager_mask_without_vmap,
@@ -68,7 +69,7 @@ from optimum.exporters.openvino.utils import (
     GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE,
     GRANITEMOEHYBRID_MAMBA_LAYER_TYPE,
     LTX2_ROPE_INPUTS,
-    is_ltx2_3_transformer_config,
+    has_ltx2_extended_guidance_inputs,
 )
 from optimum.intel.utils.import_utils import (
     is_diffusers_version,
@@ -9433,7 +9434,12 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
         self.fc = nn.Linear(len(self.target_layer_ids) * config.hidden_size, config.hidden_size, bias=False)
         self.hidden_norm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.mask_token_id = dflash_config.get("mask_token_id", None)
+        self._init_dflash_variant(config)
         self.post_init()
+
+    def _init_dflash_variant(self, config) -> None:
+        # Called before post_init(), so that the modules a variant adds are weight-initialized and loaded too.
+        pass
 
     def forward(
         self,
@@ -9530,12 +9536,224 @@ class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
         )
 
 
+def _muse_glimmer_assistant_attention_mask(
+    query_states: torch.Tensor,
+    key_states: torch.Tensor,
+    sliding_window: Optional[int],
+    attention_mask: Optional[torch.Tensor],
+) -> Optional[torch.Tensor]:
+    """Bidirectional (optionally windowed) additive mask for the MuseGlimmer drafter.
+
+    Replaces the per-model ``mask_mapping``, which assumes keys are cache + context + window in every layer:
+    https://github.com/huggingface/transformers/blob/v5.15.1/src/transformers/models/muse_glimmer_assistant/modeling_muse_glimmer_assistant.py#L428-L441
+    The patched attention keeps the window out of the cache and trims sliding layers, so the mask is built per layer
+    from the actual ``key_states``. The window bound stays inclusive, as in transformers:
+    https://github.com/huggingface/transformers/blob/v5.15.1/src/transformers/masking_utils.py#L146-L149
+    """
+    q_len = query_states.shape[-2]
+    kv_len = key_states.shape[-2]
+    if attention_mask is not None:
+        # Keep the columns matching the (possibly trimmed) key set.
+        attention_mask = attention_mask[:, :, :, -kv_len:]
+    if sliding_window is None:
+        return attention_mask
+
+    dtype = query_states.dtype
+    device = query_states.device
+    query_positions = torch.arange(kv_len - q_len, kv_len, device=device)
+    key_positions = torch.arange(kv_len, device=device)
+    outside_window = (query_positions.reshape(-1, 1) - key_positions.reshape(1, -1)).abs() > sliding_window
+    window_mask = torch.zeros((q_len, kv_len), dtype=dtype, device=device)
+    window_mask = window_mask.masked_fill(outside_window, torch.finfo(dtype).min)
+    window_mask = window_mask[None, None, :, :].expand(query_states.shape[0], 1, -1, -1)
+
+    if attention_mask is None:
+        return window_mask
+    return attention_mask + window_mask
+
+
+def _muse_glimmer_assistant_attention_forward(
+    self,
+    hidden_states: torch.Tensor,
+    context_hidden_states: torch.Tensor,
+    position_embeddings: Tuple[torch.Tensor, torch.Tensor],
+    attention_mask: Optional[torch.Tensor] = None,
+    past_key_values: Optional[Cache] = None,
+    **kwargs,
+) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    """MuseGlimmer drafter attention that keeps only the target context in the KV cache.
+
+    The stock implementation appends the diffusion window to the cache alongside the
+    context and relies on ``DFlashCache.crop`` to evict it again on the next step. A
+    stateful OpenVINO model cannot roll its state back, so the window's K/V is instead
+    concatenated locally, after the cache update. The cache then only ever grows by the
+    accepted-token context, which is exactly the DFlash contract and needs no rollback.
+    """
+    from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+    from transformers.models.muse_glimmer_assistant.modeling_muse_glimmer_assistant import (
+        eager_attention_forward as muse_glimmer_assistant_eager_attention_forward,
+    )
+
+    bsz, q_len = hidden_states.shape[:-1]
+    ctx_len = context_hidden_states.shape[1]
+    hidden_shape = (bsz, q_len, -1, self.head_dim)
+    kv_hidden_shape = (bsz, ctx_len + q_len, -1, self.head_dim)
+
+    kv_hidden_states = torch.cat([context_hidden_states, hidden_states], dim=1)
+    query_states = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
+    key_states = self.k_proj(kv_hidden_states).view(kv_hidden_shape).transpose(1, 2)
+    value_states = self.v_proj(kv_hidden_states).view(kv_hidden_shape).transpose(1, 2)
+    query_states = self.q_norm(query_states)
+    key_states = self.k_norm(key_states)
+
+    # `cos`/`sin` span the context plus the diffusion window; the queries are the window,
+    # so they take the trailing positions while the keys take all of them.
+    cos, sin = position_embeddings
+    query_states, key_states = _dflash_apply_rotary_pos_emb(query_states, key_states, cos, sin)
+
+    context_key_states, block_key_states = key_states.split([ctx_len, q_len], dim=2)
+    context_value_states, block_value_states = value_states.split([ctx_len, q_len], dim=2)
+    if past_key_values is not None:
+        context_key_states, context_value_states = past_key_values.update(
+            context_key_states, context_value_states, self.layer_idx
+        )
+
+    sliding_window = self.sliding_window if self.is_sliding else None
+    if sliding_window is not None:
+        # A window query attends back at most `sliding_window` positions, so older
+        # context can never be reached. Trimming keeps the concat and SDPA O(window).
+        context_key_states = context_key_states[:, :, -sliding_window:, :]
+        context_value_states = context_value_states[:, :, -sliding_window:, :]
+
+    key_states = torch.cat([context_key_states, block_key_states], dim=2)
+    value_states = torch.cat([context_value_states, block_value_states], dim=2)
+    attention_mask = _muse_glimmer_assistant_attention_mask(query_states, key_states, sliding_window, attention_mask)
+
+    attention_interface = muse_glimmer_assistant_eager_attention_forward
+    attention_module = self
+    if self.config._attn_implementation != "eager":
+        attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
+        if self.config._attn_implementation == "sdpa" and self.num_key_value_groups > 1:
+            # Same reasoning as the Qwen3 DFlash path: re-pin the KV head count with a
+            # literal-dim Reshape so the GPU plugin still dispatches native-GQA SDPA.
+            key_states = key_states.reshape(bsz, self.num_key_value_heads, -1, self.head_dim)
+            value_states = value_states.reshape(bsz, self.num_key_value_heads, -1, self.head_dim)
+            key_states = _dflash_repeat_kv(key_states, self.num_key_value_groups)
+            value_states = _dflash_repeat_kv(value_states, self.num_key_value_groups)
+            attention_module = SimpleNamespace(is_causal=False)
+
+    attn_output, attn_weights = attention_interface(
+        attention_module,
+        query_states,
+        key_states,
+        value_states,
+        attention_mask,
+        dropout=0.0,
+        scaling=self.scaling,
+        sliding_window=None,
+        **kwargs,
+    )
+    attn_output = attn_output.reshape(bsz, q_len, -1).contiguous()
+    attn_output = self.o_proj(attn_output)
+    return attn_output, attn_weights
+
+
+@functools.lru_cache(maxsize=1)
+def get_muse_glimmer_assistant_draft_model_class():
+    """Build the MuseGlimmer DFlash drafter export class.
+
+    Defined lazily because ``muse_glimmer_assistant`` only exists in transformers >= 5.15,
+    while this module is imported eagerly.
+
+    The class exposes the same I/O contract as the Qwen3 DFlash export: the token
+    embedding and lm_head are intentionally absent, because the drafter borrows the
+    target's at runtime. ``inputs_embeds`` is the diffusion window (anchor token +
+    ``block_size - 1`` mask tokens) embedded with the target's *raw* lookup table, and
+    ``hidden_states`` is the target's hidden states at ``config.target_layer_ids``
+    concatenated on the last axis. The returned ``last_hidden_state`` drops the anchor
+    position so it aligns 1:1 with the drafted tokens the grafted lm_head will score.
+    """
+    from transformers.models.muse_glimmer_assistant.modeling_muse_glimmer_assistant import MuseGlimmerAssistantModel
+
+    class MuseGlimmerAssistantDFlashForCausalLM(MuseGlimmerAssistantModel):
+        def __init__(self, config):
+            super().__init__(config)
+            for layer in self.layers:
+                layer.self_attn.forward = types.MethodType(_muse_glimmer_assistant_attention_forward, layer.self_attn)
+
+        def forward(
+            self,
+            inputs_embeds: torch.FloatTensor,
+            hidden_states: torch.Tensor,
+            position_ids: torch.LongTensor,
+            attention_mask: Optional[torch.Tensor] = None,
+            past_key_values: Optional[Cache] = None,
+            use_cache: Optional[bool] = True,
+            **kwargs,
+        ) -> BaseModelOutputWithPast:
+            noise_states = inputs_embeds
+            context_hidden_states = self.encoder(hidden_states.to(noise_states.dtype))
+
+            if is_transformers_version("<", "5"):
+                past_key_values = DynamicCache.from_legacy_cache(past_key_values)
+            else:
+                past_key_values = DynamicCache(past_key_values)
+
+            if attention_mask is not None and attention_mask.dim() == 2:
+                attention_mask = (1.0 - attention_mask[:, None, None, :].to(dtype=noise_states.dtype)) * torch.finfo(
+                    noise_states.dtype
+                ).min
+
+            position_embeddings = self.rotary_emb(noise_states, position_ids)
+            for layer in self.layers:
+                noise_states = layer(
+                    hidden_states=noise_states,
+                    context_hidden_states=context_hidden_states,
+                    position_embeddings=position_embeddings,
+                    attention_mask=attention_mask,
+                    past_key_values=past_key_values,
+                    **kwargs,
+                )
+
+            # Drop the anchor position so the emitted states align with the drafted tokens.
+            last_hidden_state = self.norm(noise_states)[:, 1:, :]
+            return BaseModelOutputWithPast(
+                last_hidden_state=last_hidden_state,
+                past_key_values=postprocess_past_key_values(past_key_values),
+            )
+
+    return MuseGlimmerAssistantDFlashForCausalLM
+
+
+# adopted from https://github.com/deepseek-ai/DeepSpec/blob/main/deepspec/modeling/dspark/markov_head.py
+class DSparkVanillaMarkovHead(nn.Module):
+    """DeepSpec vanilla Markov head: the next-token logit bias is ``markov_w2(markov_w1[previous token])``."""
+
+    def __init__(self, vocab_size: int, markov_rank: int):
+        super().__init__()
+        self.markov_w1 = nn.Embedding(vocab_size, markov_rank)
+        self.markov_w2 = nn.Linear(markov_rank, vocab_size, bias=False)
+
+    def forward(self, prev_token_ids: torch.LongTensor) -> torch.Tensor:
+        return self.markov_w2(self.markov_w1(prev_token_ids))
+
+
 # adopted from https://github.com/deepseek-ai/DeepSpec/blob/main/deepspec/modeling/dspark/qwen3/modeling.py#L201
 class Qwen3DSparkForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
     """DeepSpec Qwen3 DSpark draft head exported as embeddings-in / hidden-states-out.
 
-    Unlike z-lab DFlash, DeepSpec does not prune the first (seed) hidden state.
+    Unlike z-lab DFlash, DeepSpec does not prune the first (seed) hidden state: the anchor row
+    predicts the first draft token. Drafts with ``sample_from_anchor=False`` use the DFlash
+    [anchor ; masks] layout and drop the anchor row. The Markov head, when present, is exported
+    as a separate model and is not part of this backbone graph.
     """
+
+    def _init_dflash_variant(self, config) -> None:
+        dspark_config = parse_and_validate_dspark_config(config)
+        self.sample_from_anchor = dspark_config.sample_from_anchor
+        self.markov_head = None
+        if dspark_config.markov_rank > 0:
+            self.markov_head = DSparkVanillaMarkovHead(config.vocab_size, dspark_config.markov_rank)
 
     def forward(
         self,
@@ -9557,14 +9775,103 @@ class Qwen3DSparkForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
             use_cache=use_cache,
             **kwargs,
         )
-        if logits_to_keep is None:
-            last_hidden_state = outputs.last_hidden_state
-        else:
-            last_hidden_state = outputs.last_hidden_state[:, -logits_to_keep:, :]
+        last_hidden_state = outputs.last_hidden_state
+        if not self.sample_from_anchor:
+            last_hidden_state = last_hidden_state[:, 1:, :]
+        if logits_to_keep is not None:
+            last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]
         return BaseModelOutputWithPast(
             last_hidden_state=last_hidden_state,
             past_key_values=outputs.past_key_values,
         )
+
+
+class MarkovHeadForExport(nn.Module):
+    """Export-only first-order Markov head with two independent computations over the same weights.
+
+    - Dense step: ``prev_token_ids`` [N] -> ``markov_bias`` [N, vocab], one full-vocabulary bias row per
+      previous token. The runtime calls it once per draft position.
+    - Top-K lattice: ``draft_logits`` [T, vocab], ``anchor_token_ids`` [N], ``subsequence_begins`` [N + 1] ->
+      ``candidate_ids`` [T, K], ``edge_scores`` [T, K, K]. The rows of N draft blocks are packed back to back,
+      and block n spans rows ``subsequence_begins[n]`` to ``subsequence_begins[n + 1]``. Every row keeps the
+      Top-K draft candidates. ``edge_scores[t, i, j]`` is the draft logit of candidate j plus the Markov
+      transition score from predecessor i to j, where the predecessors are the candidates of row t - 1, or
+      the block's anchor token on the first row of a block, so blocks never mix. ``subsequence_begins`` must
+      start at 0, increase strictly and end at T; the graph does not check it.
+
+    Subclasses define the head through ``markov_bias`` and ``transition_scores``. Runtimes keep the computation
+    they use and may replace the K of the TopK.
+    """
+
+    def __init__(self, top_k: int):
+        super().__init__()
+        self.top_k = top_k
+
+    def markov_bias(self, prev_token_ids: torch.LongTensor) -> torch.Tensor:
+        raise NotImplementedError
+
+    def transition_scores(self, predecessor_ids: torch.LongTensor, candidate_ids: torch.LongTensor) -> torch.Tensor:
+        """Maps predecessor and candidate ids [T, K] to FP32 transition scores [T, K, K]."""
+        raise NotImplementedError
+
+    @staticmethod
+    def predecessor_ids(
+        candidate_ids: torch.LongTensor, anchor_token_ids: torch.LongTensor, subsequence_begins: torch.LongTensor
+    ) -> torch.LongTensor:
+        block_begins = subsequence_begins[:-1]
+        is_block_begin = torch.zeros_like(candidate_ids[:, 0]).scatter(0, block_begins, torch.ones_like(block_begins))
+        row_anchor_ids = anchor_token_ids[torch.cumsum(is_block_begin, dim=0) - 1]
+        # Row 0 always begins a block, so its filler predecessors are never used.
+        previous_candidate_ids = torch.cat([candidate_ids[:1], candidate_ids[:-1]], dim=0)
+        # Shapes follow the TopK output rather than top_k, so the TopK is the only node that holds K.
+        return torch.where(is_block_begin.unsqueeze(-1) > 0, row_anchor_ids.unsqueeze(-1), previous_candidate_ids)
+
+    def score_candidates(
+        self,
+        draft_logits: torch.Tensor,
+        anchor_token_ids: torch.LongTensor,
+        subsequence_begins: torch.LongTensor,
+        top_k: int,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        unary_logits, candidate_ids = torch.topk(draft_logits, top_k, dim=-1)
+        candidate_ids = candidate_ids.to(torch.int64)
+        predecessor_ids = self.predecessor_ids(candidate_ids, anchor_token_ids, subsequence_begins)
+        edge_scores = self.transition_scores(predecessor_ids, candidate_ids)
+        edge_scores = edge_scores + unary_logits.to(torch.float32).unsqueeze(-2)
+        return edge_scores, candidate_ids
+
+    def forward(
+        self,
+        prev_token_ids: torch.LongTensor,
+        draft_logits: torch.Tensor,
+        anchor_token_ids: torch.LongTensor,
+        subsequence_begins: torch.LongTensor,
+    ) -> ModelOutput:
+        edge_scores, candidate_ids = self.score_candidates(
+            draft_logits, anchor_token_ids, subsequence_begins, self.top_k
+        )
+        return ModelOutput(
+            markov_bias=self.markov_bias(prev_token_ids), edge_scores=edge_scores, candidate_ids=candidate_ids
+        )
+
+
+class DSparkVanillaMarkovHeadForExport(MarkovHeadForExport):
+    """DSpark vanilla Markov head: the transition score from token i to token j is ``markov_w1[i] . markov_w2[j]``."""
+
+    def __init__(self, markov_head: DSparkVanillaMarkovHead, config: "Qwen3Config", top_k: int):
+        super().__init__(top_k)
+        self.markov_head = markov_head
+        self.config = config
+        # Weights must be read through modules: 16-bit export hides raw `.weight` tensors behind placeholders.
+        self.markov_w2_rows = nn.Embedding.from_pretrained(markov_head.markov_w2.weight, freeze=True)
+
+    def markov_bias(self, prev_token_ids: torch.LongTensor) -> torch.Tensor:
+        return self.markov_head(prev_token_ids).to(torch.float32)
+
+    def transition_scores(self, predecessor_ids: torch.LongTensor, candidate_ids: torch.LongTensor) -> torch.Tensor:
+        predecessor_codes = self.markov_head.markov_w1(predecessor_ids).to(torch.float32)
+        successor_rows = self.markov_w2_rows(candidate_ids).to(torch.float32)
+        return torch.matmul(predecessor_codes, successor_rows.transpose(-1, -2))
 
 
 # Patched implementation of the gated delta rule in recurrent form.
@@ -12062,10 +12369,11 @@ class LTX2TransformerPatcher(ModelPatcher):
                     _LTX2TraceSafeAttnProcessor(self._guidance_state, perturbable_attns.get(id(module)))
                 )
 
-        # Only LTX-2.3 exports the gate, so leave LTX-2.0's graph untouched. Modality isolation is
-        # architecturally available there too, but adding the input would change its published IRs.
+        # Only architectures carrying the extended-guidance flags export the gate (LTX-2.3, LTX-2.5),
+        # so leave LTX-2.0's graph untouched. Modality isolation is architecturally available there too,
+        # but adding the input would change its published IRs.
         self._orig_cross_modality_forwards = []
-        if is_ltx2_3_transformer_config(self._model.config):
+        if has_ltx2_extended_guidance_inputs(self._model.config):
             for block in transformer_blocks:
                 for attn_name in ("audio_to_video_attn", "video_to_audio_attn"):
                     attn = getattr(block, attn_name, None)
@@ -12285,18 +12593,51 @@ class LTX2VocoderPatcher(ModelPatcher):
 # The native MuseGlimmer model already applies rotary embeddings with real-valued
 # cos/sin tensors (``apply_rotary_pos_emb`` / ``apply_rotary_pos_emb_vision``), so
 # unlike the earlier flat trust_remote_code "onyx" model there is no complex-RoPE
-# to work around. The language patcher only rewires the forward to consume
-# ``inputs_embeds`` + a legacy KV tuple for the stateful text-generation export.
+# to work around. Text and vision embedders share a weightless RMS norm; export it
+# in the language model so MuseGlimmer Assistant can consume required raw embeddings.
+# The language patcher rewires the forward to consume ``inputs_embeds`` + a legacy
+# KV tuple for the stateful text-generation export.
 # The vision patcher reimplements the encoder over ``pixel_values`` plus the
 # grid-derived tensors (attention masks, window reordering, rotary position ids,
 # bilinear position gathers and the pixel-shuffle permutation) passed as inputs,
 # so the graph is resolution-agnostic and free of the untraceable grid ops.
 # ------------------------------------------------------------------------------
+class MuseGlimmerTextEmbeddingsModelPatcher(ModelPatcher):
+    """Export the raw token lookup.
+
+    The original ``MuseGlimmerTextNormedEmbedding.forward`` applies a weightless
+    RMS norm after the lookup. That step is moved into the language model, which
+    runs it after text and vision embeddings are merged.     The DFlash assistant
+    needs the same raw table:
+    https://github.com/huggingface/transformers/blob/v5.15.1/src/transformers/models/muse_glimmer/modeling_muse_glimmer.py#L436-L444
+    """
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any],
+    ):
+        model.__orig_forward = model.forward
+
+        def forward(self, input):
+            return torch.nn.Embedding.forward(self, input)
+
+        model.forward = types.MethodType(forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
 class MuseGlimmerVisionEmbeddingsModelPatcher(ModelPatcher):
     """Export the native MuseGlimmer vision stack as one resolution-agnostic graph.
 
-    Reimplements ``vision_tower`` -> ``vision_adapter`` -> ``vision_projection`` ->
-    ``perception_emb_norm`` consuming only ``pixel_values`` and ``image_grid_thw``.
+    Reimplements ``vision_tower`` -> ``vision_adapter`` -> ``vision_projection``
+    consuming only ``pixel_values`` and ``image_grid_thw``. The shared output RMS
+    normalization is exported in the language model after multimodal embeddings are
+    merged.
     All grid-derived tensors (attention masks, rotary position ids, bilinear
     position gathers, pixel-shuffle permutation) are recomputed *inside* the graph
     from ``image_grid_thw`` with pure tensor arithmetic, so no ``.tolist()`` /
@@ -12450,7 +12791,6 @@ class MuseGlimmerVisionEmbeddingsModelPatcher(ModelPatcher):
 
             vision_features = vision_model.vision_adapter(hidden_states)
             vision_features = vision_model.vision_projection(vision_features)
-            vision_features = vision_model.perception_emb_norm(vision_features)
             return {output_names[0]: vision_features}
 
         model.forward = types.MethodType(image_embed_forward, model)
@@ -12462,11 +12802,18 @@ class MuseGlimmerVisionEmbeddingsModelPatcher(ModelPatcher):
 
 
 class MuseGlimmerLanguageModelPatcher(OVDecoderModelPatcher):
-    """Patch the MuseGlimmer language model to consume ``inputs_embeds`` + a legacy
-    KV tuple for the stateful text-generation export (native real-valued RoPE)."""
+    """Export the MuseGlimmer language model with input RMS normalization.
+
+    The split text and vision IRs produce raw embeddings. Their shared, weightless
+    RMS normalization therefore belongs here, after the runtime merges modalities.
+    """
 
     def __init__(self, config, model, model_kwargs=None):
         model.__orig_forward = model.forward
+        try:
+            embedding_norm = model.model.get_input_embeddings().embed_norm
+        except AttributeError as error:
+            raise ValueError("MuseGlimmer language export requires the input embedding RMS normalization.") from error
 
         def forward_wrap(
             self,
@@ -12477,6 +12824,8 @@ class MuseGlimmerLanguageModelPatcher(OVDecoderModelPatcher):
             input_ids=None,
             use_cache=True,
         ):
+            if inputs_embeds is not None:
+                inputs_embeds = embedding_norm(inputs_embeds)
             if is_transformers_version("<", "5"):
                 new_past_key_values = DynamicCache.from_legacy_cache(past_key_values)
             else:

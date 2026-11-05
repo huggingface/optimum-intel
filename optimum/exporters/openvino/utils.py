@@ -121,7 +121,9 @@ def is_auto_compression_disabled(model: Any) -> bool:
     `_MAX_UNCOMPRESSED_SIZE`, so they would always be compressed, and int8 weights cost too much
     video quality for a silent default (measured on LTX-2.0: wwb similarity 0.80 for int8 against the
     fp32 reference). Compression is still applied when asked for explicitly via `--weight-format` /
-    `--quant-mode`.
+    `--quant-mode`, and to the submodels that have an entry in the int8 config registered for the
+    model in `_DEFAULT_8BIT_WQ_CONFIGS` (e.g. LTX-2.3), which is tuned to keep the quality, if the
+    installed NNCF version supports it.
 
     Both supported pipelines are listed explicitly: `LTX2ImageToVideoPipeline` does not subclass
     `LTX2Pipeline`, and they are the only two LTX-2 classes this exporter registers (see
@@ -139,13 +141,19 @@ def is_auto_compression_disabled(model: Any) -> bool:
     return isinstance(model, (LTX2Pipeline, LTX2ImageToVideoPipeline))
 
 
-def is_ltx2_3_transformer_config(config: Any) -> bool:
+def has_ltx2_extended_guidance_inputs(config: Any) -> bool:
     """
-    Whether `config` is an LTX-2.3 transformer config rather than an LTX-2.0 one, keyed on the two
-    config values 2.3 introduced. Absent means LTX-2.0, via the diffusers defaults.
+    Whether an LTX-2 transformer config takes the extended-guidance inputs (`cross_modality_gate` and
+    `stg_perturbation_mask`), keyed on the two config values LTX-2.3 introduced. Absent means LTX-2.0,
+    via the diffusers defaults.
 
-    Used to keep the IRs LTX-2.0 already exports byte-identical, not to gate a capability: both
-    architectures support modality isolation. STG is the one real capability gate and checks
+    True for LTX-2.3 *and* LTX-2.5: 2.5 sets `perturbed_attn: true` and `use_prompt_embeddings: false`,
+    so it satisfies both clauses and reuses the same graph. Named for the feature rather than a version
+    because it is not a version test -- a later checkpoint carrying these flags gets the same treatment
+    without touching this function.
+
+    Used to keep the IRs LTX-2.0 already exports byte-identical, not to gate a capability: every
+    architecture supports modality isolation. STG is the one real capability gate and checks
     `perturbed_attn` on its own.
     """
     return getattr(config, "perturbed_attn", False) or not getattr(config, "use_prompt_embeddings", True)

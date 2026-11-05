@@ -23,7 +23,7 @@ from optimum.exporters.openvino.utils import (
     LTX2_ROPE_INPUTS,
     build_ltx2_rope_modules,
     compute_ltx2_rope_inputs,
-    is_ltx2_3_transformer_config,
+    has_ltx2_extended_guidance_inputs,
 )
 from optimum.intel.utils.import_utils import is_diffusers_version
 from optimum.utils import (
@@ -228,9 +228,18 @@ class Eagle3DummyGenerator(DummyInputGenerator):
     This generator produces synthetic `hidden_states` tensors that mimic the
     intermediate hidden-state outputs of a *main (target) model*, which are
     required by the Eagle-3 draft model during speculative decoding.
+
+    It also produces the inputs of the DSpark Markov head model: the dense step and the Top-K lattice
+    over `batch_size` draft blocks of `sequence_length` rows each, packed back to back.
     """
 
-    SUPPORTED_INPUT_NAMES = ("hidden_states",)
+    SUPPORTED_INPUT_NAMES = (
+        "hidden_states",
+        "prev_token_ids",  # previous tokens
+        "draft_logits",  # draft logits of all blocks
+        "anchor_token_ids",  # token before each block
+        "subsequence_begins",  # start row of each block
+    )
 
     def __init__(
         self,
@@ -243,10 +252,20 @@ class Eagle3DummyGenerator(DummyInputGenerator):
         self.batch_size = batch_size
         self.sequence_length = sequence_length
         self.hidden_size = normalized_config.hidden_size
+        self.vocab_size = getattr(normalized_config, "vocab_size", None)
         dflash_config = getattr(normalized_config.config, "dflash_config", None) or normalized_config.config.to_dict()
         self.num_hidden_state_layers = len(dflash_config.get("target_layer_ids", [])) or 3
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name in ("prev_token_ids", "anchor_token_ids"):
+            return self.random_int_tensor(
+                (self.batch_size,), max_value=self.vocab_size, framework=framework, dtype=int_dtype
+            )
+        if input_name == "draft_logits":
+            shape = (self.batch_size * self.sequence_length, self.vocab_size)
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "subsequence_begins":
+            return torch.arange(self.batch_size + 1, dtype=DTYPE_MAPPER.pt(int_dtype)) * self.sequence_length
         # hidden_states is provided as a concatenation of hidden-layer outputs from the main model
         shape = (
             self.batch_size,
@@ -1095,7 +1114,7 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
                 normalized_config.config, "audio_cross_attention_dim", self.cross_attention_dim
             )
 
-        self.is_ltx2_3 = is_ltx2_3_transformer_config(normalized_config.config)
+        self.has_extended_guidance_inputs = has_ltx2_extended_guidance_inputs(normalized_config.config)
         self.rope_modules = build_ltx2_rope_modules(normalized_config.config)
         self._rope_inputs = None
 
@@ -1133,7 +1152,8 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
         if input_name == "encoder_attention_mask":
             # LTX-2.0 exported this as i64, from the generic seq2seq generator this one replaced.
             # Keeping the dtype avoids changing its IRs; the mask is only ever used arithmetically.
-            if not self.is_ltx2_3:
+            # Later architectures (2.3, 2.5) get f32.
+            if not self.has_extended_guidance_inputs:
                 return self.random_mask_tensor(
                     [self.batch_size, self.encoder_seq_length], framework=framework, dtype=int_dtype
                 )
@@ -1221,6 +1241,33 @@ class LTX2ConnectorsDummyInputGenerator(DummyVisionInputGenerator):
             else:
                 shape = [self.batch_size, self.sequence_length, heads * head_dim]
             return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class LTX2DurationHeadDummyInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("video_tokens", "audio_tokens")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, **kwargs)
+        self.sequence_length = sequence_length
+        # The head is fed the connector outputs verbatim, so these widths are pinned by the input
+        # projections' weights: no other width will run.
+        config = normalized_config.config
+        self.video_channels = config.video_cross_attention_dim
+        self.audio_channels = config.audio_cross_attention_dim
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "video_tokens":
+            return self.random_float_tensor([self.batch_size, self.sequence_length, self.video_channels])
+        if input_name == "audio_tokens":
+            return self.random_float_tensor([self.batch_size, self.sequence_length, self.audio_channels])
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
 

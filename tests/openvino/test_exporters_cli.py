@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import json
+import shutil
 import subprocess
 import unittest
 from pathlib import Path
@@ -28,6 +29,7 @@ from transformers import (
     PreTrainedTokenizerFast,
     T5Tokenizer,
 )
+from transformers.utils import cached_file
 from utils_tests import (
     _ARCHITECTURES_TO_EXPECTED_INT8,
     HUB_MODEL_NAMES,
@@ -88,6 +90,7 @@ from optimum.intel.openvino.utils import (
 from optimum.intel.utils.import_utils import (
     compare_versions,
     is_compressed_tensors_available,
+    is_diffusers_version,
     is_openvino_tokenizers_available,
     is_openvino_version,
     is_qwen_tts_available,
@@ -139,6 +142,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("image-to-video", "ltx2"),
         ("text-to-video", "ltx2.3"),
         ("image-to-video", "ltx2.3"),
+        ("text-to-video", "ltx2.5"),
+        ("image-to-video", "ltx2.5"),
         ("feature-extraction", "sam"),
         ("text-to-audio", "speecht5"),
         ("zero-shot-image-classification", "clip"),
@@ -154,7 +159,9 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("feature-extraction", "qwen3_vl_embedding"),
         ("text-generation-with-past", "qwen3_eagle3"),
         ("text-generation-with-past", "qwen3_dflash"),
+        ("text-generation-with-past", "muse_glimmer_assistant"),
         ("text-generation-with-past", "qwen3_deepspec_dflash"),
+        ("text-generation-with-past", "minicpmv4_7_dspark"),
         ("text-generation-with-past", "zamba2"),
         ("text-generation-with-past", "exaone4"),
         ("text-generation-with-past", "ouro"),
@@ -178,6 +185,12 @@ class OVCLIExportTestCase(unittest.TestCase):
         for task, model_type in SUPPORTED_ARCHITECTURES
         if TEST_NAME_TO_MODEL_TYPE.get(model_type, model_type)
         in get_supported_model_for_library("transformers") | get_supported_model_for_library("diffusers")
+        and (
+            model_type != "ltx2.5"
+            or (is_transformers_version(">=", "5.10.0") and is_diffusers_version(">=", "0.40.0"))
+        )
+        # DSpark drafts describe their RoPE in the rope_parameters of transformers 5, which earlier versions misread.
+        and (model_type != "minicpmv4_7_dspark" or is_transformers_version(">=", "5"))
     ]
 
     # Add custom model types
@@ -223,6 +236,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "ltx-video-0.9.5": 2,
         "ltx2": 2,
         "ltx2.3": 2,
+        "ltx2.5": 4,  # the text encoder's tokenizer plus the prompt enhancer's processor tokenizer
         "sam": 0,  # no tokenizer
         "speecht5": 2,
         "kokoro": 0,  # uses g2p, no tokenizer
@@ -1317,7 +1331,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             expected_int8 = {k: {"int8": v} for k, v in expected_int8.items()}
             if task.startswith("text2text-generation") and (not task.endswith("with-past") or model.decoder.stateful):
                 del expected_int8["decoder_with_past"]
-            if task == "text-to-video" and model_type.startswith("ltx2"):
+            if task == "text-to-video" and model_type in ["ltx2", "ltx2.3", "ltx2.5"]:
                 # Only the LTX-2 image-to-video pipeline loads a VAE encoder, to encode the input image.
                 del expected_int8["vae_encoder"]
             check_compression_state_per_model(self, model.ov_models, expected_int8)
@@ -1737,3 +1751,96 @@ class OVCLIExportTestCase(unittest.TestCase):
             model = eval(_HEAD_TO_AUTOMODELS["stable-diffusion"]).from_pretrained(tmpdir, compile=False)
             for component in ["text_encoder", "tokenizer", "unet", "vae_encoder", "vae_decoder"]:
                 self.assertIsNotNone(getattr(model, component))
+
+    @unittest.skipIf(is_transformers_version("<", "5"), reason="DSpark drafts require transformers>=5")
+    def test_exporters_cli_dspark_markov_package(self):
+        import openvino as ov
+
+        def markov_table_types(model, config):
+            return {
+                op.get_output_element_type(0)
+                for op in model.get_ops()
+                if op.get_type_name() == "Constant"
+                and list(op.get_output_shape(0)) == [config["vocab_size"], config["markov_rank"]]
+            }
+
+        model_path = MODEL_NAMES["minicpmv4_7_dspark"]
+        config = json.loads(Path(cached_file(model_path, "config.json")).read_text())
+        float_types = {ov.Type.f32, ov.Type.bf16, ov.Type.f16}
+        cases = (
+            [],
+            ["--weight-format", "int8"],
+            ["--weight-format", "int4", "--group-size", "16"],
+            ["--weight-format", "fp16"],
+        )
+        checkpoint_types = None
+        for weight_args in cases:
+            with self.subTest(weight_args=weight_args), TemporaryDirectory() as tmpdir:
+                command = [
+                    "optimum-cli",
+                    "export",
+                    "openvino",
+                    "--model",
+                    model_path,
+                    "--task",
+                    "text-generation-with-past",
+                    "--trust-remote-code",
+                    *weight_args,
+                ]
+                subprocess.run([*command, tmpdir], check=True)
+
+                core = ov.Core()
+                draft_model = core.read_model(Path(tmpdir) / "openvino_model.xml")
+                self.assertEqual(draft_model.get_rt_info()["dflash"]["markov_rank"].value, "8")
+                weight_format = weight_args[1] if weight_args else None
+                self.assertEqual(draft_model.has_rt_info(["nncf"]), weight_format in ("int8", "int4"))
+
+                self.assertEqual(
+                    sorted(path.name for path in Path(tmpdir).glob("openvino_*model.xml")),
+                    ["openvino_markov_head_model.xml", "openvino_model.xml"],
+                )
+                markov_model = core.read_model(Path(tmpdir) / "openvino_markov_head_model.xml")
+                markov_rt_info = markov_model.get_rt_info()["dflash"]
+                self.assertEqual(markov_rt_info["interface"].value, "markov_head_v1")
+                self.assertEqual(markov_rt_info["top_k"].value, "64")
+                self.assertFalse(markov_model.has_rt_info(["runtime_options"]))
+                # The Markov head model is never weight-compressed; a floating-point weight format still applies.
+                self.assertFalse(markov_model.has_rt_info(["nncf"]))
+                markov_types = markov_table_types(markov_model, config)
+                if weight_format == "fp16":
+                    self.assertEqual(markov_types, {ov.Type.f16})
+                else:
+                    self.assertLessEqual(markov_types, float_types)
+                    checkpoint_types = checkpoint_types or markov_types
+                    self.assertEqual(markov_types, checkpoint_types)
+
+    @unittest.skipIf(is_transformers_version("<", "5"), reason="DSpark drafts require transformers>=5")
+    def test_exporters_cli_dspark_does_not_export_tokenizer(self):
+        draft_path = MODEL_NAMES["minicpmv4_7_dspark"]
+        with TemporaryDirectory() as draft_with_tokenizer:
+            # The published DSpark drafts have no tokenizer; this copy of the draft has the target's one.
+            for model_name_or_path, file_name in (
+                (draft_path, "config.json"),
+                (draft_path, "model.safetensors"),
+                (MODEL_NAMES["minicpmv4_7"], "tokenizer.json"),
+                (MODEL_NAMES["minicpmv4_7"], "tokenizer_config.json"),
+            ):
+                shutil.copy(cached_file(model_name_or_path, file_name), draft_with_tokenizer)
+            for with_tokenizer, model_path in ((False, draft_path), (True, draft_with_tokenizer)):
+                with self.subTest(with_tokenizer=with_tokenizer), TemporaryDirectory() as tmpdir:
+                    subprocess.run(
+                        [
+                            "optimum-cli",
+                            "export",
+                            "openvino",
+                            "--model",
+                            model_path,
+                            "--task",
+                            "text-generation-with-past",
+                            "--trust-remote-code",
+                            tmpdir,
+                        ],
+                        check=True,
+                    )
+                    self.assertTrue((Path(tmpdir) / "openvino_markov_head_model.xml").exists())
+                    self.assertEqual(sorted(path.name for path in Path(tmpdir).glob("*tokenizer*")), [])

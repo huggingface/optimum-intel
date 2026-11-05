@@ -27,8 +27,9 @@ from requests.exceptions import ConnectionError as RequestsConnectionError
 from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
 from transformers.utils import is_torch_available
 
-from openvino import Core, Type, save_model
+from openvino import Core, Model, Type, save_model
 from optimum.exporters.openvino.base import OpenVINOConfig
+from optimum.exporters.openvino.dflash_utils import DFLASH_ARCHITECTURES, DSPARK_ARCHITECTURES
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
     DIFFUSERS_IMPORT_ERROR,
@@ -176,6 +177,8 @@ def infer_task(
                     raise e
             else:
                 raise
+        if original_task == "auto" and (config.architectures or [None])[0] in _NATIVE_DRAFT_MODEL_CLASSES:
+            task = "text-generation-with-past"
         if hasattr(config, "export_model_type"):
             model_type = config.export_model_type
         else:
@@ -232,9 +235,26 @@ def _ensure_qwen3_omni_rope_scaling(config):
 _CUSTOM_DRAFT_MODEL_MAP = {
     "LlamaForCausalLMEagle3": ("LlamaEagle3Model", "LlamaEagle3ForCausalLM"),
     "Eagle3LlamaForCausalLM": ("LlamaEagle3Model", "LlamaEagle3ForCausalLM"),
-    "DFlashDraftModel": ("Qwen3DFlashDraftModel", "Qwen3DFlashForCausalLM"),
-    "Qwen3DSparkModel": ("Qwen3DFlashDraftModel", "Qwen3DSparkForCausalLM"),
 }
+
+# Maps config.architectures[0] to the model_patcher export class of DFlash draft models, or to a
+# function building that class. They are loaded directly, so unlike `_CUSTOM_DRAFT_MODEL_MAP` they
+# need no `auto_map` indirection (and no `trust_remote_code`).
+_NATIVE_DRAFT_MODEL_CLASSES = {
+    "DFlashDraftModel": "Qwen3DFlashForCausalLM",
+    "Qwen3DSparkModel": "Qwen3DSparkForCausalLM",
+    "MuseGlimmerAssistantModel": "get_muse_glimmer_assistant_draft_model_class",
+}
+
+
+def load_native_draft_model(architecture: str, model_name_or_path: str, **kwargs):
+    from optimum.exporters.openvino import model_patcher
+
+    model_class = getattr(model_patcher, _NATIVE_DRAFT_MODEL_CLASSES[architecture])
+    # The MuseGlimmer drafter class is built lazily because it needs transformers >= 5.15.
+    if not isinstance(model_class, type):
+        model_class = model_class()
+    return model_class.from_pretrained(model_name_or_path, **kwargs)
 
 
 def update_config_for_custom_draft_model(config, auto_model, auto_model_for_causal_lm):
@@ -657,6 +677,21 @@ def main_export(
                 model = _SenseVoiceForCTC.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
             else:
                 model = _FunASRForSpeechSeq2Seq.from_pretrained(model_name_or_path, cache_dir=cache_dir, token=token)
+        elif (
+            library_name == "transformers"
+            and (getattr(config, "architectures", None) or [None])[0] in _NATIVE_DRAFT_MODEL_CLASSES
+        ):
+            model = load_native_draft_model(
+                config.architectures[0],
+                model_name_or_path,
+                subfolder=subfolder,
+                revision=revision,
+                cache_dir=cache_dir,
+                token=token,
+                local_files_only=local_files_only,
+                force_download=force_download,
+                **loading_kwargs,
+            )
         elif library_name == "qwen3_tts":
             # Without an explicit request the checkpoint's own precision is kept, so the IRs
             # come out at the precision the model was published in rather than upcast. A
@@ -731,6 +766,11 @@ def main_export(
         preprocessors = load_preprocessors(
             model_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code, model_type=model_type
         )
+        architectures = getattr(model.config, "architectures", None) or []
+        if architectures and architectures[0] in DFLASH_ARCHITECTURES | DSPARK_ARCHITECTURES:
+            # These drafts always run with the target model's tokenizer. Most are published without one, and
+            # transformers 5 then builds a placeholder tokenizer from the config.
+            preprocessors = [p for p in preprocessors if not isinstance(p, PreTrainedTokenizerBase)]
 
         submodel_paths = export_from_model(
             model=model,
@@ -762,7 +802,12 @@ def main_export(
         # TODO: Remove GPT-OSS workaround when possible
         quantization_config = None if ov_config is None else ov_config.quantization_config
         if not quantization_config or isinstance(quantization_config, _GPTOSSQuantizationConfig):
-            _apply_model_size_based_quantization(submodel_paths, ov_config, output, skip_auto_compression)
+            better_quality_config = (
+                _get_better_quality_config(model_name_or_path, skip_auto_compression) if ov_config is None else None
+            )
+            _apply_model_size_based_quantization(
+                submodel_paths, ov_config, output, skip_auto_compression, better_quality_config
+            )
     finally:
         # Unpatch modules after quantized model export
         if do_quant_patching:
@@ -826,6 +871,8 @@ def _main_quantize(
             `model_kwargs={"output_attentions": True}` is passed).
 
     """
+    from optimum.intel.openvino.configuration import OVWeightQuantizationConfig
+    from optimum.intel.openvino.modeling_dflash import is_dflash_draft_model
     from optimum.intel.openvino.utils import _HEAD_TO_AUTOMODELS
 
     # Step 0. Infer task and library name if needed
@@ -913,6 +960,16 @@ def _main_quantize(
     )
 
     # Step 3. Apply quantization and save the quantized model
+    if (
+        isinstance(quantization_config, OVWeightQuantizationConfig)
+        and quantization_config.bits == 4
+        and quantization_config.all_layers is None
+        and isinstance(getattr(model, "model", None), Model)
+        and is_dflash_draft_model(model.model)
+    ):
+        # DFlash drafts have no embeddings or lm_head, so NNCF's "last MatMul stays int8" rule would hit a decoder layer.
+        quantization_config = quantization_config.clone()
+        quantization_config.all_layers = True
     model._apply_quantization(
         quantization_config,
         compile_only=False,
@@ -1006,20 +1063,54 @@ def maybe_convert_tokenizers(library_name: str, output: Path, model=None, prepro
         logger.warning("Tokenizer won't be converted.")
 
 
+def _get_better_quality_config(model_name_or_path: str, skip_auto_compression: bool) -> Optional[Dict[str, Any]]:
+    """
+    Returns the config to compress the large submodels with when no weight format is given, instead of the generic
+    int8_asym one, which costs too much quality for the models excluded from the automatic int8 compression (LTX-2).
+    Only such models can have it: it is the int8 config registered for the model in `_DEFAULT_8BIT_WQ_CONFIGS`, which
+    is tuned to keep the quality. If the installed NNCF version does not support it, the model is not compressed and a
+    warning to install the latest NNCF version is printed.
+    """
+    if not skip_auto_compression:
+        return None
+
+    from optimum.intel.openvino.configuration import (
+        _DEFAULT_8BIT_WQ_CONFIGS,
+        _find_model_config,
+        _get_missing_nncf_version,
+    )
+
+    better_quality_config = _find_model_config(model_name_or_path, _DEFAULT_8BIT_WQ_CONFIGS)
+    missing_nncf_version = _get_missing_nncf_version(better_quality_config)
+    if missing_nncf_version is not None:
+        logger.warning(
+            "The model weights are not compressed, since the int8 config tuned to keep the quality of this model "
+            f"needs nncf>={missing_nncf_version}. With it, the large submodels of the model are compressed to int8 by "
+            "default, which roughly halves their size. Please install the latest nncf version, e.g. with "
+            "`pip install -U nncf`."
+        )
+        return None
+    return better_quality_config
+
+
 def _apply_model_size_based_quantization(
     submodel_paths: List[str],
     ov_config: "OVConfig",
     output: Union[str, Path],
     skip_auto_compression: bool = False,
+    better_quality_config: Optional[Dict[str, Any]] = None,
 ):
     """
     Apply weight-only quantization to int8_asym to submodels larger than 1B parameters.
 
     Models for which `is_auto_compression_disabled` holds are left uncompressed: they are large
     enough to always cross the threshold, but lose too much quality at int8 for that to be a silent
-    default. An explicitly requested weight format is unaffected -- it does not reach this branch.
+    default. If such a model has an int8 config registered in `_DEFAULT_8BIT_WQ_CONFIGS`, given as
+    `better_quality_config`, its submodels larger than 1B parameters that have an entry in it, matched by the
+    submodel directory name, are quantized with that entry, which is tuned to keep the quality.
+    An explicitly requested weight format is unaffected -- it does not reach this branch.
     """
-    if skip_auto_compression and ov_config is None:
+    if skip_auto_compression and ov_config is None and better_quality_config is None:
         logger.info(
             "Automatic int8 weight compression is skipped for this model. Export with "
             "`--weight-format int8` to compress the weights anyway."
@@ -1030,7 +1121,9 @@ def _apply_model_size_based_quantization(
     #   1. Create a OVPipelineQuantizationConfig based on each submodel size
     #   2. Run _main_quantize() with the created quantization config
     # TODO: Apply default int8 and ignored scope configs from configuration.py if matches
+    #       (not only for skip_auto_compressed models)
     for submodel_path in submodel_paths:
+        submodel_name = Path(submodel_path).parent.name  # the submodel directory of a diffusers pipeline
         submodel_path = Path(output) / submodel_path
 
         if (not submodel_path.is_file()) or (submodel_path.stat().st_size == 0):
@@ -1049,8 +1142,15 @@ def _apply_model_size_based_quantization(
                 del op
             if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
                 if is_nncf_available():
-                    quantization_config = {"bits": 8, "sym": False}
-                    logger.info("The model weights will be quantized to int8_asym.")
+                    if better_quality_config is None:
+                        quantization_config = {"bits": 8, "sym": False}
+                        logger.info("The model weights will be quantized to int8_asym.")
+                    else:
+                        quantization_config = better_quality_config.get("quantization_configs", {}).get(submodel_name)
+                        if quantization_config is not None:
+                            logger.info(
+                                f"The {submodel_name} weights will be quantized to int8 with config {quantization_config}."
+                            )
                 else:
                     logger.warning(
                         "The model will be converted with no weights quantization. Quantization of the weights to int8 "
