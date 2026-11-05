@@ -53,7 +53,6 @@ from optimum.exporters.openvino.input_generators import (
     DummyGemma4VisionInputGenerator,
     DummyKokoroInputGenerator,
     DummyLfm3AudioInputGenerator,
-    DummyLfm3TextInputGenerator,
     DummyLfm3VlInputGenerator,
     DummyLLavaMultiModalProjectorInputGenerator,
     DummyMiniCPMV4_7LMInputGenerator,
@@ -103,6 +102,7 @@ from optimum.exporters.openvino.input_generators import (
     Gemma4DummyPastKeyValuesGenerator,
     GPTBigCodeDummyPastKeyValuesGenerator,
     Lfm2DummyPastKeyValuesGenerator,
+    Lfm3DummyPastKeyValuesGenerator,
     LTX2AudioVaeDecoderDummyInputGenerator,
     LTX2ConnectorsDummyInputGenerator,
     LTX2TransformerDummyInputGenerator,
@@ -7718,8 +7718,8 @@ class LFM3OpenVINOConfig(LFM2OpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "5.12.0"
     MAX_TRANSFORMERS_VERSION = None
     _MODEL_PATCHER = Lfm3ModelPatcher
-    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, DummyLfm3TextInputGenerator)
-    DUMMY_PKV_GENERATOR_CLASS = DummyLfm3TextInputGenerator
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Lfm3DummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = Lfm3DummyPastKeyValuesGenerator
 
     def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
         if direction not in ["inputs", "outputs"]:

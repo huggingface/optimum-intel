@@ -2065,6 +2065,7 @@ class Lfm2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         self.conv_L_cache = self.normalized_config.conv_L_cache
         self.num_key_value_heads = self.normalized_config.num_key_value_heads
         self.num_hidden_layers = self.normalized_config.num_hidden_layers
+        self.head_dim = self.hidden_size // self.num_attention_heads
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         past_key_values = []
@@ -2079,7 +2080,7 @@ class Lfm2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
                 self.batch_size,
                 self.num_key_value_heads,
                 self.sequence_length,
-                self.hidden_size // self.num_attention_heads,
+                self.head_dim,
             )
 
             kv_shape = shape  # (self.batch_size, self.num_attention_heads, self.sequence_length, self.head_dim)
@@ -2091,50 +2092,18 @@ class Lfm2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         return past_key_values
 
 
-class DummyLfm3TextInputGenerator(DummyPastKeyValuesGenerator):
+class Lfm3DummyPastKeyValuesGenerator(Lfm2DummyPastKeyValuesGenerator):
     """
-    Generates the `cache_params` of the LFM3 language model, also the one of LFM3-VL and LFM3-Omni: one conv state per
-    `conv` layer followed by a key/value pair per attention layer (`full_attention` and `sliding_attention` layers
-    both keep a full KV cache).
+    Generates the `cache_params` of the LFM3 language model, also the one of LFM3-VL and LFM3-Omni. Unlike LFM2, it has
+    `sliding_attention` layers, which keep a full KV cache too, and its head size can differ from the hidden size per
+    head.
     """
 
-    SUPPORTED_INPUT_NAMES = ("cache_params",)
-
-    def __init__(
-        self,
-        task: str,
-        normalized_config,
-        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
-        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
-        **kwargs,
-    ):
-        super().__init__(
-            task=task,
-            normalized_config=normalized_config,
-            batch_size=batch_size,
-            sequence_length=sequence_length,
-            **kwargs,
-        )
+    def __init__(self, task, normalized_config, **kwargs):
+        super().__init__(task, normalized_config, **kwargs)
         config = normalized_config.config
-        self.num_conv_layers = config.layer_types.count("conv")
         self.num_atten_layers = len(config.layer_types) - self.num_conv_layers
-        self.conv_L_cache = config.conv_L_cache
-        self.num_key_value_heads = config.num_key_value_heads
         self.head_dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
-
-    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
-        past_key_values = []
-
-        for _ in range(self.num_conv_layers):
-            conv_state_shape = (self.batch_size, self.hidden_size, self.conv_L_cache)
-            past_key_values.append(self.random_float_tensor(conv_state_shape, framework=framework, dtype=float_dtype))
-
-        for _ in range(self.num_atten_layers):
-            kv_shape = (self.batch_size, self.num_key_value_heads, self.sequence_length, self.head_dim)
-            past_key_values.append(self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype))
-            past_key_values.append(self.random_float_tensor(kv_shape, framework=framework, dtype=float_dtype))
-
-        return past_key_values
 
 
 class DummyLfm3VlInputGenerator(DummyInputGenerator):
