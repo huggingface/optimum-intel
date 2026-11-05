@@ -14,6 +14,7 @@
 
 import copy
 import enum
+import functools
 import logging
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Union
@@ -7931,6 +7932,16 @@ class LFM2MoeOpenVINOConfig(LFM2OpenVINOConfig):
     _MODEL_PATCHER = Lfm2MoeModelPatcher
 
 
+@functools.lru_cache(maxsize=1)
+def _warn_lfm3_remote_code_support():
+    # cached to warn once per process: an export creates these configs for every submodel
+    logger.warning(
+        "LFM3 models are temporarily supported through remote code. Once they are integrated into transformers, "
+        "optimum-intel will support them from transformers itself and support for the remote modeling code will be "
+        "removed."
+    )
+
+
 @register_in_tasks_manager(
     "lfm3",
     *[
@@ -7946,6 +7957,10 @@ class LFM3OpenVINOConfig(LFM2OpenVINOConfig):
     _MODEL_PATCHER = Lfm3ModelPatcher
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Lfm3DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = Lfm3DummyPastKeyValuesGenerator
+
+    def __init__(self, *args, **kwargs):
+        _warn_lfm3_remote_code_support()
+        super().__init__(*args, **kwargs)
 
     def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
         if direction not in ["inputs", "outputs"]:
@@ -8017,6 +8032,7 @@ class LFM3VlOpenVINOConfig(BaseVLMOpenVINOConfig):
         preprocessors: Optional[List[Any]] = None,
         **kwargs,
     ):
+        _warn_lfm3_remote_code_support()
         super().__init__(
             config=config,
             task=task,
@@ -8151,6 +8167,7 @@ class LFM3OmniOpenVINOConfig(BaseVLMOpenVINOConfig):
         preprocessors: Optional[List[Any]] = None,
         **kwargs,
     ):
+        _warn_lfm3_remote_code_support()
         super().__init__(
             config=config,
             task=task,
