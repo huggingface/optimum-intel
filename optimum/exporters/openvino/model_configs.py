@@ -7881,7 +7881,7 @@ class Lfm3OmniLMConfigHelper(LMInputEmbedsConfigHelper):
 
 @register_in_tasks_manager("lfm3_omni", *["image-text-to-text"], library_name="transformers")
 class LFM3OmniOpenVINOConfig(BaseVLMOpenVINOConfig):
-    # the LFM3-Omni remote code (LiquidAI/LFM3-Omni-2.2B) supports this transformers version only
+    # the LFM3-Omni remote code (LiquidAI/LFM3-Omni-2B) supports this transformers version only
     MIN_TRANSFORMERS_VERSION = "5.20.0"
     MAX_TRANSFORMERS_VERSION = "5.20.0"
     SUPPORTED_BEHAVIORS = [behavior.value for behavior in Lfm3OmniConfigBehavior]

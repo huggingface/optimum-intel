@@ -8230,7 +8230,7 @@ class Lfm2ModelPatcher(OVDecoderModelPatcher):
 
 
 # LFM3 (`lfm3`) and LFM3-VL (`lfm3_vl`) are only available as remote code
-# (LiquidAI/LFM3-1.7B-RL: modeling_lfm3.py, LiquidAI/lfm3-vl-1.9b-rl: modeling_lfm3_vl.py).
+# (LiquidAI/LFM3-1.7B: modeling_lfm3.py, LiquidAI/LFM3-VL-2B: modeling_lfm3_vl.py).
 # Both language models share the same math: a hybrid of gated short-conv blocks, full-attention and sliding-window
 # attention blocks with sandwich norms, q/k RMSNorm, a headwise sigmoid output gate and per-layer-type (partial) RoPE.
 # The remote implementations rely on python control flow over the cache state (prefill vs decode branches,
@@ -8239,6 +8239,11 @@ class Lfm2ModelPatcher(OVDecoderModelPatcher):
 #   * conv layers keep a (batch, hidden_size, conv_L_cache) state updated by `ov_causal_conv1d`;
 #   * full and sliding-window attention layers keep a full KV cache, the window is applied through the attention mask;
 #   * position ids are derived from the KV cache length, as the remote code does when `position_ids` is not given.
+
+
+# https://huggingface.co/LiquidAI/LFM3-1.7B/blob/0dc4268b561499c648c7ba7c9466bf3d8d01517a/modeling_lfm3.py#L94
+# Patches `Lfm3RotaryEmbedding.compute_default_rope_parameters`: frequencies are precomputed in python per layer type.
+# Needed to keep them constants in the graph: computing theta**x in the graph overflows f16 on GPU.
 def _lfm3_lm_config(config):
     if config.model_type == "lfm3_vl":
         rope = {
@@ -8270,12 +8275,17 @@ def _lfm3_lm_config(config):
     )
 
 
+# https://huggingface.co/LiquidAI/LFM3-1.7B/blob/0dc4268b561499c648c7ba7c9466bf3d8d01517a/modeling_lfm3.py#L160
+# Copy of `rotate_half`, nothing changed: the remote module is loaded dynamically and cannot be imported here.
 def _lfm3_rotate_half(x):
     x1 = x[..., : x.shape[-1] // 2]
     x2 = x[..., x.shape[-1] // 2 :]
     return torch.cat((-x2, x1), dim=-1)
 
 
+# https://huggingface.co/LiquidAI/LFM3-1.7B/blob/0dc4268b561499c648c7ba7c9466bf3d8d01517a/modeling_lfm3.py#L234
+# Patches `Lfm3Attention.forward`: plain KV tensors instead of `Cache.update`, f32 rotation fed directly by cos / sin.
+# Needed for a traceable cache and for the RoPE patterns of SDPAToPagedAttention and the plugins.
 def _lfm3_attention_forward(attn, hidden_states, cos, sin, attention_mask, past_key, past_value, lm_config):
     batch_size, seq_len, _ = hidden_states.shape
     num_heads, num_kv_heads, head_dim = lm_config.num_heads, lm_config.num_kv_heads, lm_config.head_dim
@@ -8313,6 +8323,9 @@ def _lfm3_attention_forward(attn, hidden_states, cos, sin, attention_mask, past_
     return attn.o_proj(attn_output), key, value
 
 
+# https://huggingface.co/LiquidAI/LFM3-1.7B/blob/0dc4268b561499c648c7ba7c9466bf3d8d01517a/modeling_lfm3.py#L361
+# Patches `Lfm3ShortConv.forward`: one `ov_causal_conv1d` on an explicit state replaces the cache and kernel branches.
+# Needed to trace one path for prefill and decode, with a padding mask form that SDPAToPagedAttention can remove.
 def _lfm3_short_conv_forward(conv_module, hidden_states, attention_mask, conv_state):
     seq_len = hidden_states.shape[1]
     # LFM3 keeps the depthwise kernel in an nn.Conv1d, LFM3-VL keeps it as a raw (hidden_size, 1, L) parameter
@@ -8335,6 +8348,9 @@ def _lfm3_short_conv_forward(conv_module, hidden_states, attention_mask, conv_st
     return conv_module.out_proj(y), new_conv_state
 
 
+# https://huggingface.co/LiquidAI/LFM3-1.7B/blob/0dc4268b561499c648c7ba7c9466bf3d8d01517a/modeling_lfm3.py#L611
+# Patches `Lfm3Model.forward`: flat `cache_params`, masks and RoPE built in the graph, no cache-dependent branches.
+# Needed to trace one path for prefill and decode, in the forms SDPAToPagedAttention recognizes for CB.
 def lfm3_language_model_forward(
     lm_config,
     layers,
@@ -8565,6 +8581,9 @@ class Lfm3VlLanguageModelPatcher(_Lfm3BasePatcher):
             del self._model._ov_lm_head
 
 
+# https://huggingface.co/LiquidAI/LFM3-VL-2B/blob/71d8e745d97c224984e0f20412f532a5ce9dfd3e/modeling_lfm3_vl.py#L215
+# Patches `Lfm3VlVisionAttention.forward`: a batch of equal-size images instead of a flat sequence with `cu_seqlens`.
+# Needed because python branches on `frame_shapes` would freeze the traced image count and grid size.
 def _lfm3_vl_vision_attention_forward(attn, hidden_states, cos, sin):
     # hidden_states: (num_images, num_patches, hidden_size), every image attends only to its own patches
     num_images, num_patches, _ = hidden_states.shape
@@ -8584,6 +8603,9 @@ def _lfm3_vl_vision_attention_forward(attn, hidden_states, cos, sin):
     return attn.out_proj(attn_output)
 
 
+# https://huggingface.co/LiquidAI/LFM3-VL-2B/blob/71d8e745d97c224984e0f20412f532a5ce9dfd3e/modeling_lfm3_vl.py#L325
+# Patches `Lfm3VlVisionConv2d.forward`: raster-order input, no merge-block permutes or `frame_shapes` loop.
+# Needed so that the traced grid height and width stay dynamic.
 def _lfm3_vl_vision_conv_forward(conv, hidden_states, height, width):
     num_images, num_patches, hidden_size = hidden_states.shape
     first, middle, third = conv.in_proj(hidden_states).chunk(3, dim=-1)
@@ -8597,6 +8619,9 @@ def _lfm3_vl_vision_conv_forward(conv, hidden_states, height, width):
     return conv.out_proj(middle * output)
 
 
+# https://huggingface.co/LQ-partners/lfm3-vl-1.9b-rl-Intel/blob/35a7268a6e671abcd3aad1aea8b1bdc56c399a82/modeling_lfm3_vl.py#L399
+# Patches `get_visual_features` of the flat-config partner checkpoint (private repo): no python logic on `grid_thw`.
+# Needed to export vision as a separate submodel with a dynamic image count and grid.
 def lfm3_vl_vision_embeddings_forward(self, pixel_values):
     """
     Batched, traceable version of `Lfm3VlForConditionalGeneration.get_visual_features` for images of the same size.
@@ -8612,6 +8637,9 @@ def lfm3_vl_vision_embeddings_forward(self, pixel_values):
     return _lfm3_vision_tower_forward(self.vision_encoder, self.vision_projector, pixel_values, first_attn.theta)
 
 
+# https://huggingface.co/LiquidAI/LFM3-Omni-2B/blob/21d75123f86c1f7ffb4bef1ea202710c4e7ebe67/modeling_lfm3_omni.py#L732
+# Patches `Lfm3OmniModel.get_image_features`, also used for LFM3-VL-2B: equal-size images, no `image_grid_thw`.
+# Needed to export vision as a separate submodel with a dynamic image count and grid.
 def lfm3_omni_vision_embeddings_forward(self, pixel_values):
     """
     Same as `lfm3_vl_vision_embeddings_forward` for the vision tower and projector of LFM3-Omni and of the released
@@ -8625,6 +8653,9 @@ def lfm3_omni_vision_embeddings_forward(self, pixel_values):
     )
 
 
+# https://huggingface.co/LiquidAI/LFM3-VL-2B/blob/71d8e745d97c224984e0f20412f532a5ce9dfd3e/modeling_lfm3_vl.py#L485
+# Patches `Lfm3VlVisionModel.forward` + projector: raster-order patches, 2D RoPE from one MatMul of constants.
+# Needed on GPU: theta in the graph overflows f16, and this MatMul -> Concat -> Cos / Sin form stays in f32.
 def _lfm3_vision_tower_forward(encoder, projector, pixel_values, theta):
     merge = getattr(projector, "spatial_merge_size", None) or projector.downsample_factor
     num_images, height, width, patch_dim = pixel_values.shape
@@ -8751,6 +8782,9 @@ class Lfm3OmniLanguageModelPatcher(Lfm3VlNestedLanguageModelPatcher):
     _OUTPUT_HIDDEN_STATES = True
 
 
+# https://huggingface.co/LiquidAI/LFM3-Omni-2B/blob/21d75123f86c1f7ffb4bef1ea202710c4e7ebe67/modeling_lfm3_omni.py#L420
+# Patches `Lfm3OmniEncoder.forward` + projector for one unpadded clip: no `feature_lengths`, window mask in the graph.
+# Needed for a mask that follows the dynamic number of frames and a graph without padding logic.
 def lfm3_omni_audio_encoder_forward(self, input_features):
     """
     Speech encoder + projector of LFM3-Omni for one clip (no padding), see `Lfm3OmniModel.get_audio_features`.
@@ -8788,6 +8822,9 @@ class Lfm3OmniAudioEncoderPatcher(_Lfm3ForwardReplacingPatcher):
     _FORWARD = lfm3_omni_audio_encoder_forward
 
 
+# https://huggingface.co/LiquidAI/LFM3-Omni-2B/blob/21d75123f86c1f7ffb4bef1ea202710c4e7ebe67/modeling_lfm3_omni.py#L576
+# Patches `Lfm3OmniModel.get_audio_out_embeds`: same math without the input checks, as the forward of its own submodel.
+# Needed because generation embeds every produced speech frame on its own, outside of the language model.
 def lfm3_omni_audio_out_embeddings_forward(self, codes):
     """Embedding of speech frames fed back to the language model: the sum of the 12 codebook embeddings of a frame."""
     config = self.config
@@ -8799,6 +8836,9 @@ class Lfm3OmniAudioOutEmbeddingsPatcher(_Lfm3ForwardReplacingPatcher):
     _FORWARD = lfm3_omni_audio_out_embeddings_forward
 
 
+# https://huggingface.co/LiquidAI/LFM3-Omni-2B/blob/21d75123f86c1f7ffb4bef1ea202710c4e7ebe67/modeling_lfm3_omni.py#L254
+# Patches `Lfm3OmniDepthDecoder.forward`: trunk via `_lfm3_attention_forward`, constant RoPE, logits via nn.Linear.
+# Needed to keep `Lfm3Model` mask and cache logic out of the trace; `F.linear` would bypass 16-bit weight handling.
 def lfm3_omni_depth_decoder_forward(self, hidden_states, codes, masked):
     """
     One MaskGIT pass of the LFM3-Omni depth decoder (see `Lfm3OmniDepthDecoder.forward`).
@@ -8880,6 +8920,9 @@ class Lfm3OmniDepthDecoderPatcher(_Lfm3ForwardReplacingPatcher):
                 delattr(self._model, name)
 
 
+# https://huggingface.co/LiquidAI/LFM3-Omni-2B/blob/21d75123f86c1f7ffb4bef1ea202710c4e7ebe67/modeling_liquid_codec.py#L200
+# Patches the `F.fold` calls of `LiquidCodecISTFT.forward` with reshapes, pads and adds.
+# Needed because `F.fold` converts to Col2Im, which crashes on GPU (OpenVINO 2026.4).
 def _lfm3_overlap_add(frames, hop_length):
     """F.fold based overlap-add of (batch, win_length, num_frames) frames written with reshapes, pads and adds."""
     batch_size, win_length, num_frames = frames.shape
@@ -8892,6 +8935,9 @@ def _lfm3_overlap_add(frames, hop_length):
     return output.reshape(batch_size, -1)
 
 
+# https://huggingface.co/LiquidAI/LFM3-Omni-2B/blob/21d75123f86c1f7ffb4bef1ea202710c4e7ebe67/modeling_liquid_codec.py#L294
+# Patches `LiquidCodecModel.decode` without streaming: floor divides replace `%`, real DFT-basis MatMul replaces irfft.
+# Needed because a broadcast i64 FloorMod is wrong on GPU; the MatMul keeps the traced decoder free of complex ops.
 def lfm3_omni_audio_decoder_forward(self, audio_codes):
     """
     Liquid Codec decoding of LFM3-Omni speech frames (see `LiquidCodecModel.decode` without a streaming cache).
