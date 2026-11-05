@@ -781,6 +781,10 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
         logger.info("Testing %s VLM %s on device=%s", speculative_decoding_type, model_arch, OPENVINO_DEVICE)
         if is_openvino_version("<", min_openvino_version):
             self.skipTest(f"{speculative_decoding_type} VLM requires openvino-genai >= {min_openvino_version}")
+        # TODO: enable once openvinotoolkit/openvino.genai#4790 is merged. The preview models workflow runs this case
+        # against the GenAI nightly, which still has the stateful DFlash draft and cannot run the per-row draft export.
+        if model_arch == "minicpmv4_7_dspark":
+            self.skipTest("The per-row DFlash draft export requires openvinotoolkit/openvino.genai#4790")
 
         draft_model_name, target_model_name = model_pair
         draft_model_id, target_model_id = MODEL_NAMES[draft_model_name], MODEL_NAMES[target_model_name]
