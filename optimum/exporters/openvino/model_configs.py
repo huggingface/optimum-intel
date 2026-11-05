@@ -7952,8 +7952,8 @@ def _warn_lfm3_remote_code_support():
 )
 class LFM3OpenVINOConfig(LFM2OpenVINOConfig):
     # the LFM3 remote code (LiquidAI/LFM3-1.7B) supports this transformers version only
-    MIN_TRANSFORMERS_VERSION = "5.12.0"
-    MAX_TRANSFORMERS_VERSION = "5.12.0"
+    MIN_TRANSFORMERS_VERSION = "5.20.0"
+    MAX_TRANSFORMERS_VERSION = "5.20.0"
     _MODEL_PATCHER = Lfm3ModelPatcher
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Lfm3DummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = Lfm3DummyPastKeyValuesGenerator

@@ -120,9 +120,7 @@ jobs:
       - if: ${{ matrix.test-pattern == '*export*' }}
         name: Test LFM3
         run: |
-          # Each LFM3 model supports one transformers version only. One pytest call covers all test files: a file
-          # with no tests for the model would fail a separate call. RUN_SLOW enables the slow LFM3 tests.
-          uv pip install transformers==5.12.0
+          uv pip install transformers==5.20.0
           RUN_SLOW=true pytest tests/openvino/test_{cb_compatible,decoder,export,exporters_cli,quantization,seq2seq,transformations}.py -k "lfm3 and not lfm3_vl and not lfm3_omni" --durations=0
 
       - if: ${{ matrix.test-pattern == '*export*' }}
