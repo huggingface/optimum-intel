@@ -8535,14 +8535,6 @@ def lfm3_language_model_forward(
         "sliding_attention": torch.where(~full_allowed, min_value, window_mask),
     }
 
-    # cos / sin are computed as in transformers (MatMul of inv_freq and position ids -> Transpose -> Concat -> Cos / Sin)
-    # so that the GPU plugin keeps this subgraph in f32 (IncreasePositionIdsPrecision); in f16 the rotation angles of
-    # positions beyond a few hundred tokens lose all precision. They stay in f32, the rotation is done in f32.
-    # As in transformers, inv_freq is expanded over the batch of position_ids (1, the positions are shared by all
-    # sequences): after SDPAToPagedAttention every token is a batch row and the positions are rewired to position_ids.
-    # Every RoPE table gets its own positions Range, computed from the KV cache of a layer of its type:
-    # PositionIDsReplacerLFM2 rewires (and transposes the table of) one Range per match, a shared Range would leave
-    # the second table (sliding_attention) in the wrong layout.
     attention_layer_types = [layer_type for layer_type in lm_config.layer_types if layer_type != "conv"]
     rope = {}
     for layer_type, inv_freq in lm_config.inv_freq.items():
