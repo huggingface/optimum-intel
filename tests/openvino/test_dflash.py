@@ -24,7 +24,7 @@ import torch
 from parameterized import parameterized
 from PIL import Image
 from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoProcessor
-from utils_tests import MODEL_NAMES
+from utils_tests import F32_CONFIG, MODEL_NAMES
 
 from optimum.exporters.openvino import export_from_model, main_export
 from optimum.intel.openvino import OVAssistantForCausalLM, OVConfig, OVModelForVisualCausalLM
@@ -156,8 +156,8 @@ class DFlashExportTest(unittest.TestCase):
                 ov_config=fp32,
             )
 
-            model = OVModelForVisualCausalLM.from_pretrained(target_dir)
-            assistant = OVAssistantForCausalLM.from_pretrained(draft_dir)
+            model = OVModelForVisualCausalLM.from_pretrained(target_dir, ov_config=F32_CONFIG)
+            assistant = OVAssistantForCausalLM.from_pretrained(draft_dir, ov_config=F32_CONFIG)
             processor = AutoProcessor.from_pretrained(MODEL_NAMES["muse_glimmer"], padding_side="left")
 
             image = Image.fromarray(np.random.default_rng(0).integers(0, 255, (224, 224, 3), dtype=np.uint8))
