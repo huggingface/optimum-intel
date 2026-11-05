@@ -473,6 +473,14 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "quant_method": OVQuantizationMethod.AWQ,
         "group_size_fallback": "adjust",
     },
+    "google/gemma-4-31B-it": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "ratio": 1.0,
+        "group_size_fallback": "ignore",
+        "dq_group_size": 128,
+    },
     "google/gemma-4-E4B-it": {
         "quantization_configs": {
             "lm_model": {
