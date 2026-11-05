@@ -8372,18 +8372,6 @@ class Lfm2ModelPatcher(OVDecoderModelPatcher):
             conv_layer.slow_forward = conv_layer._orig_forward
 
 
-# LFM3 (`lfm3`) and LFM3-VL (`lfm3_vl`) are only available as remote code
-# (LiquidAI/LFM3-1.7B: modeling_lfm3.py, LiquidAI/LFM3-VL-2B: modeling_lfm3_vl.py).
-# Both language models share the same math: a hybrid of gated short-conv blocks, full-attention and sliding-window
-# attention blocks with sandwich norms, q/k RMSNorm, a headwise sigmoid output gate and per-layer-type (partial) RoPE.
-# The remote implementations rely on python control flow over the cache state (prefill vs decode branches,
-# DynamicSlidingWindowLayer cache truncation, custom Lfm3VlCache), so the whole language model forward is
-# re-implemented below in a traceable form that runs the same code path for prefill and decoding:
-#   * conv layers keep a (batch, hidden_size, conv_L_cache) state updated by `ov_causal_conv1d`;
-#   * full and sliding-window attention layers keep a full KV cache, the window is applied through the attention mask;
-#   * position ids are derived from the KV cache length, as the remote code does when `position_ids` is not given.
-
-
 # https://huggingface.co/LiquidAI/LFM3-1.7B/blob/0dc4268b561499c648c7ba7c9466bf3d8d01517a/modeling_lfm3.py#L94
 # Patches `Lfm3RotaryEmbedding.compute_default_rope_parameters`: frequencies are precomputed in python per layer type.
 # Needed to keep them constants in the graph: computing theta**x in the graph overflows f16 on GPU.
