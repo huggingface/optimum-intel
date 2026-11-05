@@ -63,6 +63,7 @@ from optimum.exporters.openvino.utils import save_config
 from optimum.intel.openvino.configuration import OVConfig, OVQuantizationConfigBase, OVWeightQuantizationConfig
 from optimum.intel.openvino.modeling_base import OVBaseModel, OVModelPart
 from optimum.intel.openvino.modeling_decoder import CausalLMOutputWithPast, OVModelForCausalLM
+from optimum.intel.openvino.modeling_dflash import OVDFlashTargetMixin, OVStatefulCacheProxy
 from optimum.intel.openvino.utils import (
     OV_LANGUAGE_MODEL_NAME,
     OV_TEXT_EMBEDDINGS_MODEL_NAME,
@@ -318,6 +319,18 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
         past_key_values = ((),)
         self._past_length += inputs["inputs_embeds"].shape[1]
 
+        # DFlash speculative decoding needs two things a plain forward does not provide:
+        # the target's hidden states at the drafter's `target_layer_ids`, and a cache the
+        # verifier can roll back after a rejected block.
+        dflash_hidden_states = None
+        if getattr(self, "_dflash_hidden_state_names", None):
+            # Keyed like transformers' `hidden_states` tuple (entry 0 is the embeddings), so layer `i` is at `i + 1`.
+            dflash_hidden_states = {
+                layer_id + 1: torch.from_numpy(self.request.get_tensor(name).data).clone().to(self.device)
+                for layer_id, name in zip(self._dflash_layer_ids, self._dflash_hidden_state_names)
+            }
+            past_key_values = OVStatefulCacheProxy(self)
+
         collecting = getattr(self, "_collecting_hidden_states", False)
         hidden_states_out = None
         if collecting and "hidden_states" in self.output_names:
@@ -328,7 +341,10 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
             ihs = self.request.get_tensor("intermediate_hidden_states").data
             intermediate_hidden = torch.from_numpy(ihs).clone().to(self.device)
 
-        result = CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
+        # transformers' `DFlashTokenCandidateGenerator` reads the target's hidden states from `hidden_states`. it is None outside DFlash
+        result = CausalLMOutputWithPast(
+            logits=logits, past_key_values=past_key_values, hidden_states=dflash_hidden_states
+        )
         result.last_hidden_state = hidden_states_out
         result.intermediate_hidden_state = intermediate_hidden
         return result
@@ -854,7 +870,7 @@ MODEL_PARTS_CLS_MAPPING = {
 }
 
 
-class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
+class OVModelForVisualCausalLM(OVBaseModel, OVDFlashTargetMixin, GenerationMixin):
     export_feature = "image-text-to-text"
     additional_parts = []
     auto_model_class = AutoModelForImageTextToText
@@ -1303,6 +1319,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             audio_embed_sizes=audio_embed_sizes,
             audio_attention_mask=audio_attention_mask,
             input_mode=input_mode,
+            temporal_ids=temporal_ids,
             **kwargs,
         )
 
@@ -1655,6 +1672,7 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
         video: Optional["VideoInput"] = None,
+        video_temporal_ids: Optional[List[List[int]]] = None,
         audio: Optional[np.ndarray] = None,
     ):
         if processor is None:
@@ -2579,6 +2597,7 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         if input_ids is not None and input_ids.shape[1] == 1:
             return None
         tgt_sizes = kwargs["tgt_sizes"]
+        temporal_ids = kwargs.get("temporal_ids")
         pixel_values_list = pixel_values
         vision_hidden_states = []
         all_pixel_values = []
@@ -2614,14 +2633,17 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
                     pixel_values=all_pixel_values, patch_attention_mask=patch_attn_mask, position_ids=position_ids
                 )[0]
             )
-            vision_embedding = self.resampling(vision_embedding, tgt_sizes)
+            temporal_groups = None
+            if temporal_ids is not None:
+                temporal_groups = [group for sample_groups in temporal_ids for group in sample_groups]
+            vision_embedding = self.resampling(vision_embedding, tgt_sizes, temporal_groups)
 
             start = 0
-            for pixel_value in pixel_values_list:
-                img_cnt = len(pixel_value)
-                if img_cnt > 0:
-                    vision_hidden_states.append(vision_embedding[start : start + img_cnt])
-                    start += img_cnt
+            for sample_idx, pixel_value in enumerate(pixel_values_list):
+                output_count = len(temporal_ids[sample_idx]) if temporal_ids is not None else len(pixel_value)
+                if output_count > 0:
+                    vision_hidden_states.append(vision_embedding[start : start + output_count])
+                    start += output_count
                 else:
                     vision_hidden_states.append([])
         else:  # no image
@@ -2630,7 +2652,7 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
                 vision_hidden_states.append(dummy_feature)
         return vision_hidden_states
 
-    def resampling(self, x, tgt_sizes):
+    def resampling(self, x, tgt_sizes, temporal_groups=None):
         bs = x.shape[0]
 
         patch_len = tgt_sizes[:, 0] * tgt_sizes[:, 1]
@@ -2649,6 +2671,50 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         pos_embed = torch.nn.utils.rnn.pad_sequence(pos_embed, batch_first=True, padding_value=0.0).permute(
             1, 0, 2
         )  # BLD => L * B * D
+        # A temporal group is represented by one fixed set of resampler query tokens, so concatenate
+        # its frame features and positions before inference instead of producing tokens for every frame.
+        if temporal_groups is not None:
+            group_features = []
+            group_positions = []
+            group_masks = []
+            frame_start = 0
+            for group in temporal_groups:
+                group_ids = [int(temporal_id) for temporal_id in group]
+                if not group_ids:
+                    raise ValueError("Temporal groups must not be empty")
+                frame_end = frame_start + len(group_ids)
+                if frame_end > bs:
+                    raise ValueError("Temporal groups contain more frames than were encoded")
+
+                group_pos_embed = pos_embed[:, frame_start:frame_end].permute(1, 0, 2)
+                temporal_positions = np.asarray([max(temporal_id, 0) for temporal_id in group_ids], dtype=np.float32)
+                temporal_embed = self._get_1d_sincos_pos_embed_from_grid_new(
+                    self.embed_dim, temporal_positions[:, None]
+                ).squeeze(1)
+                temporal_embed[np.asarray(group_ids) < 0] = 0
+                group_pos_embed += torch.from_numpy(temporal_embed).to(group_pos_embed.dtype).unsqueeze(1)
+
+                group_features.append(x[frame_start:frame_end].reshape(-1, x.shape[-1]))
+                group_positions.append(group_pos_embed.reshape(-1, self.embed_dim))
+                group_masks.append(key_padding_mask[frame_start:frame_end].reshape(-1))
+                frame_start = frame_end
+
+            if frame_start != bs:
+                raise ValueError(f"Temporal groups cover {frame_start} frames, but {bs} were encoded")
+
+            image_feature = torch.nn.utils.rnn.pad_sequence(group_features, batch_first=True, padding_value=0.0)
+            pos_embed = torch.nn.utils.rnn.pad_sequence(group_positions, batch_first=True, padding_value=0.0).permute(
+                1, 0, 2
+            )
+            key_padding_mask = torch.nn.utils.rnn.pad_sequence(group_masks, batch_first=True, padding_value=True)
+            return torch.from_numpy(
+                self.resampler(
+                    image_feature=image_feature,
+                    pos_embed=pos_embed,
+                    key_padding_mask=key_padding_mask,
+                )
+            )
+
         res = torch.from_numpy(self.resampler(image_feature=x, pos_embed=pos_embed, key_padding_mask=key_padding_mask))
         return res
 
@@ -2768,14 +2834,57 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
         video: Optional["VideoInput"] = None,
+        video_temporal_ids: Optional[List[List[int]]] = None,
         audio: Optional[np.ndarray] = None,
     ):
         if processor is None:
             raise ValueError("Processor is required.")
-        if video is not None:
-            raise ValueError("Video input is not supported")
         if audio is not None:
             raise ValueError("Audio input is not supported")
+        if video is not None and (getattr(config, "version", 0) or 0) >= 4.5:
+            from PIL import Image as PILImage
+
+            video_frames = [
+                frame if isinstance(frame, PILImage.Image) else PILImage.fromarray(np.asarray(frame))
+                for frame in video
+            ]
+            if len(video_frames) == 0:
+                raise ValueError("Video input must contain at least one frame")
+
+            image_inputs = [] if image is None else image if isinstance(image, list) else [image]
+            visual_inputs = image_inputs + video_frames
+            temporal_ids = [[-1] for _ in image_inputs]
+            if video_temporal_ids is None:
+                temporal_ids.extend(
+                    list(range(group_start, min(group_start + 6, len(video_frames))))
+                    for group_start in range(0, len(video_frames), 6)
+                )
+            else:
+                if sum(len(group) for group in video_temporal_ids) != len(video_frames):
+                    raise ValueError("video_temporal_ids must contain one ID for every video frame")
+                temporal_ids.extend(video_temporal_ids)
+            messages = [
+                {
+                    "role": "user",
+                    "content": "(<image>./</image>)" * len(visual_inputs) + "\n" + text,
+                }
+            ]
+            chat_template_processor = (
+                processor if getattr(processor, "chat_template", None) is not None else processor.tokenizer
+            )
+            prompt = chat_template_processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            inputs = processor(
+                prompt,
+                visual_inputs,
+                temporal_ids=temporal_ids,
+                max_slice_nums=1,
+                use_image_id=False,
+                return_tensors="pt",
+            )
+            inputs.pop("image_sizes", None)
+            return inputs
+        if video is not None:
+            raise ValueError("Video input is not supported")
         if getattr(processor, "chat_template", None) is not None:
             messages = [{"role": "user", "content": text if image is None else "(<image>./</image>)\n" + text}]
             prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
@@ -8097,9 +8206,10 @@ class _OVMuseGlimmerForCausalLM(OVModelForVisualCausalLM):
     The vision stack is exported as a single graph that consumes flattened patches
     ``pixel_values`` ``[num_patches, patch_dim]`` plus ``image_grid_thw``
     ``[num_images, 3]`` and returns the projected per-token features
-    ``[num_out_tokens, text_hidden]`` (vision tower -> adapter -> projection ->
-    perception norm, with the 2x2 patch merge). Features are scattered into the
-    positions of the ``<image>`` / ``<video>`` tokens in the prompt.
+    ``[num_out_tokens, text_hidden]`` (vision tower -> adapter -> projection, with
+    the 2x2 patch merge). Both embedding IRs return raw features; this class scatters
+    vision features into text features and the language-model IR applies their shared
+    RMS normalization.
     """
 
     def get_experts_implementation(self):
@@ -8142,9 +8252,13 @@ class _OVMuseGlimmerForCausalLM(OVModelForVisualCausalLM):
     ):
         inputs_embeds = self.get_text_embeddings(input_ids)
         inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
-        is_prefill = input_ids is not None and input_ids.shape[1] != 1
-        # Images and videos share the same vision graph (video_grid_thw plays the role
-        # of image_grid_thw); each modality is scattered into its own placeholder token.
+        # An empty KV cache identifies the prefill. The token count does not: under
+        # speculative decoding a continuation step verifies a whole block at once.
+        past_key_values = kwargs.get("past_key_values")
+        is_prefill = past_key_values is None or self.language_model._get_past_length(past_key_values) == 0
+        # Both component IRs return raw features. Images and videos share the same vision
+        # graph (video_grid_thw plays the role of image_grid_thw); each modality is
+        # scattered into its placeholder token before the language model normalizes rows.
         if is_prefill and pixel_values is not None:
             image_embeds = self.get_vision_embeddings(pixel_values, input_ids=input_ids, image_grid_thw=image_grid_thw)
             if image_embeds is not None:
@@ -8182,10 +8296,12 @@ class _OVMuseGlimmerForCausalLM(OVModelForVisualCausalLM):
         content.append({"type": "text", "text": text})
         messages = [{"role": "user", "content": content}]
         prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        # The chat template already starts with BOS; the tokenizer would add a second one.
         inputs = processor(
             text=prompt,
             images=[image] if image is not None else None,
             videos=[video] if video is not None else None,
+            add_special_tokens=False,
             return_tensors="pt",
         )
         return inputs
