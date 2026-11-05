@@ -749,7 +749,8 @@ class DSparkExportTest(unittest.TestCase):
             inputs = _per_row_inputs(config, context_length=3, block_length=4, committed_length=0)
             with torch.no_grad():
                 reference_logits = model(**inputs, use_cache=False).logits
-            ov_logits = core.compile_model(draft_ir, "CPU")({name: value.numpy() for name, value in inputs.items()})
+            compiled_draft = core.compile_model(draft_ir, "CPU", F32_CONFIG)
+            ov_logits = compiled_draft({name: value.numpy() for name, value in inputs.items()})
             torch.testing.assert_close(
                 torch.from_numpy(np.array(ov_logits["logits"])), reference_logits, rtol=1e-4, atol=1e-5
             )
@@ -766,7 +767,8 @@ class DSparkExportTest(unittest.TestCase):
             markov_w2 = model.markov_head.markov_w2.weight.detach()
             markov_step_ir = self._keep_computation(markov_head_ir, ["prev_token_ids"], ["markov_bias"])
             prev_token_ids = torch.tensor([0, int(target_ids[3]), config.vocab_size - 1])
-            ov_bias = core.compile_model(markov_step_ir, "CPU")({"prev_token_ids": prev_token_ids.numpy()})[0]
+            compiled_markov_step = core.compile_model(markov_step_ir, "CPU", F32_CONFIG)
+            ov_bias = compiled_markov_step({"prev_token_ids": prev_token_ids.numpy()})[0]
             ov_bias = torch.from_numpy(np.array(ov_bias))
             with torch.no_grad():
                 draft_bias = model.markov_head(prev_token_ids)
@@ -791,7 +793,7 @@ class DSparkExportTest(unittest.TestCase):
                         markov_head_ir, list(lattice_inputs), ["edge_scores", "candidate_ids"], top_k
                     )
                     expected_top_k = top_k or _PRUNED_DRAFT_VOCAB_SIZE
-                    compiled_lattice = core.compile_model(lattice_ir, "CPU")
+                    compiled_lattice = core.compile_model(lattice_ir, "CPU", F32_CONFIG)
                     ov_outputs = compiled_lattice({name: value.numpy() for name, value in lattice_inputs.items()})
                     ov_candidate_ids = torch.from_numpy(np.array(ov_outputs[compiled_lattice.output("candidate_ids")]))
                     ov_edges = torch.from_numpy(np.array(ov_outputs[compiled_lattice.output("edge_scores")]))
