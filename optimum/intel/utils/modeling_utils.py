@@ -248,7 +248,7 @@ def _infer_library_from_model_or_model_class(
         library_name = "qwen3_tts"
     elif model.__module__.startswith("optimum") and hasattr(model, "model"):
         # for wrapped models like timm in optimum.intel.openvino.modeling_timm
-        library_name = TasksManager._infer_library_from_model_or_model_class(model=model.model)
+        library_name = _infer_library_from_model_or_model_class(model=model.model)
     else:
         try:
             library_name = TasksManager._infer_library_from_model_or_model_class(model=model)
