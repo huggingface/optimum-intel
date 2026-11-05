@@ -9635,51 +9635,25 @@ class DSparkVanillaMarkovHead(nn.Module):
 
 
 # adopted from https://github.com/deepseek-ai/DeepSpec/blob/main/deepspec/modeling/dspark/qwen3/modeling.py#L201
-class Qwen3DSparkForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
+class Qwen3DSparkForCausalLM(Qwen3DFlashForCausalLM):
     """DeepSpec Qwen3 DSpark draft head exported as embeddings-in / hidden-states-out.
 
-    Unlike z-lab DFlash, DeepSpec does not prune the first (seed) hidden state: the anchor row
-    predicts the first draft token. Drafts with ``sample_from_anchor=False`` use the DFlash
-    [anchor ; masks] layout and drop the anchor row. The Markov head, when present, is exported
-    as a separate model and is not part of this backbone graph.
+    The backbone is the DFlash one and also emits every row. Which block rows are candidates is the
+    runtime's choice: ``dflash/candidate_position_offset`` is 0 when the anchor row predicts the first
+    draft token (``sample_from_anchor``) and 1 for the DFlash [anchor ; masks] layout. The Markov head,
+    when present, is exported as a separate model and is not part of this backbone graph.
     """
 
     def _init_dflash_variant(self, config) -> None:
         dspark_config = parse_and_validate_dspark_config(config)
-        self.sample_from_anchor = dspark_config.sample_from_anchor
         self.markov_head = None
         if dspark_config.markov_rank > 0:
             self.markov_head = DSparkVanillaMarkovHead(config.vocab_size, dspark_config.markov_rank)
 
-    def forward(
-        self,
-        inputs_embeds: torch.FloatTensor,
-        hidden_states: torch.Tensor,
-        position_ids: torch.LongTensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        past_key_values: Optional[Cache] = None,
-        use_cache: Optional[bool] = None,
-        logits_to_keep: Optional[int] = None,
-        **kwargs,
-    ) -> BaseModelOutputWithPast:
-        outputs = super().forward(
-            hidden_states=hidden_states,
-            noise_embedding=inputs_embeds,
-            position_ids=position_ids,
-            attention_mask=attention_mask,
-            past_key_values=past_key_values,
-            use_cache=use_cache,
-            **kwargs,
-        )
-        last_hidden_state = outputs.last_hidden_state
-        if not self.sample_from_anchor:
-            last_hidden_state = last_hidden_state[:, 1:, :]
-        if logits_to_keep is not None:
-            last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]
-        return BaseModelOutputWithPast(
-            last_hidden_state=last_hidden_state,
-            past_key_values=outputs.past_key_values,
-        )
+    def markov_head_for_export(self, top_k: int) -> "MarkovHeadForExport":
+        if self.markov_head is None:
+            raise ValueError("The DSpark draft has no Markov head (markov_rank is 0).")
+        return DSparkVanillaMarkovHeadForExport(self.markov_head, self.config, top_k)
 
 
 class MarkovHeadForExport(nn.Module):

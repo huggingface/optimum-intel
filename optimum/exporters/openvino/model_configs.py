@@ -143,7 +143,6 @@ from optimum.exporters.openvino.model_patcher import (
     DeepseekOCR2LMPatcher,
     DeepseekOCR2VisionEmbeddingsPatcher,
     DeepseekPatcher,
-    DSparkVanillaMarkovHeadForExport,
     FalconModelPatcher,
     FluxTransformerModelPatcher,
     FunASRModelPatcher,
@@ -587,9 +586,7 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
 
     def get_model_for_behavior(self, model, behavior: str):
         if behavior == "markov_head":
-            return DSparkVanillaMarkovHeadForExport(
-                model.markov_head, model.config, markov_head_default_top_k(model.config)
-            )
+            return model.markov_head_for_export(markov_head_default_top_k(model.config))
         raise ValueError(f"Unsupported behavior {behavior} for {type(self).__name__}.")
 
 

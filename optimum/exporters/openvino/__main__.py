@@ -242,7 +242,7 @@ _CUSTOM_DRAFT_MODEL_MAP = {
 # need no `auto_map` indirection (and no `trust_remote_code`).
 _NATIVE_DRAFT_MODEL_CLASSES = {
     "DFlashDraftModel": "Qwen3DFlashForCausalLM",
-    "Qwen3DSparkModel": "Qwen3DFlashForCausalLM",
+    "Qwen3DSparkModel": "Qwen3DSparkForCausalLM",
     "MuseGlimmerAssistantModel": "get_muse_glimmer_assistant_draft_model_class",
 }
 

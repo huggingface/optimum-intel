@@ -236,15 +236,6 @@ class DSparkExportTest(unittest.TestCase):
         return config
 
     @staticmethod
-    def _backbone_inputs(config, block_length, context_length=3):
-        return {
-            "inputs_embeds": torch.randn(1, block_length, config.hidden_size),
-            "hidden_states": torch.randn(1, context_length, config.hidden_size * len(config.target_layer_ids)),
-            "position_ids": torch.arange(context_length + block_length).reshape(1, -1),
-            "attention_mask": torch.ones(1, context_length + block_length),
-        }
-
-    @staticmethod
     def _reference_greedy_block(markov_head, base_logits, anchor_token_ids, top_k=None):
         """DeepSpec VanillaMarkov.sample_block_tokens(temperature=0), optionally restricted to the Top-K
         backbone candidates of every position as in vLLM's gathered Top-K Markov sampling."""
@@ -380,31 +371,6 @@ class DSparkExportTest(unittest.TestCase):
                     "candidate_position_offset": "0",
                 },
             )
-
-    def test_backbone_drops_anchor_row_only_for_masked_anchor_layout(self):
-        torch.manual_seed(5)
-        model = self._model()
-        inputs = self._backbone_inputs(model.config, block_length=4)
-        with torch.no_grad():
-            anchor_rows = model(**inputs, use_cache=False).last_hidden_state
-            model.sample_from_anchor = False
-            masked_anchor_rows = model(**inputs, use_cache=False).last_hidden_state
-        self.assertEqual(anchor_rows.shape[1], 4)
-        torch.testing.assert_close(masked_anchor_rows, anchor_rows[:, 1:])
-
-        masked_anchor_model = self._model(sample_from_anchor=False)
-        self.assertFalse(masked_anchor_model.sample_from_anchor)
-        _, parts, _ = _get_submodels_and_export_configs(
-            masked_anchor_model,
-            task="text-generation",
-            monolith=False,
-            custom_export_configs={},
-            custom_architecture=False,
-            _variant="default",
-            library_name="transformers",
-            stateful=False,
-        )
-        self.assertEqual(parts["model"][1].candidate_position_offset, 1)
 
     def test_export_package_and_markov_head_parity(self):
         model = self._model()
