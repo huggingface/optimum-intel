@@ -528,7 +528,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             model_id, use_cache=True, compile=False, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, **model_kwargs
         )
         model.eval()
-        model.config.encoder_no_repeat_ngram_size = 0
+        if is_transformers_version(">=", "5.20"):
+            model.generation_config.encoder_no_repeat_ngram_size = 0
+        else:
+            model.config.encoder_no_repeat_ngram_size = 0
         model.to("cpu")
         model.half()
         model.compile()
