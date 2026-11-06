@@ -219,7 +219,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "qwen2_moe": 4,
         "arctic": 4,
         "phi3": 2,
-        "gemma2": 4,
+        "gemma2": 0 if is_transformers_version(">=", "5.21") else 4,
         "exaone": 8,
         "exaone4": 1,
         "granite": 6,
@@ -343,7 +343,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             model_kwargs = {"trust_remote_code": True}
 
         # starting from transformers 4.45.0 gemma2 uses eager attention by default, while ov - sdpa
-        if model_arch == "gemma2":
+        if model_arch == "gemma2" and is_transformers_version("<", "5.21"):
             model_kwargs["attn_implementation"] = "sdpa"
 
         ov_config = F32_CONFIG
@@ -694,7 +694,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             model_kwargs = {"trust_remote_code": True}
 
         # starting from transformers 4.45.0 gemma2 uses eager attention by default, while ov - sdpa
-        if model_arch == "gemma2":
+        if model_arch == "gemma2" and is_transformers_version("<", "5.21"):
             model_kwargs["attn_implementation"] = "sdpa"
 
         # Qwen tokenizer does not support padding, chatglm, glm4 testing models produce nan that incompatible with beam search

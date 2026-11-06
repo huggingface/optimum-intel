@@ -69,6 +69,7 @@ from optimum.exporters.openvino.utils import (
     GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE,
     GRANITEMOEHYBRID_MAMBA_LAYER_TYPE,
     LTX2_ROPE_INPUTS,
+    get_qwen3_omni_thinker_text_model,
     has_ltx2_extended_guidance_inputs,
 )
 from optimum.intel.utils.import_utils import (
@@ -5165,7 +5166,7 @@ class Qwen3OmniMoeLanguageModelPatcher(_Qwen3OmniMoeLMPatcherMixin, OVDecoderMod
             use_cache=True,
         ):
             pkv = DynamicCache(past_key_values)
-            outputs = self.thinker.model(
+            outputs = get_qwen3_omni_thinker_text_model(self.thinker)(
                 inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
                 position_ids=position_ids,
@@ -5184,7 +5185,7 @@ class Qwen3OmniMoeLanguageModelPatcher(_Qwen3OmniMoeLMPatcherMixin, OVDecoderMod
         model.__orig_forward = model.forward
         model.forward = types.MethodType(lm_forward, model)
 
-        thinker_model = model.thinker.model
+        thinker_model = get_qwen3_omni_thinker_text_model(model.thinker)
         thinker_model.__orig_deepstack_process = thinker_model._deepstack_process
         thinker_model._deepstack_process = types.MethodType(_deepstack_process_patched, thinker_model)
 
@@ -5193,7 +5194,7 @@ class Qwen3OmniMoeLanguageModelPatcher(_Qwen3OmniMoeLMPatcherMixin, OVDecoderMod
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model.__orig_forward
-        thinker_model = self._model.thinker.model
+        thinker_model = get_qwen3_omni_thinker_text_model(self._model.thinker)
         thinker_model._deepstack_process = thinker_model.__orig_deepstack_process
 
 
@@ -5675,11 +5676,15 @@ class SanaTextEncoderModelPatcher(ModelPatcher):
         super().__enter__()
 
         self._model.config._orig_attn_implementation = self._model.config._attn_implementation
-        self._model.config._attn_implementation = "sdpa"
+        # gemma2 does not support sdpa since transformers 5.21
+        self._use_sdpa = is_transformers_version("<", "5.21")
+        if self._use_sdpa:
+            self._model.config._attn_implementation = "sdpa"
 
         # starting from 4.53, we get unmatching outputs if we use the boolean mask
         # TODO: This is an openvino issue (inconsistency between boolean and float masks)
-        ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
+        if self._use_sdpa:
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", eager_mask_without_vmap)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -5688,7 +5693,8 @@ class SanaTextEncoderModelPatcher(ModelPatcher):
         del self._model.config._orig_attn_implementation
 
         # remove the eager_mask_without_vmap from the ALL_MASK_ATTENTION_FUNCTIONS
-        ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
+        if self._use_sdpa:
+            ALL_MASK_ATTENTION_FUNCTIONS.register("sdpa", sdpa_mask)
 
 
 class MiniCPMModelPatcher(OVDecoderModelPatcher):
@@ -11357,6 +11363,9 @@ class Gemma4UnifiedImageEmbeddingsModelPatcher(ModelPatcher):
 
         def patched_forward(pixel_values, image_position_ids):
             outputs = embed_vision(pixel_values, image_position_ids)
+            if is_transformers_version(">=", "5.16"):
+                outputs = outputs.pooler_output
+
             return {"last_hidden_state": outputs}
 
         self.patched_forward = patched_forward
@@ -13389,7 +13398,9 @@ class MuseGlimmerVisionEmbeddingsModelPatcher(ModelPatcher):
 
             # --- rotary position ids (raster (h, w) flipped + 1, matches native) ---
             position_ids = torch.stack([row, col], dim=-1).flip(-1) + 1
-            position_ids = position_ids[None]
+            # transformers < 5.16 expects batched (1, N, 2) vision rotary position ids, recent version expects (N, 2)
+            if is_transformers_version("<", "5.16"):
+                position_ids = position_ids[None]
 
             # --- pixel-shuffle gather (merge_size x merge_size block reorder) ---
             factor = cfg.merge_size

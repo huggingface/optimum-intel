@@ -63,7 +63,12 @@ from .utils import (
 if is_transformers_version(">=", "4.55"):
     from transformers import Mxfp4Config
 
-FORCE_ATTN_MODEL_CLASSES = {"phi3_v": "eager", "gemma2": "sdpa", "llama4": "sdpa"}
+FORCE_ATTN_MODEL_CLASSES = {
+    "phi3_v": "eager",
+    # gemma2 does not support sdpa since transformers 5.21 (attention logit softcapping)
+    "gemma2": "eager" if is_transformers_version(">=", "5.21") else "sdpa",
+    "llama4": "sdpa",
+}
 
 if TYPE_CHECKING:
     from optimum.intel.openvino.configuration import OVConfig
@@ -412,6 +417,7 @@ def main_export(
 
     do_gptq_patching = False
     do_quant_patching = False
+    do_awq_cuda_patching = False
     patch_16bit = False
     loading_kwargs = model_loading_kwargs or {}
     if variant is not None:
@@ -451,6 +457,7 @@ def main_export(
         do_gptq_patching = quant_method == "gptq"
         do_bitnet_patching = quant_method == "bitnet"
         do_ct_patching = quant_method == "compressed-tensors"
+        do_awq_cuda_patching = quant_method == "awq" and is_transformers_version("<", "5")
 
         # compressed-tensors export relies on the OpenVINO PyTorch frontend
         # compressed-tensors patcher, which is only available since 2026.3.
@@ -569,8 +576,9 @@ def main_export(
             loading_kwargs["torch_dtype"] = dtype
         # Patch the modules to export of GPTQ models w/o GPU
         if do_quant_patching:
-            orig_cuda_check = torch.cuda.is_available
-            torch.cuda.is_available = lambda: True
+            if do_awq_cuda_patching:
+                orig_cuda_check = torch.cuda.is_available
+                torch.cuda.is_available = lambda: True
 
             if do_gptq_patching:
                 from optimum.gptq import GPTQQuantizer
@@ -824,7 +832,8 @@ def main_export(
     finally:
         # Unpatch modules after quantized model export
         if do_quant_patching:
-            torch.cuda.is_available = orig_cuda_check
+            if do_awq_cuda_patching:
+                torch.cuda.is_available = orig_cuda_check
             if do_gptq_patching:
                 GPTQQuantizer.post_init_model = orig_post_init_model
             if do_bitnet_patching:
