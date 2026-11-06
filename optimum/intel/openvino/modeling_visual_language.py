@@ -2274,6 +2274,7 @@ class _OVMistral3ForCausalLM(OVModelForVisualCausalLM):
             image_features.append(torch.from_numpy(features) if isinstance(features, np.ndarray) else features)
         image_features = torch.cat(image_features, dim=0)
 
+        # Adopted from https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L75-L96
         patch_size = self.config.vision_config.patch_size
         spatial_merge_size = self.config.spatial_merge_size
         d = image_features.shape[-1]
