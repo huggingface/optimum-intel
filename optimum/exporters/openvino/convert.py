@@ -749,6 +749,15 @@ def export_from_model(
 
     if task is not None and task != "auto":
         task = TasksManager.map_from_synonym(task)
+        if (
+            stateful
+            and not task.endswith("-with-past")
+            and not custom_architecture
+            and library_name != "diffusers"
+            and task + "-with-past"
+            in TasksManager.get_supported_tasks_for_model_type(model_type, "openvino", library_name=library_name)
+        ):
+            task = task + "-with-past"
     else:
         if library_name in ("kokoro", "qwen3_tts"):
             task = "text-to-audio"

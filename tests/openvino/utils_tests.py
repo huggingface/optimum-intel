@@ -43,8 +43,11 @@ def _create_tiny_kokoro_model():
     if config_file.exists() and weights_file.exists() and voice_file.exists():
         return str(output_dir)
 
-    from kokoro.istftnet import Decoder
-    from kokoro.modules import CustomAlbert, ProsodyPredictor, TextEncoder
+    try:
+        from kokoro.istftnet import Decoder
+        from kokoro.modules import CustomAlbert, ProsodyPredictor, TextEncoder
+    except ImportError:
+        return "hexgrad/Kokoro-82M"
     from transformers import AlbertConfig
 
     output_dir.mkdir(parents=True, exist_ok=True)

@@ -88,6 +88,7 @@ def infer_task(
     token: Optional[Union[bool, str]] = None,
     library_name: Optional[str] = None,
     trust_remote_code: bool = False,
+    stateful: bool = True,
 ):
     original_task = task
     task = TasksManager.map_from_synonym(task)
@@ -187,8 +188,8 @@ def infer_task(
         if not custom_architecture and task + "-with-past" in TasksManager.get_supported_tasks_for_model_type(
             model_type, exporter="openvino", library_name=library_name
         ):
-            # Make -with-past the default if --task was not explicitly specified
-            if original_task == "auto":
+            # Make -with-past the default if --task was not explicitly specified or if stateful export is enabled
+            if original_task == "auto" or (stateful and not task.endswith("-with-past")):
                 task = task + "-with-past"
             else:
                 logger.info(
@@ -408,6 +409,7 @@ def main_export(
         token=token,
         library_name=library_name,
         trust_remote_code=trust_remote_code,
+        stateful=stateful,
     )
 
     do_gptq_patching = False
