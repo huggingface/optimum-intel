@@ -1718,7 +1718,7 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
             clip_text_features = clip_model.encode_text(text)
 
         ov_model = OVModelOpenCLIPForZeroShotImageClassification.from_pretrained(
-            self.OV_MODEL_ID, export=True, device=OPENVINO_DEVICE
+            self.OV_MODEL_ID, export=True, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
         )
         ov_outputs = ov_model(text, image)
 
@@ -1738,7 +1738,7 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
 
     def test_functions(self):
         model = OVModelOpenCLIPForZeroShotImageClassification.from_pretrained(
-            self.OV_MODEL_ID, export=True, device=OPENVINO_DEVICE
+            self.OV_MODEL_ID, export=True, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
         )
 
         tokenizer = AutoTokenizer.from_pretrained(self.OV_MODEL_ID_IR)
