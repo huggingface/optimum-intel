@@ -55,6 +55,14 @@ ARCH_TO_CB_COMPATIBLE_SUBMODELS = {
         "task": "image-text-to-text",
         "submodels": ("language_model",),
     },
+    # hybrid Mamba2 + attention language model: the Mamba2 layers become PagedSelectiveSSM / PagedCausalConv1D. The
+    # Mamba2 fusions (FuseSSMLoop, SelectiveSSMFusion) only run in this transformation, not on the stateful model
+    "nemotron_h": {
+        "task": "text-generation-with-past",
+        "submodels": ("model",),
+        # one of each per Mamba2 layer of the tiny model
+        "paged_ops": {"PagedSelectiveSSM": 2, "PagedCausalConv1D": 2},
+    },
     # hybrid short conv + full / sliding window attention: besides SDPA -> PagedAttention (with the sliding window
     # extracted from the attention mask), the conv layers become PagedCausalConv1D
     "lfm3": {
@@ -117,7 +125,7 @@ class OVContinuousBatchingCompatibilityTest(unittest.TestCase):
                 with self.subTest(submodel=submodel):
                     model = core.read_model(Path(tmpdir) / f"openvino_{submodel}.xml")
                     label = f"{model_arch}/{submodel}"
-                    self._assert_paged_attention_applicable(core, model, label)
+                    self._assert_paged_attention_applicable(core, model, label, expected.get("paged_ops", {}))
                     if expected.get("paged_causal_conv1d"):
                         self._assert_paged_causal_conv1d(model, config, label)
                     if expected.get("sliding_window"):
@@ -151,7 +159,7 @@ class OVContinuousBatchingCompatibilityTest(unittest.TestCase):
                 windows.append(int(window.get_data().flatten()[0]))
         self.assertEqual(windows, expected, f"{label}: unexpected PagedAttention sliding windows")
 
-    def _assert_paged_attention_applicable(self, core, model, label):
+    def _assert_paged_attention_applicable(self, core, model, label, paged_ops):
         num_sdpa = Counter(op.get_type_name() for op in model.get_ops())["ScaledDotProductAttention"]
         self.assertGreater(num_sdpa, 0, f"{label}: no ScaledDotProductAttention to convert")
 
@@ -165,6 +173,8 @@ class OVContinuousBatchingCompatibilityTest(unittest.TestCase):
         self.assertEqual(
             ops["PagedAttentionExtension"], num_sdpa, f"{label}: not every SDPA became a PagedAttention block"
         )
+        for op_type, count in paged_ops.items():
+            self.assertEqual(ops[op_type], count, f"{label}: expected {count} {op_type} blocks, got {ops[op_type]}")
         # The paged cache replaces the stateful one entirely. The state operations are what is checked:
         # the transformation removes them but leaves their variables registered on the model.
         self.assertEqual(ops["ReadValue"] + ops["Assign"], 0, f"{label}: key/value cache state left in the graph")

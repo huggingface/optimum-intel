@@ -120,6 +120,7 @@ from optimum.exporters.openvino.input_generators import (
     LTXVaeDummyInputGenerator,
     LTXVaeEncoderDummyInputGenerator,
     MambaCacheDummyInputGenerator,
+    NemotronHDummyPastKeyValuesGenerator,
     OVFalconDummyPastKeyValuesGenerator,
     OVMiniCPM3DummyPastKeyValuesGenerator,
     PooledProjectionsDummyInputGenerator,
@@ -211,6 +212,7 @@ from optimum.exporters.openvino.model_patcher import (
     MuseGlimmerLanguageModelPatcher,
     MuseGlimmerTextEmbeddingsModelPatcher,
     MuseGlimmerVisionEmbeddingsModelPatcher,
+    NemotronHModelPatcher,
     OVDecoderModelPatcher,
     OVSeq2SeqModelPatcher,
     Phi3ModelPatcher,
@@ -277,6 +279,7 @@ from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
     is_diffusers_available,
     is_diffusers_version,
+    is_torch_version,
     is_transformers_version,
 )
 from optimum.utils.input_generators import (
@@ -6917,6 +6920,26 @@ class GraniteMoeHybridOpenVINOConfig(MambaOpenVINOConfig):
         else:
             common_inputs["attention_mask"] = {0: "batch_size", 1: "sequence_length"}
         return common_inputs
+
+
+@register_in_tasks_manager(
+    "nemotron_h", *["text-generation", "text-generation-with-past"], library_name="transformers"
+)
+class NemotronHOpenVINOConfig(GraniteMoeHybridOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, NemotronHDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = NemotronHDummyPastKeyValuesGenerator
+    _MODEL_PATCHER = NemotronHModelPatcher
+    # first transformers release with native NemotronH MLP layers, used by the dense Nemotron-H models
+    MIN_TRANSFORMERS_VERSION = "5.6.0"
+
+    def __init__(self, config: PretrainedConfig, *args, **kwargs):
+        # the MoE experts are exported with grouped MatMul, which needs torch.nn.functional.grouped_mm
+        if is_torch_version("<", "2.10.0"):
+            raise ValueError(
+                f"NemotronH export requires torch >= 2.10.0, but torch {torch.__version__} is installed. "
+                "Please upgrade torch."
+            )
+        super().__init__(config, *args, **kwargs)
 
 
 @register_in_tasks_manager("audio-spectrogram-transformer", *["feature-extraction", "audio-classification"])
