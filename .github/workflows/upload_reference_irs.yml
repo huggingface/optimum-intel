@@ -1,0 +1,79 @@
+name: OpenVINO - Upload Reference IRs
+
+on:
+  workflow_dispatch:
+    inputs:
+      models:
+        description: "Space-separated model id substrings to regenerate (empty = every model in the test suite)"
+        type: string
+        default: ""
+      missing_only:
+        description: "Only handle models that have no `ov` revision yet"
+        type: boolean
+        default: false
+      openvino_nightly:
+        description: "Generate the references with the OpenVINO nightly build instead of the release"
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  UV_TORCH_BACKEND: cpu
+  UV_SYSTEM_PYTHON: true
+  HF_TOKEN: ${{ secrets.HF_HUB_WRITE_TOKEN }}
+
+jobs:
+  upload:
+    permissions:
+      contents: read
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip uv
+          uv pip install .[tests,diffusers] librosa
+
+      - name: Install OpenVINO nightly
+        if: ${{ inputs.openvino_nightly }}
+        run: |
+          pip install --pre -U "openvino>=2026.5.dev0,<2026.5a0" --extra-index-url=https://storage.openvinotoolkit.org/simple/wheels/nightly
+
+      - name: Report installed versions
+        run: |
+          python -c "import openvino, transformers; print('openvino', openvino.__version__); print('transformers', transformers.__version__)"
+
+      - name: Check Hub write token
+        run: |
+          if [ -z "$HF_TOKEN" ]; then
+            echo "HF_HUB_WRITE_TOKEN is not set; references cannot be uploaded." >&2
+            exit 1
+          fi
+
+      - name: Regenerate reference IRs
+        run: |
+          python tests/scripts/batch_upload_irs.py \
+            ${{ inputs.models != '' && format('--models {0}', inputs.models) || '' }} \
+            ${{ inputs.missing_only && '--missing-only' || '' }} \
+            --log-dir "${{ runner.temp }}/reference-ir-logs"
+
+      - name: Upload run log
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: reference-ir-upload-log
+          path: ${{ runner.temp }}/reference-ir-logs
+          if-no-files-found: warn
