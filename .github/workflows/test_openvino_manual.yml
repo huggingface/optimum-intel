@@ -1,0 +1,107 @@
+name: OpenVINO - Run Specific Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      test-file:
+        description: "Test file under tests/openvino (e.g. test_exporters_cli.py)"
+        required: true
+        type: string
+        default: test_exporters_cli.py
+      pytest-args:
+        description: "Additional pytest arguments (e.g. -k llava)"
+        required: false
+        type: string
+        default: ""
+      transformers-version:
+        description: "Transformers version (e.g. 4.57.6 or latest)"
+        required: true
+        type: string
+        default: latest
+
+permissions: {}
+
+env:
+  UV_TORCH_BACKEND: cpu
+  UV_SYSTEM_PYTHON: true
+  TRANSFORMERS_IS_CI: true
+  PYTHONFAULTHANDLER: "1"
+  HF_TOKEN: ${{ secrets.HF_HUB_READ_TOKEN }}
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        env:
+          TRANSFORMERS_VERSION: ${{ inputs.transformers-version }}
+        run: |
+          pip install --upgrade pip uv
+          requirements=(".[tests,diffusers]" librosa "datasets==3.6.0" "fsspec==2025.3.0" "pyarrow==26.0.0")
+          requirements+=("torch==2.15.0+cpu" "torchvision==0.30.0+cpu" "qwen-asr")
+          if [[ "$TRANSFORMERS_VERSION" == "latest" ]]; then
+            requirements+=(transformers)
+          else
+            requirements+=("transformers==$TRANSFORMERS_VERSION")
+          fi
+          if [[ "$TRANSFORMERS_VERSION" == "4.57.6" ]]; then
+            requirements+=("diffusers<0.40" "sentencepiece<0.2.2")
+          fi
+          uv pip install "${requirements[@]}"
+
+      - name: Restore HF models cache
+        if: env.HF_TOKEN == ''
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/huggingface/hub
+          key: hf-models
+
+      - name: Login with fork PRs CI token
+        if: env.HF_TOKEN == ''
+        run: python tests/scripts/login_with_ci_token.py
+
+      - name: Check dependency versions and diffusion imports
+        shell: python
+        run: |
+          from importlib.metadata import version
+
+          packages = (
+              "optimum", "optimum-intel", "transformers", "diffusers", "huggingface-hub",
+              "torch", "torchvision", "datasets", "fsspec", "pyarrow",
+          )
+          for package in packages:
+              print(f"{package}=={version(package)}", flush=True)
+
+          from optimum.intel.openvino.modeling_diffusion import OVFlux2KleinPipeline
+
+          print(f"Diffusion import succeeded: {OVFlux2KleinPipeline}", flush=True)
+
+      - name: Test with Pytest
+        env:
+          TEST_FILE: ${{ inputs.test-file }}
+          PYTEST_ARGS: ${{ inputs.pytest-args }}
+        shell: python
+        run: |
+          import os
+          import shlex
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          test_file = os.environ["TEST_FILE"]
+          test_path = Path("tests/openvino") / test_file
+          if Path(test_file).name != test_file or not test_path.is_file() or test_path.suffix != ".py":
+              sys.exit("Select an existing Python test filename under tests/openvino.")
+          command = [sys.executable, "-m", "pytest", str(test_path), *shlex.split(os.environ["PYTEST_ARGS"]), "-rpfs"]
+          print(shlex.join(command), flush=True)
+          sys.exit(subprocess.call(command))
