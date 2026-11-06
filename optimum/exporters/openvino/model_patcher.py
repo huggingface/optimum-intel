@@ -23,6 +23,7 @@ import re
 import types
 from collections import defaultdict
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import torch
