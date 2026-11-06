@@ -318,6 +318,9 @@ def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
     text_config = getattr(config, "text_config", None)
     if text_config is not None and getattr(text_config, "model_type", None) in SSM_MODELS:
         return patch_stateful_hybrid_ssm(ov_model)
+    # LFM3-VL keeps its hybrid conv / attention language model config at the top level (no text_config)
+    if config.model_type == "lfm3_vl":
+        return patch_stateful_hybrid_ssm(ov_model)
     return patch_stateful_decoder(config, ov_model)
 
 

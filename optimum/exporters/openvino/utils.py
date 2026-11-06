@@ -661,6 +661,8 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "qwen3_omni_moe",
     "qwen3_asr",
     "muse_glimmer",
+    "lfm3_vl",
+    "lfm3_omni",
 ]
 
 
@@ -670,6 +672,7 @@ SSM_MODELS = [
     "zamba2",
     "lfm2",
     "lfm2_moe",
+    "lfm3",
     "granitemoehybrid",
     "nemotron_h",
     "qwen3_next",
