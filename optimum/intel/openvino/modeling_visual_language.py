@@ -2262,19 +2262,21 @@ class _OVMistral3ForCausalLM(OVModelForVisualCausalLM):
         if input_ids is not None and input_ids.shape[1] == 1:
             return None
 
-        image_features = self.vision_embeddings(pixel_values).last_hidden_state
-        image_features = torch.from_numpy(image_features) if isinstance(image_features, np.ndarray) else image_features
-
-        # Adopted from https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L75-L96
-        patch_size = self.config.vision_config.patch_size
-        spatial_merge_size = self.config.spatial_merge_size
-        d = image_features.shape[-1]
-
         if image_sizes is None:
             # MistralCommonTokenizer, used for checkpoints published in Mistral's own format such as
             # Mistral-Small-3.2-24B-Instruct-2506, returns pixel_values without image_sizes. It does not pad
             # images, so the spatial dimensions of the tensor are the image sizes.
             image_sizes = [pixel_values.shape[-2:]] * pixel_values.shape[0]
+
+        image_features = []
+        for image, (height, width) in zip(pixel_values, image_sizes):
+            features = self.vision_embeddings(image[None, :, :height, :width]).last_hidden_state
+            image_features.append(torch.from_numpy(features) if isinstance(features, np.ndarray) else features)
+        image_features = torch.cat(image_features, dim=0)
+
+        patch_size = self.config.vision_config.patch_size
+        spatial_merge_size = self.config.spatial_merge_size
+        d = image_features.shape[-1]
 
         image_sizes_scaled = [(size[0] // patch_size, size[1] // patch_size) for size in image_sizes]
         tokens_per_image = [h * w for h, w in image_sizes_scaled]
