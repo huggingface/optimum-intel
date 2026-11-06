@@ -57,6 +57,11 @@ _import_structure = {
     "utils.dummy_openvino_and_diffusers_objects": [],
     "utils.dummy_openvino_and_sentence_transformers_objects": [],
     "openvino": [
+        "OVGuard",
+        "OVGuardConfig",
+        "OVGuardReport",
+        "OVGuardVerdict",
+        "OVGuardViolationError",
         "OVModelForAudioClassification",
         "OVModelForAudioFrameClassification",
         "OVModelForAudioXVector",
@@ -210,6 +215,11 @@ if TYPE_CHECKING:
     from .openvino import (
         OVAssistantForCausalLM,
         OVConfig,
+        OVGuard,
+        OVGuardConfig,
+        OVGuardReport,
+        OVGuardVerdict,
+        OVGuardViolationError,
         OVModelForAudioClassification,
         OVModelForAudioFrameClassification,
         OVModelForAudioXVector,
