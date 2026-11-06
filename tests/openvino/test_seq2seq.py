@@ -1011,6 +1011,26 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         del transformers_model, ov_model
         gc.collect()
 
+    def test_mistral3_batched_images(self):
+        model_id = MODEL_NAMES["mistral3"]
+        processor = AutoProcessor.from_pretrained(model_id)
+        transformers_model = self.get_transformer_model_class("mistral3").from_pretrained(model_id).eval()
+        ov_model = self.OVMODEL_CLASS.from_pretrained(
+            model_id, export=True, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
+        )
+        conversation = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "Describe"}]}]
+        prompt = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
+        images = [self.IMAGE.resize((64, 48)), self.IMAGE.resize((32, 64))]
+        inputs = processor(images=images, text=[prompt, prompt], padding=True, return_tensors="pt")
+        with torch.no_grad():
+            transformers_outputs = transformers_model(**inputs)
+        ov_outputs = ov_model(**inputs)
+        max_diff = torch.abs(ov_outputs.logits - transformers_outputs.logits).max()
+        self.assertLess(max_diff, 4e-3, f"Max abs diff {max_diff}")
+
+        del transformers_model, ov_model
+        gc.collect()
+
     @parameterized.expand(
         ["llava", "llava_next", "llava_next_video", "llava_next_mistral"]
         if is_transformers_version("<", "5")
