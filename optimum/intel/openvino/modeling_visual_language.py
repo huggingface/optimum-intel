@@ -2271,7 +2271,7 @@ class _OVMistral3ForCausalLM(OVModelForVisualCausalLM):
         image_features = []
         for image, (height, width) in zip(pixel_values, image_sizes):
             features = self.vision_embeddings(image[None, :, :height, :width]).last_hidden_state
-            image_features.append(torch.from_numpy(features) if isinstance(features, np.ndarray) else features)
+            image_features.append(torch.from_numpy(features))
         image_features = torch.cat(image_features, dim=0)
 
         # Adopted from https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L75-L96
