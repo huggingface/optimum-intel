@@ -1848,3 +1848,25 @@ class OVCLIExportTestCase(unittest.TestCase):
                     )
                     self.assertTrue((Path(tmpdir) / "openvino_markov_head_model.xml").exists())
                     self.assertEqual(sorted(path.name for path in Path(tmpdir).glob("*tokenizer*")), [])
+
+    def test_exporters_cli_text_generation_task_preserves_beam_idx(self):
+        import openvino as ov
+
+        with TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                [
+                    "optimum-cli",
+                    "export",
+                    "openvino",
+                    "--model",
+                    "hf-internal-testing/tiny-random-GPT2LMHeadModel",
+                    "--task",
+                    "text-generation",
+                    tmpdir,
+                ],
+                check=True,
+            )
+            core = ov.Core()
+            model = core.read_model(Path(tmpdir) / "openvino_model.xml")
+            inputs = [inp.get_any_name() for inp in model.inputs]
+            self.assertIn("beam_idx", inputs)
