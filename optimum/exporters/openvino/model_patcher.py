@@ -98,6 +98,7 @@ else:
 
 if is_transformers_version(">=", "4.57"):
     from transformers.models.qwen3.modeling_qwen3 import (
+        ALL_ATTENTION_FUNCTIONS,
         Qwen3Attention,
         Qwen3Config,
         Qwen3MLP,
@@ -105,12 +106,8 @@ if is_transformers_version(">=", "4.57"):
         Qwen3RMSNorm,
         Qwen3RotaryEmbedding,
     )
-    from transformers.models.qwen3.modeling_qwen3 import (
-        eager_attention_forward as qwen3_eager_attention_forward,
-    )
-    from transformers.models.qwen3.modeling_qwen3 import (
-        rotate_half as qwen3_rotate_half,
-    )
+    from transformers.models.qwen3.modeling_qwen3 import eager_attention_forward as qwen3_eager_attention_forward
+    from transformers.models.qwen3.modeling_qwen3 import rotate_half as qwen3_rotate_half
 else:
     Qwen3Config = PretrainedConfig
     Qwen3PreTrainedModel = PreTrainedModel
@@ -8378,6 +8375,775 @@ class Lfm2ModelPatcher(OVDecoderModelPatcher):
             conv_layer.slow_forward = conv_layer._orig_forward
 
 
+# https://huggingface.co/LiquidAI/LFM3-1.7B/blob/0dc4268b561499c648c7ba7c9466bf3d8d01517a/modeling_lfm3.py#L94
+# Patches `Lfm3RotaryEmbedding.compute_default_rope_parameters`: frequencies are precomputed in python per layer type.
+# Needed to keep them constants in the graph: computing theta**x in the graph overflows f16 on GPU.
+def _lfm3_lm_config(config):
+    if config.model_type == "lfm3_vl":
+        rope = {
+            "full_attention": (config.full_attention_rope_theta, config.partial_rotary_factor),
+            "sliding_attention": (config.sliding_attention_rope_theta, 1.0),
+        }
+    else:
+        rope = {}
+        for layer_type, params in config.rope_parameters.items():
+            if params.get("rope_type", "default") != "default":
+                raise ValueError(f"LFM3 export supports only default RoPE, got {params['rope_type']} for {layer_type}")
+            rope[layer_type] = (params["rope_theta"], params.get("partial_rotary_factor", 1.0))
+    head_dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
+    inv_freq = {}
+    for layer_type, (rope_theta, partial_rotary_factor) in rope.items():
+        rope_angles = int(partial_rotary_factor * head_dim) // 2
+        freq = 1.0 / (rope_theta ** (torch.arange(0, 2 * rope_angles, 2, dtype=torch.int64).float() / head_dim))
+        # frequencies of the non-rotated part are zero (cos=1, sin=0), i.e. identity
+        inv_freq[layer_type] = torch.cat([freq, torch.zeros(head_dim // 2 - rope_angles)])
+    return SimpleNamespace(
+        layer_types=list(config.layer_types),
+        num_heads=config.num_attention_heads,
+        num_kv_heads=config.num_key_value_heads,
+        head_dim=head_dim,
+        hidden_size=config.hidden_size,
+        conv_L_cache=config.conv_L_cache,
+        sliding_window=config.sliding_window,
+        inv_freq=inv_freq,
+    )
+
+
+# https://huggingface.co/LiquidAI/LFM3-1.7B/blob/0dc4268b561499c648c7ba7c9466bf3d8d01517a/modeling_lfm3.py#L160
+# Copy of `rotate_half`, nothing changed: the remote module is loaded dynamically and cannot be imported here.
+def _lfm3_rotate_half(x):
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2 :]
+    return torch.cat((-x2, x1), dim=-1)
+
+
+# https://huggingface.co/LiquidAI/LFM3-1.7B/blob/0dc4268b561499c648c7ba7c9466bf3d8d01517a/modeling_lfm3.py#L234
+# Patches `Lfm3Attention.forward`: plain KV tensors instead of `Cache.update`, f32 rotation fed directly by cos / sin.
+# Needed for a traceable cache and for the RoPE patterns of SDPAToPagedAttention and the plugins.
+def _lfm3_attention_forward(attn, hidden_states, cos, sin, attention_mask, past_key, past_value, lm_config):
+    batch_size, seq_len, _ = hidden_states.shape
+    num_heads, num_kv_heads, head_dim = lm_config.num_heads, lm_config.num_kv_heads, lm_config.head_dim
+    if hasattr(attn, "qkv"):
+        # LFM3-VL keeps fused q/k/v projection weights
+        query, key, value = attn.qkv(hidden_states).split(
+            (num_heads * head_dim, num_kv_heads * head_dim, num_kv_heads * head_dim), dim=-1
+        )
+    else:
+        query, key, value = attn.q_proj(hidden_states), attn.k_proj(hidden_states), attn.v_proj(hidden_states)
+    query = attn.q_norm(query.view(batch_size, seq_len, -1, head_dim)).transpose(1, 2)
+    key = attn.k_norm(key.view(batch_size, seq_len, -1, head_dim)).transpose(1, 2)
+    value = value.view(batch_size, seq_len, -1, head_dim).transpose(1, 2)
+
+    # the rotation is done in f32 as in the remote model; cos / sin feed the Multiply directly (no Convert in between),
+    # as expected by the RoPE patterns of SDPAToPagedAttention and the plugins
+    dtype = query.dtype
+    query, key = query.float(), key.float()
+    query = (query * cos + _lfm3_rotate_half(query) * sin).to(dtype)
+    key = (key * cos + _lfm3_rotate_half(key) * sin).to(dtype)
+
+    key = torch.cat([past_key.to(key.dtype), key], dim=-2)
+    value = torch.cat([past_value.to(value.dtype), value], dim=-2)
+
+    attn_output = F.scaled_dot_product_attention(
+        query,
+        repeat_kv(key, num_heads // num_kv_heads),
+        repeat_kv(value, num_heads // num_kv_heads),
+        attn_mask=attention_mask,
+        scale=head_dim**-0.5,
+    )
+    # headwise sigmoid gate: one scalar per query head
+    gate = torch.sigmoid(attn.gate_proj(hidden_states)).view(batch_size, seq_len, num_heads, 1)
+    attn_output = (attn_output.transpose(1, 2) * gate).reshape(batch_size, seq_len, num_heads * head_dim)
+    return attn.o_proj(attn_output), key, value
+
+
+# https://huggingface.co/LiquidAI/LFM3-1.7B/blob/0dc4268b561499c648c7ba7c9466bf3d8d01517a/modeling_lfm3.py#L361
+# Patches `Lfm3ShortConv.forward`: one `ov_causal_conv1d` on an explicit state replaces the cache and kernel branches.
+# Needed to trace one path for prefill and decode, with a padding mask form that SDPAToPagedAttention can remove.
+def _lfm3_short_conv_forward(conv_module, hidden_states, attention_mask, conv_state):
+    seq_len = hidden_states.shape[1]
+    # LFM3 keeps the depthwise kernel in an nn.Conv1d, LFM3-VL keeps it as a raw (hidden_size, 1, L) parameter
+    if isinstance(conv_module.conv, nn.Conv1d):
+        weight, bias = conv_module.conv.weight, conv_module.conv.bias
+    else:
+        weight, bias = conv_module.conv, None
+
+    # Zero the padded positions; a no-op for decoding steps where the attention mask of new tokens is ones.
+    # The mask is applied to the input of in_proj (no bias) as in the remote LFM3: the attention_mask -> Slice ->
+    # Unsqueeze -> Multiply form is removed by SDPAToPagedAttention (EliminateConvPaddingMaskGating).
+    hidden_states = hidden_states * attention_mask[:, -seq_len:, None].to(hidden_states.dtype)
+
+    BCx = conv_module.in_proj(hidden_states).transpose(-1, -2)
+    B, C, x = BCx.chunk(3, dim=-2)
+    Bx = B * x
+
+    conv_out, new_conv_state = ov_causal_conv1d(conv_state, Bx, weight, bias)
+    y = (C * conv_out).transpose(-1, -2).contiguous()
+    return conv_module.out_proj(y), new_conv_state
+
+
+# https://huggingface.co/LiquidAI/LFM3-1.7B/blob/0dc4268b561499c648c7ba7c9466bf3d8d01517a/modeling_lfm3.py#L611
+# Patches `Lfm3Model.forward`: flat `cache_params`, masks and RoPE built in the graph, no cache-dependent branches.
+# Needed to trace one path for prefill and decode, in the forms SDPAToPagedAttention recognizes for CB.
+def lfm3_language_model_forward(
+    lm_config,
+    layers,
+    final_norm,
+    lm_head,
+    inputs_embeds,
+    attention_mask,
+    cache_params=None,
+    output_hidden_states=False,
+):
+    batch_size, seq_len, _ = inputs_embeds.shape
+    dtype = inputs_embeds.dtype
+    num_conv_layers = lm_config.layer_types.count("conv")
+    num_attn_layers = len(lm_config.layer_types) - num_conv_layers
+
+    if cache_params is not None:
+        conv_states = list(cache_params[:num_conv_layers])
+        key_cache = list(cache_params[num_conv_layers::2])
+        value_cache = list(cache_params[num_conv_layers + 1 :: 2])
+    else:
+        conv_states = [
+            torch.zeros(batch_size, lm_config.hidden_size, lm_config.conv_L_cache, dtype=dtype)
+            for _ in range(num_conv_layers)
+        ]
+        empty_kv = torch.zeros(batch_size, lm_config.num_kv_heads, 0, lm_config.head_dim, dtype=dtype)
+        key_cache = [empty_kv] * num_attn_layers
+        value_cache = [empty_kv] * num_attn_layers
+
+    if attention_mask is None:
+        attention_mask = torch.ones(batch_size, key_cache[0].shape[-2] + seq_len, dtype=torch.int64)
+
+    # The positions, masks and RoPE below are written in the forms that SDPAToPagedAttention recognizes, so that the
+    # model is continuous batching compatible: the past length is read from the (positive) sequence axis of the KV
+    # cache, positions are a Range(past_len, past_len + seq_len) (PrevSequenceLengthPattern, PositionIDsReplacerLFM2).
+    past_len = key_cache[0].shape[2]
+    query_positions = torch.arange(past_len, past_len + seq_len)
+    key_positions = torch.arange(attention_mask.shape[-1])
+    causal = key_positions[None, :] <= query_positions[:, None]
+    padding = attention_mask[:, None, None, :].bool()
+    full_allowed = causal[None, None] & padding
+    # torch.finfo(torch.float16).min is used as -inf to stay finite for fully masked (padded) rows in f16 inference
+    min_value = torch.finfo(torch.float16).min
+    full_mask = torch.zeros_like(full_allowed, dtype=dtype).masked_fill(~full_allowed, min_value)
+    # Sliding window: a key is out of the window when query_pos - key_pos >= sliding_window. The
+    # Select(~allowed, min, Select(out_of_window, min, 0)) form lets SDPAToPagedAttention extract the window size.
+    distance = query_positions[:, None] - key_positions[None, :]
+    out_of_window = distance >= torch.tensor(lm_config.sliding_window, dtype=distance.dtype)
+    window_mask = torch.where(out_of_window[None, None], min_value, torch.zeros((), dtype=dtype))
+    masks = {
+        "full_attention": full_mask,
+        "sliding_attention": torch.where(~full_allowed, min_value, window_mask),
+    }
+
+    attention_layer_types = [layer_type for layer_type in lm_config.layer_types if layer_type != "conv"]
+    rope = {}
+    for layer_type, inv_freq in lm_config.inv_freq.items():
+        if layer_type not in attention_layer_types:
+            continue
+        type_past_len = key_cache[attention_layer_types.index(layer_type)].shape[2]
+        position_ids = torch.arange(type_past_len, type_past_len + seq_len).unsqueeze(0)
+        position_ids_expanded = position_ids.unsqueeze(1).float()
+        inv_freq_expanded = inv_freq[None, :, None].float().expand(position_ids.shape[0], -1, 1)
+        freqs = (inv_freq_expanded @ position_ids_expanded).transpose(1, 2)
+        emb = torch.cat((freqs, freqs), dim=-1)
+        rope[layer_type] = (emb.cos().unsqueeze(1), emb.sin().unsqueeze(1))
+
+    new_conv_states, new_keys, new_values = [], [], []
+    hidden_states = inputs_embeds
+    for layer, layer_type in zip(layers, lm_config.layer_types):
+        operator_input = layer.operator_norm(hidden_states)
+        if layer_type == "conv":
+            operator_output, conv_state = _lfm3_short_conv_forward(
+                layer.conv, operator_input, attention_mask, conv_states[len(new_conv_states)]
+            )
+            new_conv_states.append(conv_state)
+        else:
+            attn_idx = len(new_keys)
+            cos, sin = rope[layer_type]
+            operator_output, key, value = _lfm3_attention_forward(
+                layer.self_attn,
+                operator_input,
+                cos,
+                sin,
+                masks[layer_type],
+                key_cache[attn_idx],
+                value_cache[attn_idx],
+                lm_config,
+            )
+            new_keys.append(key)
+            new_values.append(value)
+        if hasattr(layer, "post_operator_norm"):
+            operator_output = layer.post_operator_norm(operator_output)
+        hidden_states = hidden_states + operator_output
+        ffn_output = layer.feed_forward(layer.ffn_norm(hidden_states))
+        if hasattr(layer, "post_ffn_norm"):
+            ffn_output = layer.post_ffn_norm(ffn_output)
+        hidden_states = hidden_states + ffn_output
+
+    hidden_states = final_norm(hidden_states)
+    # lm_head must be called as a module: for 16-bit models the weights of nn.Linear are replaced by placeholders
+    # during tracing (see openvino.frontend.pytorch.patch_model.__make_16bit_traceable)
+    logits = lm_head(hidden_states)
+
+    present_key_values = list(new_conv_states)
+    for key, value in zip(new_keys, new_values):
+        present_key_values.extend([key, value])
+    if output_hidden_states:
+        return logits, present_key_values, hidden_states
+    return logits, present_key_values
+
+
+class _Lfm3BasePatcher(OVDecoderModelPatcher):
+    def _set_patched_forward(self, patched_forward):
+        # the exporter orders the traced inputs by the signature of `orig_forward`, so it must be the patched one
+        self.patched_forward = patched_forward
+        self.model_orig_forward = self.orig_forward
+        self.orig_forward = patched_forward
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        setattr(self._model, self.orig_forward_name, self.model_orig_forward)
+
+
+class Lfm3ModelPatcher(_Lfm3BasePatcher):
+    """
+    Patches LFM3 (`Lfm3ForCausalLM`, remote code) for export as a hybrid conv / KV cache model.
+    The KV cache and conv states are passed in and out as flat `cache_params` lists:
+    conv states of the `conv` layers first, followed by key / value pairs of the attention layers.
+    """
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(config, model, model_kwargs)
+        lm_config = _lfm3_lm_config(model.config)
+
+        def patched_forward(
+            input_ids: Optional[torch.LongTensor] = None,
+            attention_mask: Optional[torch.Tensor] = None,
+            cache_params=None,
+            inputs_embeds: Optional[torch.FloatTensor] = None,
+        ):
+            if inputs_embeds is None:
+                inputs_embeds = self._model.model.embed_tokens(input_ids)
+            logits, present_key_values = lfm3_language_model_forward(
+                lm_config,
+                self._model.model.layers,
+                self._model.model.embedding_norm,
+                self._model.lm_head,
+                inputs_embeds,
+                attention_mask,
+                cache_params,
+            )
+            outputs = {"logits": logits}
+            if cache_params is not None:
+                outputs["present_key_values"] = present_key_values
+            return outputs
+
+        self._set_patched_forward(patched_forward)
+
+
+class Lfm3VlLanguageModelPatcher(_Lfm3BasePatcher):
+    """
+    Patches the language model of LFM3-VL (`Lfm3VlForConditionalGeneration`, remote code), it takes `inputs_embeds`
+    with already merged visual features. Logits are computed with the tied text embedding weights.
+    """
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(config, model, model_kwargs)
+        lm_config = _lfm3_lm_config(model.config)
+        # the remote model computes RoPE frequencies as theta ** (-(2 * i) / head_dim)
+        for layer_type, (theta, factor) in (
+            ("full_attention", (model.config.full_attention_rope_theta, model.config.partial_rotary_factor)),
+            ("sliding_attention", (model.config.sliding_attention_rope_theta, 1.0)),
+        ):
+            pairs = int(lm_config.head_dim * factor) // 2
+            freq = theta ** (-(2.0 * torch.arange(pairs, dtype=torch.float32) / lm_config.head_dim))
+            lm_config.inv_freq[layer_type] = torch.cat([freq, torch.zeros(lm_config.head_dim // 2 - pairs)])
+
+        language_model = model.language_model
+        # the remote model computes logits with F.linear on the tied embedding weight; a linear module sharing that
+        # weight is registered for the export, so that 16-bit weight handling applies to it as to other nn.Linear
+        embed_tokens = language_model.embed_tokens
+        lm_head = nn.Linear(embed_tokens.embedding_dim, embed_tokens.num_embeddings, bias=False, device="meta")
+        lm_head.weight = embed_tokens.weight
+        model._ov_lm_head = lm_head
+
+        def patched_forward(
+            inputs_embeds: torch.FloatTensor,
+            attention_mask: Optional[torch.Tensor] = None,
+            cache_params=None,
+        ):
+            logits, present_key_values = lfm3_language_model_forward(
+                lm_config,
+                language_model.layers,
+                language_model.embedding_norm,
+                self._model._ov_lm_head,
+                inputs_embeds,
+                attention_mask,
+                cache_params,
+            )
+            outputs = {"logits": logits}
+            if cache_params is not None:
+                outputs["present_key_values"] = present_key_values
+            return outputs
+
+        self._set_patched_forward(patched_forward)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        if hasattr(self._model, "_ov_lm_head"):
+            del self._model._ov_lm_head
+
+
+# https://huggingface.co/LiquidAI/LFM3-VL-2B/blob/71d8e745d97c224984e0f20412f532a5ce9dfd3e/modeling_lfm3_vl.py#L215
+# Patches `Lfm3VlVisionAttention.forward`: a batch of equal-size images instead of a flat sequence with `cu_seqlens`.
+# Needed because python branches on `frame_shapes` would freeze the traced image count and grid size.
+def _lfm3_vl_vision_attention_forward(attn, hidden_states, cos, sin):
+    # hidden_states: (num_images, num_patches, hidden_size), every image attends only to its own patches
+    num_images, num_patches, _ = hidden_states.shape
+    head_dim = attn.head_dim
+    query = attn.q_layernorm(attn.q_proj(hidden_states).view(num_images, num_patches, -1, head_dim))
+    key = attn.k_layernorm(attn.k_proj(hidden_states).view(num_images, num_patches, -1, head_dim))
+    value = attn.v_proj(hidden_states).view(num_images, num_patches, -1, head_dim)
+    query = query * cos + _lfm3_rotate_half(query) * sin
+    key = key * cos + _lfm3_rotate_half(key) * sin
+    num_groups = attn.num_heads // attn.num_key_value_heads
+    attn_output = F.scaled_dot_product_attention(
+        query.transpose(1, 2),
+        repeat_kv(key.transpose(1, 2), num_groups),
+        repeat_kv(value.transpose(1, 2), num_groups),
+    )
+    attn_output = attn_output.transpose(1, 2).reshape(num_images, num_patches, -1)
+    return attn.out_proj(attn_output)
+
+
+# https://huggingface.co/LiquidAI/LFM3-VL-2B/blob/71d8e745d97c224984e0f20412f532a5ce9dfd3e/modeling_lfm3_vl.py#L325
+# Patches `Lfm3VlVisionConv2d.forward`: raster-order input, no merge-block permutes or `frame_shapes` loop.
+# Needed so that the traced grid height and width stay dynamic.
+def _lfm3_vl_vision_conv_forward(conv, hidden_states, height, width):
+    num_images, num_patches, hidden_size = hidden_states.shape
+    first, middle, third = conv.in_proj(hidden_states).chunk(3, dim=-1)
+    gated = (first * third).transpose(1, 2).reshape(num_images, hidden_size, height, width)
+    if isinstance(conv.spatial_conv, nn.Conv2d):
+        # LFM3-Omni keeps the depthwise kernel in an nn.Conv2d, LFM3-VL keeps it as a raw parameter
+        output = conv.spatial_conv(gated)
+    else:
+        output = F.conv2d(gated, conv.spatial_conv, padding=1, groups=hidden_size)
+    output = output.reshape(num_images, hidden_size, num_patches).transpose(1, 2)
+    return conv.out_proj(middle * output)
+
+
+# https://huggingface.co/LQ-partners/lfm3-vl-1.9b-rl-Intel/blob/35a7268a6e671abcd3aad1aea8b1bdc56c399a82/modeling_lfm3_vl.py#L399
+# Patches `get_visual_features` of the flat-config partner checkpoint (private repo): no python logic on `grid_thw`.
+# Needed to export vision as a separate submodel with a dynamic image count and grid.
+def lfm3_vl_vision_embeddings_forward(self, pixel_values):
+    """
+    Batched, traceable version of `Lfm3VlForConditionalGeneration.get_visual_features` for images of the same size.
+
+    Args:
+        pixel_values (`torch.FloatTensor` of shape `(num_images, grid_height, grid_width, patch_dim)`):
+            Qwen-style flattened patches in raster order (the block-major order produced by the image processor is
+            rearranged on the host). Every temporal patch of a video is an independent image.
+    Returns:
+        `torch.FloatTensor` of shape `(num_images, grid_height * grid_width / merge_size**2, text_hidden_size)`.
+    """
+    first_attn = next(layer.self_attn for layer in self.vision_encoder.layers if layer.layer_type != "conv")
+    return _lfm3_vision_tower_forward(self.vision_encoder, self.vision_projector, pixel_values, first_attn.theta)
+
+
+# https://huggingface.co/LiquidAI/LFM3-Omni-2B/blob/21d75123f86c1f7ffb4bef1ea202710c4e7ebe67/modeling_lfm3_omni.py#L732
+# Patches `Lfm3OmniModel.get_image_features`, also used for LFM3-VL-2B: equal-size images, no `image_grid_thw`.
+# Needed to export vision as a separate submodel with a dynamic image count and grid.
+def lfm3_omni_vision_embeddings_forward(self, pixel_values):
+    """
+    Same as `lfm3_vl_vision_embeddings_forward` for the vision tower and projector of LFM3-Omni and of the released
+    LFM3-VL (`model.model.vision_tower`, `model.model.multi_modal_projector`): the remote model
+    keeps the patches in merge-block order and converts them to raster order around its 2D convolutions, the axial
+    2D RoPE and the projector merge of the raster-order computation below are equivalent.
+    """
+    tower = self.model.vision_tower
+    return _lfm3_vision_tower_forward(
+        tower, self.model.multi_modal_projector, pixel_values, tower.config.rope_parameters["rope_theta"]
+    )
+
+
+# https://huggingface.co/LiquidAI/LFM3-VL-2B/blob/71d8e745d97c224984e0f20412f532a5ce9dfd3e/modeling_lfm3_vl.py#L485
+# Patches `Lfm3VlVisionModel.forward` + projector: raster-order patches, 2D RoPE from one MatMul of constants.
+# Needed on GPU: theta in the graph overflows f16, and this MatMul -> Concat -> Cos / Sin form stays in f32.
+def _lfm3_vision_tower_forward(encoder, projector, pixel_values, theta):
+    merge = getattr(projector, "spatial_merge_size", None) or projector.downsample_factor
+    num_images, height, width, patch_dim = pixel_values.shape
+    hidden_states = pixel_values.reshape(num_images, height * width, patch_dim).to(encoder.patchifier.weight.dtype)
+    hidden_states = encoder.embedding_norm(encoder.patchifier(hidden_states))
+
+    # 2D RoPE: the first half of the head dim rotates with the row index, the second half with the column index
+    first_attn = next(layer.self_attn for layer in encoder.layers if hasattr(layer, "self_attn"))
+    head_dim = first_attn.head_dim
+    quarter = head_dim // 4
+    # The frequencies are precomputed in python so that they are a constant in the model: computed in the graph,
+    # theta (1e6) overflows f16 on GPU and all the rotations become wrong.
+    # The angles cat(row * freq, col * freq) are computed by a single MatMul of the (row, col) positions with a
+    # block-diagonal frequency matrix, followed by Concat -> Cos / Sin: the pattern that the GPU plugin keeps in f32.
+    freq = [theta ** (-(2.0 * i) / (head_dim // 2)) for i in range(quarter)]
+    freq_matrix = torch.tensor([freq + [0.0] * quarter, [0.0] * quarter + freq], dtype=torch.float32)
+    # Both MatMul operands are expanded over the (dynamic) number of images: with a constant operand the MatMul would
+    # be converted to FullyConnected and not recognized as part of the RoPE subgraph.
+    patch_ids = torch.arange(height * width)
+    positions = torch.stack((torch.div(patch_ids, width, rounding_mode="floor"), patch_ids % width), dim=-1)
+    positions = positions[None].expand(num_images, -1, -1).float()
+    angles = positions @ freq_matrix[None].expand(num_images, -1, -1)
+    angles = torch.cat((angles, angles), dim=-1)
+    cos = angles.cos().unsqueeze(2).to(hidden_states.dtype)
+    sin = angles.sin().unsqueeze(2).to(hidden_states.dtype)
+
+    for layer in encoder.layers:
+        operator_input = layer.operator_norm(hidden_states)
+        if hasattr(layer, "self_attn"):
+            hidden_states = hidden_states + _lfm3_vl_vision_attention_forward(
+                layer.self_attn, operator_input, cos, sin
+            )
+        else:
+            hidden_states = hidden_states + _lfm3_vl_vision_conv_forward(layer.conv, operator_input, height, width)
+        hidden_states = hidden_states + layer.feed_forward(layer.ffn_norm(hidden_states))
+
+    hidden_states = projector.layer_norm(hidden_states)
+    hidden_size = hidden_states.shape[-1]
+    hidden_states = hidden_states.view(num_images, height // merge, merge, width // merge, merge, hidden_size)
+    hidden_states = hidden_states.permute(0, 1, 3, 2, 4, 5).reshape(num_images, -1, merge * merge * hidden_size)
+    hidden_states = projector.linear_1(hidden_states)
+    hidden_states = projector.act(hidden_states) if hasattr(projector, "act") else F.gelu(hidden_states)
+    return projector.linear_2(hidden_states)
+
+
+class _Lfm3ForwardReplacingPatcher(ModelPatcher):
+    """Replaces the forward of the exported (sub)model by `_FORWARD` during the export."""
+
+    _FORWARD = None
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        model.__orig_forward = model.forward
+        model.forward = types.MethodType(type(self)._FORWARD, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._model.__orig_forward
+
+
+class Lfm3VlVisionEmbeddingsPatcher(_Lfm3ForwardReplacingPatcher):
+    _FORWARD = lfm3_vl_vision_embeddings_forward
+
+
+class Lfm3OmniVisionEmbeddingsPatcher(_Lfm3ForwardReplacingPatcher):
+    _FORWARD = lfm3_omni_vision_embeddings_forward
+
+
+class Lfm3VlNestedLanguageModelPatcher(_Lfm3BasePatcher):
+    """
+    Patches the LFM3 language model of the models with a nested config (`text_config`), the language model at
+    `model.model.language_model` and an `lm_head`: the released LFM3-VL (LiquidAI/LFM3-VL-2B) and LFM3-Omni, both
+    remote code. It takes `inputs_embeds` with already merged multimodal features.
+    """
+
+    _OUTPUT_HIDDEN_STATES = False
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(config, model, model_kwargs)
+        lm_config = _lfm3_lm_config(model.config.text_config)
+        language_model = model.model.language_model
+
+        def patched_forward(
+            inputs_embeds: torch.FloatTensor,
+            attention_mask: Optional[torch.Tensor] = None,
+            cache_params=None,
+        ):
+            logits, present_key_values, hidden_states = lfm3_language_model_forward(
+                lm_config,
+                language_model.layers,
+                language_model.embedding_norm,
+                self._model.lm_head,
+                inputs_embeds,
+                attention_mask,
+                cache_params,
+                output_hidden_states=True,
+            )
+            outputs = {"logits": logits}
+            if self._OUTPUT_HIDDEN_STATES:
+                outputs["hidden_states"] = hidden_states
+            if cache_params is not None:
+                outputs["present_key_values"] = present_key_values
+            return outputs
+
+        self._set_patched_forward(patched_forward)
+
+
+class Lfm3OmniLanguageModelPatcher(Lfm3VlNestedLanguageModelPatcher):
+    """
+    Patches the LFM3 language model of LFM3-Omni. Besides the logits it returns the final hidden states: the depth
+    decoder predicts the speech frames from them.
+    """
+
+    _OUTPUT_HIDDEN_STATES = True
+
+
+# https://huggingface.co/LiquidAI/LFM3-Omni-2B/blob/21d75123f86c1f7ffb4bef1ea202710c4e7ebe67/modeling_lfm3_omni.py#L420
+# Patches `Lfm3OmniEncoder.forward` + projector for one unpadded clip: no `feature_lengths`, window mask in the graph.
+# Needed for a mask that follows the dynamic number of frames and a graph without padding logic.
+def lfm3_omni_audio_encoder_forward(self, input_features):
+    """
+    Speech encoder + projector of LFM3-Omni for one clip (no padding), see `Lfm3OmniModel.get_audio_features`.
+
+    Args:
+        input_features (`torch.FloatTensor` of shape `(batch_size, num_mel_bins, num_frames)`): log-mel features.
+    Returns:
+        `torch.FloatTensor` of shape `(batch_size, ceil(num_frames / 8), text_hidden_size)`.
+    """
+    encoder = self.model.audio_encoder
+    lfm = encoder.lfm
+    hidden_states = encoder.downsample(input_features.to(encoder.downsample.conv_in.weight.dtype)).transpose(1, 2)
+    seq_len = hidden_states.shape[1]
+    # causal attention limited to a window of `sliding_window` positions, the conv layers get no mask
+    positions = torch.arange(seq_len)
+    distance = positions[:, None] - positions[None, :]
+    allowed = (distance >= 0) & (distance < encoder.config.sliding_window)
+    min_value = torch.finfo(torch.float16).min
+    mask = torch.zeros_like(allowed, dtype=hidden_states.dtype).masked_fill(~allowed, min_value)[None, None]
+    position_ids = positions.unsqueeze(0)
+    position_embeddings = lfm.rotary_emb(hidden_states, position_ids)
+    for layer in lfm.layers:
+        hidden_states = layer(
+            hidden_states,
+            position_embeddings=position_embeddings,
+            attention_mask=mask if layer.is_attention_layer else None,
+            position_ids=position_ids,
+            past_key_values=None,
+        )
+    hidden_states = lfm.embedding_norm(hidden_states)
+    return self.model.audio_projector(hidden_states)
+
+
+class Lfm3OmniAudioEncoderPatcher(_Lfm3ForwardReplacingPatcher):
+    _FORWARD = lfm3_omni_audio_encoder_forward
+
+
+# https://huggingface.co/LiquidAI/LFM3-Omni-2B/blob/21d75123f86c1f7ffb4bef1ea202710c4e7ebe67/modeling_lfm3_omni.py#L576
+# Patches `Lfm3OmniModel.get_audio_out_embeds`: same math without the input checks, as the forward of its own submodel.
+# Needed because generation embeds every produced speech frame on its own, outside of the language model.
+def lfm3_omni_audio_out_embeddings_forward(self, codes):
+    """Embedding of speech frames fed back to the language model: the sum of the 12 codebook embeddings of a frame."""
+    config = self.config
+    offsets = torch.arange(config.num_codebooks) * config.codebook_size
+    return self.model.codebook_embedding(codes + offsets).sum(-2)
+
+
+class Lfm3OmniAudioOutEmbeddingsPatcher(_Lfm3ForwardReplacingPatcher):
+    _FORWARD = lfm3_omni_audio_out_embeddings_forward
+
+
+# https://huggingface.co/LiquidAI/LFM3-Omni-2B/blob/21d75123f86c1f7ffb4bef1ea202710c4e7ebe67/modeling_lfm3_omni.py#L254
+# Patches `Lfm3OmniDepthDecoder.forward`: trunk via `_lfm3_attention_forward`, constant RoPE, logits via nn.Linear.
+# Needed to keep `Lfm3Model` mask and cache logic out of the trace; `F.linear` would bypass 16-bit weight handling.
+def lfm3_omni_depth_decoder_forward(self, hidden_states, codes, masked):
+    """
+    One MaskGIT pass of the LFM3-Omni depth decoder (see `Lfm3OmniDepthDecoder.forward`).
+
+    Args:
+        hidden_states (`torch.FloatTensor` of shape `(batch_size, text_hidden_size)`): language model hidden states.
+        codes (`torch.LongTensor` of shape `(batch_size, num_codebooks)`): the codes revealed so far.
+        masked (`torch.BoolTensor` of shape `(batch_size, num_codebooks)`): the codebooks still hidden.
+    Returns:
+        `torch.FloatTensor` of shape `(batch_size, num_codebooks, codebook_size)`: the logits of every codebook.
+    """
+    depth_decoder = self.model.depth_decoder
+    trunk = depth_decoder.model
+    lm_config = self._ov_depth_lm_config
+    depth_in = depth_decoder.depth_linear(hidden_states)
+    depth_in = depth_in.unflatten(-1, (depth_decoder.num_codebooks, depth_decoder.hidden_size))
+    code_embeds = torch.stack(
+        [embedding(codes[..., index]) for index, embedding in enumerate(depth_decoder.depth_embeddings)], dim=-2
+    )
+    mask_embedding = depth_decoder.mask_embedding.to(code_embeds.dtype)
+    hidden_states = depth_in + torch.where(masked[..., None], mask_embedding, code_embeds)
+
+    # the codebooks of a frame attend to each other bidirectionally, at the fixed positions 0..num_codebooks-1
+    cos, sin = self._ov_depth_rope
+    batch_size = hidden_states.shape[0]
+    empty_kv = torch.zeros(batch_size, lm_config.num_kv_heads, 0, lm_config.head_dim, dtype=hidden_states.dtype)
+    for layer in trunk.layers:
+        attn_output, _, _ = _lfm3_attention_forward(
+            layer.self_attn, layer.operator_norm(hidden_states), cos, sin, None, empty_kv, empty_kv, lm_config
+        )
+        if hasattr(layer, "post_operator_norm"):
+            attn_output = layer.post_operator_norm(attn_output)
+        hidden_states = hidden_states + attn_output
+        ffn_output = layer.feed_forward(layer.ffn_norm(hidden_states))
+        if hasattr(layer, "post_ffn_norm"):
+            ffn_output = layer.post_ffn_norm(ffn_output)
+        hidden_states = hidden_states + ffn_output
+    hidden_states = trunk.embedding_norm(hidden_states)
+    return torch.stack(
+        [
+            head(embedding.embedding_norm(hidden_states[:, index]))
+            for index, (embedding, head) in enumerate(zip(depth_decoder.depth_embeddings, self._ov_depth_heads))
+        ],
+        dim=1,
+    )
+
+
+class Lfm3OmniDepthDecoderPatcher(_Lfm3ForwardReplacingPatcher):
+    _FORWARD = lfm3_omni_depth_decoder_forward
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        depth_decoder = model.model.depth_decoder
+        lm_config = _lfm3_lm_config(depth_decoder.model.config)
+        model._ov_depth_lm_config = lm_config
+        # the positions of the codebooks are fixed: the RoPE tables are constants
+        inv_freq = lm_config.inv_freq["full_attention"]
+        freqs = torch.arange(depth_decoder.num_codebooks, dtype=torch.float32)[:, None] * inv_freq[None]
+        emb = torch.cat((freqs, freqs), dim=-1)[None, None]
+        model._ov_depth_rope = (emb.cos(), emb.sin())
+        # the logits of a codebook use its tied embedding weight; linear modules sharing them are registered for the
+        # export, so that 16-bit weight handling applies to them as to other nn.Linear
+        heads = nn.ModuleList()
+        for embedding in depth_decoder.depth_embeddings:
+            head = nn.Linear(embedding.embedding.embedding_dim, embedding.embedding.num_embeddings, bias=False)
+            head.weight = embedding.embedding.weight
+            heads.append(head)
+        model._ov_depth_heads = heads
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for name in ("_ov_depth_heads", "_ov_depth_rope", "_ov_depth_lm_config"):
+            if hasattr(self._model, name):
+                delattr(self._model, name)
+
+
+# https://huggingface.co/LiquidAI/LFM3-Omni-2B/blob/21d75123f86c1f7ffb4bef1ea202710c4e7ebe67/modeling_liquid_codec.py#L200
+# Patches the `F.fold` calls of `LiquidCodecISTFT.forward` with reshapes, pads and adds.
+# Needed because `F.fold` converts to Col2Im, which crashes on GPU (OpenVINO 2026.4).
+def _lfm3_overlap_add(frames, hop_length):
+    """F.fold based overlap-add of (batch, win_length, num_frames) frames written with reshapes, pads and adds."""
+    batch_size, win_length, num_frames = frames.shape
+    num_chunks = win_length // hop_length
+    chunks = frames.reshape(batch_size, num_chunks, hop_length, num_frames).permute(0, 1, 3, 2)
+    output = 0
+    for index in range(num_chunks):
+        # chunk `index` of frame t lands on hop t + index
+        output = output + F.pad(chunks[:, index], (0, 0, index, num_chunks - 1 - index))
+    return output.reshape(batch_size, -1)
+
+
+# https://huggingface.co/LiquidAI/LFM3-Omni-2B/blob/21d75123f86c1f7ffb4bef1ea202710c4e7ebe67/modeling_liquid_codec.py#L294
+# Patches `LiquidCodecModel.decode` without streaming: floor divides replace `%`, real DFT-basis MatMul replaces irfft.
+# Needed because a broadcast i64 FloorMod is wrong on GPU; the MatMul keeps the traced decoder free of complex ops.
+def lfm3_omni_audio_decoder_forward(self, audio_codes):
+    """
+    Liquid Codec decoding of LFM3-Omni speech frames (see `LiquidCodecModel.decode` without a streaming cache).
+
+    Args:
+        audio_codes (`torch.LongTensor` of shape `(batch_size, num_codebooks, num_frames)`): codes in [0, 2016).
+    Returns:
+        `torch.FloatTensor` of shape `(batch_size, num_frames * frame_samples)`: 24 kHz waveform.
+    """
+    quantizer = self.quantizer
+    indices = audio_codes.transpose(1, 2).unsqueeze(-1)
+    half_width = quantizer.levels // 2
+    # (indices // basis) % levels written with floor divisions only: the GPU plugin computes a broadcasted i64
+    # FloorMod wrong (OpenVINO 2026.4)
+    digits = indices // quantizer.basis - quantizer.levels * (indices // (quantizer.basis * quantizer.levels))
+    latents = (digits - half_width) / half_width
+    latents = latents.reshape(*latents.shape[:-2], -1).to(self.from_quantizer.weight.dtype)
+    embeddings = self.from_quantizer(quantizer.project_out(latents))
+
+    decoder = self.decoder
+    batch_size, num_frames, hidden_size = embeddings.shape
+    # nearest-exact interpolation by an integer factor repeats every frame
+    hidden_states = embeddings[:, :, None].expand(batch_size, num_frames, decoder.frame_stack, hidden_size)
+    hidden_states = hidden_states.reshape(batch_size, num_frames * decoder.frame_stack, hidden_size)
+    hidden_states, _ = lfm3_language_model_forward(
+        self._ov_decoder_lm_config,
+        decoder.lfm.layers,
+        decoder.lfm.embedding_norm,
+        nn.Identity(),
+        hidden_states,
+        None,
+    )
+    log_magnitude, angle = torch.chunk(decoder.lin(hidden_states).transpose(1, 2), 2, 1)
+    magnitude = log_magnitude.float().exp()
+    angle = angle.float()
+    # irfft as a matmul with real and imaginary DFT bases, then windowed overlap-add as in LiquidCodecISTFT
+    real_basis, imag_basis = self._ov_irfft_basis
+    frames = torch.matmul(real_basis, magnitude * angle.cos()) + torch.matmul(imag_basis, magnitude * angle.sin())
+    window = decoder.istft.window
+    frames = frames * window[None, :, None]
+    hop_length = decoder.istft.hop_length
+    audio = _lfm3_overlap_add(frames, hop_length)
+    envelope = _lfm3_overlap_add(window.square()[None, :, None].expand(1, -1, frames.shape[-1]), hop_length)
+    trim = (decoder.istft.win_length - hop_length) // 2
+    return audio[:, trim:-trim] / envelope[:, trim:-trim]
+
+
+class Lfm3OmniAudioDecoderPatcher(_Lfm3ForwardReplacingPatcher):
+    _FORWARD = lfm3_omni_audio_decoder_forward
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        istft = model.decoder.istft
+        if istft.win_length != istft.n_fft or istft.win_length % istft.hop_length:
+            raise ValueError("Liquid Codec export expects win_length == n_fft and a multiple of hop_length")
+        model._ov_decoder_lm_config = _lfm3_lm_config(model.decoder.lfm.config)
+        # irfft (norm="backward") of n_fft // 2 + 1 bins: x[n] = sum_k w_k (Re X_k cos(2 pi k n / N) - Im X_k sin(...))
+        # / N with w_0 = w_{N/2} = 1, other w_k = 2 (the imaginary parts of the DC and Nyquist bins are ignored)
+        n_fft = istft.n_fft
+        bins = torch.arange(n_fft // 2 + 1, dtype=torch.float64)
+        weights = torch.full_like(bins, 2.0)
+        weights[0] = weights[-1] = 1.0
+        angles = 2 * math.pi * torch.arange(n_fft, dtype=torch.float64)[:, None] * bins[None] / n_fft
+        model._ov_irfft_basis = (
+            (weights * angles.cos() / n_fft).float(),
+            (-weights * angles.sin() / n_fft).float(),
+        )
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for name in ("_ov_decoder_lm_config", "_ov_irfft_basis"):
+            if hasattr(self._model, name):
+                delattr(self._model, name)
+
+
 # Copied from https://github.com/huggingface/transformers/blob/v4.56.0/src/transformers/models/gpt_oss/modeling_gpt_oss.py#L81
 def gpt_oss_forward(self, hidden_states: torch.Tensor, router_indices=None, routing_weights=None) -> torch.Tensor:
     batch_size = hidden_states.shape[0]
@@ -9154,71 +9920,58 @@ class LlamaEagle3ForCausalLM(LlamaPreTrainedModel, GenerationMixin):
         )
 
 
-def _dflash_apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1):
-    cos = cos.unsqueeze(unsqueeze_dim)
-    sin = sin.unsqueeze(unsqueeze_dim)
-    q_len = q.size(-2)
-    q_embed = (q * cos[..., -q_len:, :]) + (qwen3_rotate_half(q) * sin[..., -q_len:, :])
-    k_embed = (k * cos) + (qwen3_rotate_half(k) * sin)
-    return q_embed, k_embed
-
-
-def _dflash_repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
-    """repeat_kv using reshape instead of unsqueeze to insert the group dim.
-
-    The GPU plugin's UnsqueezeBroadcastReshapeSDPAFusion matches a Reshape but not the
-    Unsqueeze from stock ``[:, :, None]`` (valid only atop a KVCache op the draft lacks).
-    Matching keeps the draft on native-GQA SDPA (micro kernel), not a materialized broadcast.
-    """
-    batch, num_key_value_heads, slen, head_dim = hidden_states.shape
-    if n_rep == 1:
-        return hidden_states
-    hidden_states = hidden_states.reshape(batch, num_key_value_heads, 1, slen, head_dim).expand(
-        batch, num_key_value_heads, n_rep, slen, head_dim
-    )
-    return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
-
-
-def _dflash_attention_mask(
-    query_states: torch.Tensor,
-    key_states: torch.Tensor,
-    cache_position: Optional[torch.LongTensor],
+def _dflash_attention_masks(
+    attention_mask: torch.Tensor,
+    token_type_ids: torch.Tensor,
     sliding_window: Optional[int],
-    attention_mask: Optional[torch.Tensor] = None,
-) -> Optional[torch.Tensor]:
-    q_len = query_states.shape[-2]
-    kv_len = key_states.shape[-2]
+    dtype: torch.dtype,
+) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+    """Additive [batch, 1, query_len, kv_len] masks for the full and the sliding-window layers.
+
+    Queries are the new rows [context; block] and keys are [past; context; block]. Attention is causal,
+    except that block rows (token_type_ids == 1) also see the later block rows, which makes the block
+    bidirectional. These are the PagedAttentionExtension token_type_ids semantics: SDPAToPagedAttention
+    forwards token_type_ids because the masks depend on it, and it recognizes the sliding mask form
+    Select(.., Select(Unsqueeze(Unsqueeze(distance >= window)))) as the PagedAttentionExtension sliding_window.
+    """
+    batch_size, kv_len = attention_mask.shape
+    query_len = token_type_ids.shape[1]
+    past_len = kv_len - query_len
+    device = attention_mask.device
+    min_value = torch.tensor(torch.finfo(dtype).min, dtype=dtype, device=device)
+    zero = torch.tensor(0.0, dtype=dtype, device=device)
+
+    key_positions = torch.arange(kv_len, device=device)
+    query_positions = torch.arange(past_len, kv_len, device=device)
+    # cached keys are committed context, never block rows
+    past_token_types = torch.zeros((batch_size, past_len), dtype=token_type_ids.dtype, device=device)
+    key_token_types = torch.cat([past_token_types, token_type_ids], dim=1)
+    bidirectional = (token_type_ids[:, :, None] == 1) & (key_token_types[:, None, :] == 1)
+    future = key_positions[None, :] > query_positions[:, None]
+    padding = attention_mask[:, None, :] == 0
+    masked = ((future[None, :, :] & ~bidirectional) | padding)[:, None, :, :]
+
+    full_mask = torch.where(masked, min_value, zero)
     if sliding_window is None:
-        if attention_mask is None:
-            return None
-        # Full-attention layers only need the caller's padding mask. Avoid building
-        # and adding an all-zero [batch, 1, q_len, kv_len] mask.
-        return attention_mask[:, :, :, -kv_len:]
-    device = query_states.device
-    dtype = query_states.dtype
-    full_mask = torch.zeros((q_len, kv_len), dtype=dtype, device=device)
-
-    if sliding_window is not None:
-        # Window test is relative: (query_pos - key_pos) >= window. kv_len already
-        # reflects any cached slice, so a 0-based frame (queries = last q_len) gives
-        # the right distances with no absolute offset.
-        query_positions = torch.arange(kv_len - q_len, kv_len, device=device)
-        key_positions = torch.arange(kv_len, device=device)
-        outside_window = (query_positions.reshape(-1, 1) - key_positions.reshape(1, -1)) >= sliding_window
-        full_mask = full_mask.masked_fill(outside_window, torch.finfo(dtype).min)
-
-    full_mask = full_mask[None, None, :, :].expand(query_states.shape[0], 1, -1, -1)
-
-    if attention_mask is None:
-        return full_mask
-    # Keep the last kv_len columns: the kept keys are the caller mask's final entries.
-    return attention_mask[:, :, :, -kv_len:] + full_mask
+        return full_mask, None
+    outside_window = (query_positions[:, None] - key_positions[None, :]) >= sliding_window
+    window_mask = torch.where(outside_window.unsqueeze(0).unsqueeze(0), min_value, zero)
+    return full_mask, torch.where(masked, min_value, window_mask)
 
 
 # adopted from https://github.com/z-lab/dflash/blob/main/dflash/model.py#L185
-# and https://github.com/huggingface/transformers/blob/v5.14.0/src/transformers/models/qwen3/modeling_qwen3.py#L222
 class Qwen3DFlashAttention(Qwen3Attention):
-    """Qwen3 attention variant used by DFlash, where draft tokens attend over target context and noise tokens."""
+    """Qwen3 attention in which only the block rows get a query.
+
+        rows     [ ctx ctx ctx | blk blk blk ]
+        K, V     [ k   k   k   | k   k   k   ]   every row, cached with the stock concat
+        Q        [ 0   0   0   | q   q   q   ]   projected for block rows only
+        output                 [ o   o   o   ]   block rows only
+
+    PagedAttention needs one query per key row, hence the zero queries. The mask carries the causal pattern
+    with a bidirectional block; is_causal is False so a missing mask never falls back to causal attention.
+    The cache keeps the block rows: the next step starts at the committed length and overwrites them.
+    """
 
     def __init__(self, config: "Qwen3Config", layer_idx: int):
         super().__init__(config, layer_idx)
@@ -9227,83 +9980,44 @@ class Qwen3DFlashAttention(Qwen3Attention):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        target_hidden: torch.Tensor,
+        block_states: torch.Tensor,
+        block_rows: torch.Tensor,
         position_embeddings: Tuple[torch.Tensor, torch.Tensor],
-        attention_mask: Optional[torch.Tensor] = None,
+        attention_mask: Optional[torch.Tensor],
         past_key_values: Optional[Cache] = None,
-        cache_position: Optional[torch.LongTensor] = None,
         **kwargs: Unpack[TransformersKwargs],
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-        from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+    ) -> torch.Tensor:
+        """hidden_states: [batch, seq, hidden], every row. block_states: [N, hidden], the block rows at the
+        flattened indices block_rows. Returns [N, hidden]."""
+        batch_size, seq_len = hidden_states.shape[:2]
+        # literal head counts keep the head dimensions static for the GPU SDPA and RoPE fusions
+        num_heads, num_kv_heads = self.config.num_attention_heads, self.config.num_key_value_heads
 
-        bsz, q_len = hidden_states.shape[:-1]
-        ctx_len = target_hidden.shape[1]
-
-        query_states = self.q_proj(hidden_states).view(bsz, q_len, self.config.num_attention_heads, self.head_dim)
-        query_states = self.q_norm(query_states).transpose(1, 2)
-
-        kv_hidden_states = torch.cat([target_hidden, hidden_states], dim=1)
-        key_states = self.k_proj(kv_hidden_states).view(
-            bsz, ctx_len + q_len, self.config.num_key_value_heads, self.head_dim
-        )
-        value_states = self.v_proj(kv_hidden_states).view(
-            bsz, ctx_len + q_len, self.config.num_key_value_heads, self.head_dim
-        )
-        key_states = self.k_norm(key_states).transpose(1, 2)
-        value_states = value_states.transpose(1, 2)
-
+        # keys and values for every row
+        kv_shape = (batch_size, seq_len, num_kv_heads, self.head_dim)
+        key_states = self.k_norm(self.k_proj(hidden_states).view(kv_shape)).transpose(1, 2)
+        value_states = self.v_proj(hidden_states).view(kv_shape).transpose(1, 2)
         cos, sin = position_embeddings
-        query_states, key_states = _dflash_apply_rotary_pos_emb(query_states, key_states, cos, sin)
-        target_key_states, block_key_states = key_states.split([ctx_len, q_len], dim=2)
-        target_value_states, block_value_states = value_states.split([ctx_len, q_len], dim=2)
+        key_states = key_states * cos.unsqueeze(1) + qwen3_rotate_half(key_states) * sin.unsqueeze(1)
+
+        # queries for the block rows only, with RoPE at their positions
+        query_shape = (1, block_states.shape[0], num_heads, self.head_dim)
+        query_states = self.q_norm(self.q_proj(block_states).view(query_shape)).transpose(1, 2)
+        block_cos, block_sin = (t.flatten(0, 1).index_select(0, block_rows)[None] for t in (cos, sin))
+        query_states = query_states * block_cos.unsqueeze(1) + qwen3_rotate_half(query_states) * block_sin.unsqueeze(1)
+        # zero queries for the context rows: attention needs one query per key row
+        all_queries = query_states.new_zeros(batch_size * seq_len, num_heads, self.head_dim)
+        all_queries[block_rows] = query_states.transpose(1, 2)[0]
+        query_states = all_queries.view(batch_size, seq_len, num_heads, self.head_dim).transpose(1, 2)
 
         if past_key_values is not None:
-            # Persist only committed target-prefix K/V; the speculative block is local,
-            # so rejection never needs a cache trim.
-            target_cache_position = cache_position[:ctx_len] if cache_position is not None else None
-            cache_kwargs = {"sin": sin[:, :ctx_len], "cos": cos[:, :ctx_len], "cache_position": target_cache_position}
-            target_key_states, target_value_states = past_key_values.update(
-                target_key_states,
-                target_value_states,
-                self.layer_idx,
-                cache_kwargs,
-            )
-
-        if self.sliding_window is not None:
-            # Sliding layers need only the last `sliding_window` target tokens (a query
-            # at p attends to (p - window, p]). Slicing makes the concat and SDPA
-            # O(window) not O(context); the window mask below still trims within the kept
-            # set, so output is unchanged. Negative slice is a no-op while context <= window.
-            target_key_states = target_key_states[:, :, -self.sliding_window :, :]
-            target_value_states = target_value_states[:, :, -self.sliding_window :, :]
-
-        key_states = torch.cat([target_key_states, block_key_states], dim=2)
-        value_states = torch.cat([target_value_states, block_value_states], dim=2)
-        attention_mask = _dflash_attention_mask(
-            query_states,
-            key_states,
-            cache_position,
-            self.sliding_window,
-            attention_mask,
-        )
-
+            cache_kwargs = {"sin": sin, "cos": cos}
+            key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx, cache_kwargs)
         attention_interface = qwen3_eager_attention_forward
-        attention_module = self
         if self.config._attn_implementation != "eager":
             attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
-            if self.config._attn_implementation == "sdpa" and self.num_key_value_groups > 1:
-                # Re-pin static head / head_dim before repeat_kv: cldnn makes the
-                # cat([cache, block]) fully dynamic, hiding the KV head count from the GPU
-                # SDPA's GQA dispatch (slow ref kernel). A literal-dim Reshape restores it,
-                # so the repeat_kv fusion yields native-GQA SDPA (micro kernel).
-                key_states = key_states.reshape(bsz, self.config.num_key_value_heads, -1, self.head_dim)
-                value_states = value_states.reshape(bsz, self.config.num_key_value_heads, -1, self.head_dim)
-                key_states = _dflash_repeat_kv(key_states, self.num_key_value_groups)
-                value_states = _dflash_repeat_kv(value_states, self.num_key_value_groups)
-                attention_module = SimpleNamespace(is_causal=self.is_causal)
-
-        attn_output, attn_weights = attention_interface(
-            attention_module,
+        attn_output, _ = attention_interface(
+            self,
             query_states,
             key_states,
             value_states,
@@ -9313,9 +10027,9 @@ class Qwen3DFlashAttention(Qwen3Attention):
             sliding_window=self.sliding_window,
             **kwargs,
         )
-        attn_output = attn_output.reshape(bsz, q_len, -1)
-        attn_output = self.o_proj(attn_output)
-        return attn_output, attn_weights
+        # keep the block rows; o_proj runs on them only
+        attn_output = attn_output.reshape(batch_size * seq_len, num_heads * self.head_dim)
+        return self.o_proj(attn_output.index_select(0, block_rows))
 
 
 # adopted from https://github.com/z-lab/dflash/blob/main/dflash/model.py#L258
@@ -9332,29 +10046,28 @@ class Qwen3DFlashDecoderLayer(nn.Module):
         self,
         target_hidden: torch.Tensor,
         hidden_states: torch.Tensor,
+        block_rows: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Cache] = None,
-        output_attentions: Optional[bool] = False,
-        use_cache: Optional[bool] = False,
-        cache_position: Optional[torch.LongTensor] = None,
+        past_key_values: Optional[Cache] = None,
         position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         **kwargs: Unpack[TransformersKwargs],
     ) -> torch.FloatTensor:
+        # hidden_states holds only the block rows [N, hidden]: the norms, o_proj and MLP run on them alone.
+        # Context rows enter as target_hidden, which feeds only their keys and values.
         residual = hidden_states
-        hidden_states = self.input_layernorm(hidden_states)
+        block_states = self.input_layernorm(hidden_states)
+        # attention input of every row: target features, with the normalized block rows written in
+        attention_input = target_hidden.flatten(0, 1).clone()
+        attention_input[block_rows] = block_states
         hidden_states = self.self_attn(
-            hidden_states=hidden_states,
-            target_hidden=target_hidden,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            past_key_values=past_key_value,
-            output_attentions=output_attentions,
-            use_cache=use_cache,
-            cache_position=cache_position,
+            hidden_states=attention_input.view_as(target_hidden),
+            block_states=block_states,
+            block_rows=block_rows,
             position_embeddings=position_embeddings,
+            attention_mask=attention_mask,
+            past_key_values=past_key_values,
             **kwargs,
-        )[0]
+        )
         hidden_states = residual + hidden_states
 
         residual = hidden_states
@@ -9397,14 +10110,44 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
         attention_mask: Optional[torch.Tensor] = None,
         noise_embedding: Optional[torch.Tensor] = None,
         hidden_states: Optional[torch.Tensor] = None,
+        token_type_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Cache] = None,
         use_cache: Optional[bool] = None,
-        cache_position: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> BaseModelOutputWithPast:
+        """Runs the draft over the new rows [context; block] of each sequence.
+
+            context rows:  hidden_states   -> fc + norm -> K, V of every layer     (no query, no MLP)
+            block rows:    noise_embedding -> full layers -> norm -> last_hidden_state
+
+        token_type_ids marks context rows (0) and block rows (1); hidden_states and noise_embedding then cover
+        all rows and each row reads the input of its type. Without token_type_ids, hidden_states holds only the
+        context rows and noise_embedding only the block rows. last_hidden_state covers all rows, zero in the
+        context rows.
+        """
+        if token_type_ids is None:
+            batch_size, ctx_len = hidden_states.shape[:2]
+            block_len = noise_embedding.shape[1]
+            device = noise_embedding.device
+            token_type_ids = torch.cat(
+                [
+                    torch.zeros((batch_size, ctx_len), dtype=torch.long, device=device),
+                    torch.ones((batch_size, block_len), dtype=torch.long, device=device),
+                ],
+                dim=1,
+            )
+            noise_embedding = torch.cat(
+                [noise_embedding.new_zeros(batch_size, ctx_len, noise_embedding.shape[-1]), noise_embedding], dim=1
+            )
+            hidden_states = torch.cat(
+                [hidden_states, hidden_states.new_zeros(batch_size, block_len, hidden_states.shape[-1])], dim=1
+            )
         noise_states = noise_embedding
-        target_hidden = hidden_states.to(noise_states.dtype)
-        target_hidden = self.hidden_norm(self.fc(target_hidden))
+        # target features of every row; the layers use them only for the context rows' keys and values
+        target_hidden = self.hidden_norm(self.fc(hidden_states.to(noise_states.dtype)))
+        # indices of the block rows in flattened [batch * seq] order, which fits both [1, seq] (stateful SDPA)
+        # and [tokens, 1] (PagedAttention); empty for a context-only prompt chunk
+        block_rows = torch.nonzero(token_type_ids.flatten() == 1).squeeze(-1)
         use_cache = use_cache if use_cache is not None else self.config.use_cache
         if use_cache:
             if past_key_values is None:
@@ -9414,32 +10157,39 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
                     past_key_values = DynamicCache.from_legacy_cache(past_key_values)
                 else:
                     past_key_values = DynamicCache(past_key_values)
-        if use_cache and cache_position is None:
+        if attention_mask is None:
             past_seen_tokens = past_key_values.get_seq_length() if past_key_values is not None else 0
-            cache_position = torch.arange(
-                past_seen_tokens,
-                past_seen_tokens + target_hidden.shape[1] + noise_states.shape[1],
+            attention_mask = torch.ones(
+                (token_type_ids.shape[0], past_seen_tokens + token_type_ids.shape[1]),
+                dtype=torch.long,
                 device=noise_states.device,
             )
-        if attention_mask is not None and attention_mask.dim() == 2:
-            attention_mask = (1.0 - attention_mask[:, None, None, :].to(dtype=noise_states.dtype)) * torch.finfo(
-                noise_states.dtype
-            ).min
+        has_sliding_layers = any(layer.self_attn.sliding_window is not None for layer in self.layers)
+        full_mask, sliding_mask = _dflash_attention_masks(
+            attention_mask,
+            token_type_ids,
+            self.config.sliding_window if has_sliding_layers else None,
+            noise_states.dtype,
+        )
+        # cos/sin of every row: keys use all of them, queries pick the block rows
         position_embeddings = self.rotary_emb(noise_states, position_ids)
+        # from here on the residual stream holds only the block rows
+        noise_states = noise_states.flatten(0, 1).index_select(0, block_rows)
         for layer in self.layers:
             noise_states = layer(
-                hidden_states=noise_states,
                 target_hidden=target_hidden,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_value=past_key_values,
-                use_cache=use_cache,
-                cache_position=cache_position,
+                hidden_states=noise_states,
+                block_rows=block_rows,
+                attention_mask=full_mask if layer.self_attn.sliding_window is None else sliding_mask,
+                past_key_values=past_key_values,
                 position_embeddings=position_embeddings,
                 **kwargs,
             )
+        # write the block rows back into all rows; the caller ignores the context rows, which stay zero
+        last_hidden_state = target_hidden.new_zeros(target_hidden.shape).flatten(0, 1)
+        last_hidden_state[block_rows] = self.norm(noise_states)
         return BaseModelOutputWithPast(
-            last_hidden_state=self.norm(noise_states),
+            last_hidden_state=last_hidden_state.view_as(target_hidden),
             past_key_values=past_key_values if use_cache else None,
         )
 
@@ -9448,10 +10198,11 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
 class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
     """DFlash draft head exported as embeddings-in / hidden-states-out.
 
-    The token embedding and lm_head are intentionally absent: the draft consumes
-    ``inputs_embeds`` (produced from the target embedding) and emits the post-norm
-    ``last_hidden_state``. OpenVINO GenAI grafts the target lm_head onto this output
-    at load time, so the export bundles neither the embedding nor the projection.
+    The token embedding and lm_head are intentionally absent: the draft consumes ``inputs_embeds``
+    (produced from the target embedding) and emits the post-norm ``last_hidden_state`` of every row (zero in
+    the context rows).
+    OpenVINO GenAI selects each sequence's candidate rows (``dflash/candidate_position_offset`` rows
+    into the block) and grafts the target lm_head onto them at load time.
     """
 
     def forward(
@@ -9460,152 +10211,121 @@ class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
         hidden_states: torch.Tensor,
         position_ids: torch.LongTensor,
         attention_mask: Optional[torch.Tensor] = None,
+        token_type_ids: Optional[torch.LongTensor] = None,
         past_key_values: Optional[Cache] = None,
         use_cache: Optional[bool] = None,
-        logits_to_keep: Optional[int] = None,
         **kwargs,
     ) -> BaseModelOutputWithPast:
-        outputs = super().forward(
+        return super().forward(
             hidden_states=hidden_states,
             noise_embedding=inputs_embeds,
             position_ids=position_ids,
             attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
             past_key_values=past_key_values,
             use_cache=use_cache,
             **kwargs,
         )
-        # Drop the seed position so emitted hidden states align 1:1 with the draft
-        # candidate tokens that the grafted lm_head will score.
-        if logits_to_keep is None:
-            last_hidden_state = outputs.last_hidden_state[:, 1:, :]
-        else:
-            last_hidden_state = outputs.last_hidden_state[:, -logits_to_keep:, :]
-        return BaseModelOutputWithPast(
-            last_hidden_state=last_hidden_state,
-            past_key_values=outputs.past_key_values,
-        )
-
-
-def _muse_glimmer_assistant_attention_mask(
-    query_states: torch.Tensor,
-    key_states: torch.Tensor,
-    sliding_window: Optional[int],
-    attention_mask: Optional[torch.Tensor],
-) -> Optional[torch.Tensor]:
-    """Bidirectional (optionally windowed) additive mask for the MuseGlimmer drafter.
-
-    Replaces the per-model ``mask_mapping``, which assumes keys are cache + context + window in every layer:
-    https://github.com/huggingface/transformers/blob/v5.15.1/src/transformers/models/muse_glimmer_assistant/modeling_muse_glimmer_assistant.py#L428-L441
-    The patched attention keeps the window out of the cache and trims sliding layers, so the mask is built per layer
-    from the actual ``key_states``. The window bound stays inclusive, as in transformers:
-    https://github.com/huggingface/transformers/blob/v5.15.1/src/transformers/masking_utils.py#L146-L149
-    """
-    q_len = query_states.shape[-2]
-    kv_len = key_states.shape[-2]
-    if attention_mask is not None:
-        # Keep the columns matching the (possibly trimmed) key set.
-        attention_mask = attention_mask[:, :, :, -kv_len:]
-    if sliding_window is None:
-        return attention_mask
-
-    dtype = query_states.dtype
-    device = query_states.device
-    query_positions = torch.arange(kv_len - q_len, kv_len, device=device)
-    key_positions = torch.arange(kv_len, device=device)
-    outside_window = (query_positions.reshape(-1, 1) - key_positions.reshape(1, -1)).abs() > sliding_window
-    window_mask = torch.zeros((q_len, kv_len), dtype=dtype, device=device)
-    window_mask = window_mask.masked_fill(outside_window, torch.finfo(dtype).min)
-    window_mask = window_mask[None, None, :, :].expand(query_states.shape[0], 1, -1, -1)
-
-    if attention_mask is None:
-        return window_mask
-    return attention_mask + window_mask
 
 
 def _muse_glimmer_assistant_attention_forward(
-    self,
+    attention,
     hidden_states: torch.Tensor,
-    context_hidden_states: torch.Tensor,
+    block_states: torch.Tensor,
+    block_rows: torch.Tensor,
     position_embeddings: Tuple[torch.Tensor, torch.Tensor],
-    attention_mask: Optional[torch.Tensor] = None,
+    attention_mask: Optional[torch.Tensor],
     past_key_values: Optional[Cache] = None,
     **kwargs,
-) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-    """MuseGlimmer drafter attention that keeps only the target context in the KV cache.
+) -> torch.Tensor:
+    """MuseGlimmer drafter attention in which only the block rows get a query, as in ``Qwen3DFlashAttention``.
 
-    The stock implementation appends the diffusion window to the cache alongside the
-    context and relies on ``DFlashCache.crop`` to evict it again on the next step. A
-    stateful OpenVINO model cannot roll its state back, so the window's K/V is instead
-    concatenated locally, after the cache update. The cache then only ever grows by the
-    accepted-token context, which is exactly the DFlash contract and needs no rollback.
+    hidden_states: [batch, seq, hidden], every row. block_states: [N, hidden], the block rows at the flattened
+    indices block_rows. Returns [N, hidden].
     """
     from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
     from transformers.models.muse_glimmer_assistant.modeling_muse_glimmer_assistant import (
-        eager_attention_forward as muse_glimmer_assistant_eager_attention_forward,
+        eager_attention_forward,
+        rotate_half,
     )
 
-    bsz, q_len = hidden_states.shape[:-1]
-    ctx_len = context_hidden_states.shape[1]
-    hidden_shape = (bsz, q_len, -1, self.head_dim)
-    kv_hidden_shape = (bsz, ctx_len + q_len, -1, self.head_dim)
+    batch_size, seq_len = hidden_states.shape[:2]
+    # literal head counts keep the head dimensions static for the GPU SDPA and RoPE fusions
+    num_heads, num_kv_heads, head_dim = (
+        attention.num_attention_heads,
+        attention.num_key_value_heads,
+        attention.head_dim,
+    )
 
-    kv_hidden_states = torch.cat([context_hidden_states, hidden_states], dim=1)
-    query_states = self.q_proj(hidden_states).view(hidden_shape).transpose(1, 2)
-    key_states = self.k_proj(kv_hidden_states).view(kv_hidden_shape).transpose(1, 2)
-    value_states = self.v_proj(kv_hidden_states).view(kv_hidden_shape).transpose(1, 2)
-    query_states = self.q_norm(query_states)
-    key_states = self.k_norm(key_states)
-
-    # `cos`/`sin` span the context plus the diffusion window; the queries are the window,
-    # so they take the trailing positions while the keys take all of them.
+    # keys and values for every row
+    kv_shape = (batch_size, seq_len, num_kv_heads, head_dim)
+    key_states = attention.k_norm(attention.k_proj(hidden_states).view(kv_shape)).transpose(1, 2)
+    value_states = attention.v_proj(hidden_states).view(kv_shape).transpose(1, 2)
     cos, sin = position_embeddings
-    query_states, key_states = _dflash_apply_rotary_pos_emb(query_states, key_states, cos, sin)
+    key_states = key_states * cos.unsqueeze(1) + rotate_half(key_states) * sin.unsqueeze(1)
 
-    context_key_states, block_key_states = key_states.split([ctx_len, q_len], dim=2)
-    context_value_states, block_value_states = value_states.split([ctx_len, q_len], dim=2)
+    # queries for the block rows only, with RoPE at their positions
+    query_shape = (1, block_states.shape[0], num_heads, head_dim)
+    query_states = attention.q_norm(attention.q_proj(block_states).view(query_shape)).transpose(1, 2)
+    block_cos, block_sin = (t.flatten(0, 1).index_select(0, block_rows)[None] for t in (cos, sin))
+    query_states = query_states * block_cos.unsqueeze(1) + rotate_half(query_states) * block_sin.unsqueeze(1)
+    # zero queries for the context rows: attention needs one query per key row
+    all_queries = query_states.new_zeros(batch_size * seq_len, num_heads, head_dim)
+    all_queries[block_rows] = query_states.transpose(1, 2)[0]
+    query_states = all_queries.view(batch_size, seq_len, num_heads, head_dim).transpose(1, 2)
+
     if past_key_values is not None:
-        context_key_states, context_value_states = past_key_values.update(
-            context_key_states, context_value_states, self.layer_idx
-        )
-
-    sliding_window = self.sliding_window if self.is_sliding else None
-    if sliding_window is not None:
-        # A window query attends back at most `sliding_window` positions, so older
-        # context can never be reached. Trimming keeps the concat and SDPA O(window).
-        context_key_states = context_key_states[:, :, -sliding_window:, :]
-        context_value_states = context_value_states[:, :, -sliding_window:, :]
-
-    key_states = torch.cat([context_key_states, block_key_states], dim=2)
-    value_states = torch.cat([context_value_states, block_value_states], dim=2)
-    attention_mask = _muse_glimmer_assistant_attention_mask(query_states, key_states, sliding_window, attention_mask)
-
-    attention_interface = muse_glimmer_assistant_eager_attention_forward
-    attention_module = self
-    if self.config._attn_implementation != "eager":
-        attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
-        if self.config._attn_implementation == "sdpa" and self.num_key_value_groups > 1:
-            # Same reasoning as the Qwen3 DFlash path: re-pin the KV head count with a
-            # literal-dim Reshape so the GPU plugin still dispatches native-GQA SDPA.
-            key_states = key_states.reshape(bsz, self.num_key_value_heads, -1, self.head_dim)
-            value_states = value_states.reshape(bsz, self.num_key_value_heads, -1, self.head_dim)
-            key_states = _dflash_repeat_kv(key_states, self.num_key_value_groups)
-            value_states = _dflash_repeat_kv(value_states, self.num_key_value_groups)
-            attention_module = SimpleNamespace(is_causal=False)
-
-    attn_output, attn_weights = attention_interface(
-        attention_module,
+        key_states, value_states = past_key_values.update(key_states, value_states, attention.layer_idx)
+    attention_interface = ALL_ATTENTION_FUNCTIONS.get_interface(
+        attention.config._attn_implementation, eager_attention_forward
+    )
+    attn_output, _ = attention_interface(
+        attention,
         query_states,
         key_states,
         value_states,
         attention_mask,
         dropout=0.0,
-        scaling=self.scaling,
-        sliding_window=None,
+        scaling=attention.scaling,
         **kwargs,
     )
-    attn_output = attn_output.reshape(bsz, q_len, -1).contiguous()
-    attn_output = self.o_proj(attn_output)
-    return attn_output, attn_weights
+    # keep the block rows; o_proj runs on them only
+    attn_output = attn_output.reshape(batch_size * seq_len, num_heads * head_dim)
+    return attention.o_proj(attn_output.index_select(0, block_rows))
+
+
+def _muse_glimmer_assistant_decoder_layer_forward(
+    layer,
+    target_hidden: torch.Tensor,
+    hidden_states: torch.Tensor,
+    block_rows: torch.Tensor,
+    position_embeddings: Tuple[torch.Tensor, torch.Tensor],
+    attention_mask: Optional[torch.Tensor],
+    past_key_values: Optional[Cache] = None,
+    **kwargs,
+) -> torch.Tensor:
+    # hidden_states holds only the block rows [N, hidden]: the norms, o_proj and MLP run on them alone.
+    # Context rows enter as target_hidden, which feeds only their keys and values.
+    residual = hidden_states
+    block_states = layer.input_layernorm(hidden_states)
+    # attention input of every row: target features, with the normalized block rows written in
+    attention_input = target_hidden.flatten(0, 1).clone()
+    attention_input[block_rows] = block_states
+    hidden_states = _muse_glimmer_assistant_attention_forward(
+        layer.self_attn,
+        attention_input.view_as(target_hidden),
+        block_states,
+        block_rows,
+        position_embeddings,
+        attention_mask,
+        past_key_values,
+        **kwargs,
+    )
+    hidden_states = residual + hidden_states
+
+    residual = hidden_states
+    hidden_states = layer.mlp(layer.post_attention_layernorm(hidden_states))
+    return residual + hidden_states
 
 
 @functools.lru_cache(maxsize=1)
@@ -9615,61 +10335,63 @@ def get_muse_glimmer_assistant_draft_model_class():
     Defined lazily because ``muse_glimmer_assistant`` only exists in transformers >= 5.15,
     while this module is imported eagerly.
 
-    The class exposes the same I/O contract as the Qwen3 DFlash export: the token
-    embedding and lm_head are intentionally absent, because the drafter borrows the
-    target's at runtime. ``inputs_embeds`` is the diffusion window (anchor token +
-    ``block_size - 1`` mask tokens) embedded with the target's *raw* lookup table, and
-    ``hidden_states`` is the target's hidden states at ``config.target_layer_ids``
-    concatenated on the last axis. The returned ``last_hidden_state`` drops the anchor
-    position so it aligns 1:1 with the drafted tokens the grafted lm_head will score.
+    The class runs the native MuseGlimmer modules with the I/O of the Qwen3 DFlash draft export (see
+    ``Qwen3DFlashDraftModel.forward``): ``inputs_embeds``, ``hidden_states``, ``position_ids`` and
+    ``token_type_ids`` cover the new rows [context; block], and ``last_hidden_state`` covers every row, zero in
+    the context rows. The token embedding and lm_head are intentionally absent: the drafter borrows the target's.
     """
     from transformers.models.muse_glimmer_assistant.modeling_muse_glimmer_assistant import MuseGlimmerAssistantModel
 
     class MuseGlimmerAssistantDFlashForCausalLM(MuseGlimmerAssistantModel):
-        def __init__(self, config):
-            super().__init__(config)
-            for layer in self.layers:
-                layer.self_attn.forward = types.MethodType(_muse_glimmer_assistant_attention_forward, layer.self_attn)
-
         def forward(
             self,
             inputs_embeds: torch.FloatTensor,
             hidden_states: torch.Tensor,
             position_ids: torch.LongTensor,
-            attention_mask: Optional[torch.Tensor] = None,
+            attention_mask: torch.Tensor,
+            token_type_ids: torch.LongTensor,
             past_key_values: Optional[Cache] = None,
             use_cache: Optional[bool] = True,
             **kwargs,
         ) -> BaseModelOutputWithPast:
-            noise_states = inputs_embeds
-            context_hidden_states = self.encoder(hidden_states.to(noise_states.dtype))
-
-            if is_transformers_version("<", "5"):
-                past_key_values = DynamicCache.from_legacy_cache(past_key_values)
-            else:
+            # target features of every row; the layers use them only for the context rows' keys and values
+            target_hidden = self.encoder(hidden_states.to(inputs_embeds.dtype))
+            # indices of the block rows in flattened [batch * seq] order, which fits both [1, seq] (stateful SDPA)
+            # and [tokens, 1] (PagedAttention); empty for a context-only prompt chunk
+            block_rows = torch.nonzero(token_type_ids.flatten() == 1).squeeze(-1)
+            if use_cache and not isinstance(past_key_values, Cache):
+                # no config: the sliding layers keep every row, and the caller rolls the block rows back
                 past_key_values = DynamicCache(past_key_values)
-
-            if attention_mask is not None and attention_mask.dim() == 2:
-                attention_mask = (1.0 - attention_mask[:, None, None, :].to(dtype=noise_states.dtype)) * torch.finfo(
-                    noise_states.dtype
-                ).min
-
-            position_embeddings = self.rotary_emb(noise_states, position_ids)
+            # the window is inclusive, abs(q_idx - kv_idx) <= sliding_window, so it spans sliding_window + 1 keys:
+            # https://github.com/huggingface/transformers/blob/v5.15.1/src/transformers/masking_utils.py#L146-L149
+            has_sliding_layers = any(layer.self_attn.is_sliding for layer in self.layers)
+            full_mask, sliding_mask = _dflash_attention_masks(
+                attention_mask,
+                token_type_ids,
+                self.config.sliding_window + 1 if has_sliding_layers else None,
+                inputs_embeds.dtype,
+            )
+            # cos/sin of every row: keys use all of them, queries pick the block rows
+            position_embeddings = self.rotary_emb(inputs_embeds, position_ids)
+            # from here on the residual stream holds only the block rows
+            noise_states = inputs_embeds.flatten(0, 1).index_select(0, block_rows)
             for layer in self.layers:
-                noise_states = layer(
-                    hidden_states=noise_states,
-                    context_hidden_states=context_hidden_states,
-                    position_embeddings=position_embeddings,
-                    attention_mask=attention_mask,
-                    past_key_values=past_key_values,
+                noise_states = _muse_glimmer_assistant_decoder_layer_forward(
+                    layer,
+                    target_hidden,
+                    noise_states,
+                    block_rows,
+                    position_embeddings,
+                    sliding_mask if layer.self_attn.is_sliding else full_mask,
+                    past_key_values,
                     **kwargs,
                 )
-
-            # Drop the anchor position so the emitted states align with the drafted tokens.
-            last_hidden_state = self.norm(noise_states)[:, 1:, :]
+            # write the block rows back into all rows; the caller ignores the context rows, which stay zero
+            last_hidden_state = target_hidden.new_zeros(target_hidden.shape).flatten(0, 1)
+            last_hidden_state[block_rows] = self.norm(noise_states)
             return BaseModelOutputWithPast(
-                last_hidden_state=last_hidden_state,
-                past_key_values=postprocess_past_key_values(past_key_values),
+                last_hidden_state=last_hidden_state.view_as(target_hidden),
+                past_key_values=past_key_values if use_cache else None,
             )
 
     return MuseGlimmerAssistantDFlashForCausalLM
@@ -9689,51 +10411,25 @@ class DSparkVanillaMarkovHead(nn.Module):
 
 
 # adopted from https://github.com/deepseek-ai/DeepSpec/blob/main/deepspec/modeling/dspark/qwen3/modeling.py#L201
-class Qwen3DSparkForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
+class Qwen3DSparkForCausalLM(Qwen3DFlashForCausalLM):
     """DeepSpec Qwen3 DSpark draft head exported as embeddings-in / hidden-states-out.
 
-    Unlike z-lab DFlash, DeepSpec does not prune the first (seed) hidden state: the anchor row
-    predicts the first draft token. Drafts with ``sample_from_anchor=False`` use the DFlash
-    [anchor ; masks] layout and drop the anchor row. The Markov head, when present, is exported
-    as a separate model and is not part of this backbone graph.
+    The backbone is the DFlash one and also emits every row. Which block rows are candidates is the
+    runtime's choice: ``dflash/candidate_position_offset`` is 0 when the anchor row predicts the first
+    draft token (``sample_from_anchor``) and 1 for the DFlash [anchor ; masks] layout. The Markov head,
+    when present, is exported as a separate model and is not part of this backbone graph.
     """
 
     def _init_dflash_variant(self, config) -> None:
         dspark_config = parse_and_validate_dspark_config(config)
-        self.sample_from_anchor = dspark_config.sample_from_anchor
         self.markov_head = None
         if dspark_config.markov_rank > 0:
             self.markov_head = DSparkVanillaMarkovHead(config.vocab_size, dspark_config.markov_rank)
 
-    def forward(
-        self,
-        inputs_embeds: torch.FloatTensor,
-        hidden_states: torch.Tensor,
-        position_ids: torch.LongTensor,
-        attention_mask: Optional[torch.Tensor] = None,
-        past_key_values: Optional[Cache] = None,
-        use_cache: Optional[bool] = None,
-        logits_to_keep: Optional[int] = None,
-        **kwargs,
-    ) -> BaseModelOutputWithPast:
-        outputs = super().forward(
-            hidden_states=hidden_states,
-            noise_embedding=inputs_embeds,
-            position_ids=position_ids,
-            attention_mask=attention_mask,
-            past_key_values=past_key_values,
-            use_cache=use_cache,
-            **kwargs,
-        )
-        last_hidden_state = outputs.last_hidden_state
-        if not self.sample_from_anchor:
-            last_hidden_state = last_hidden_state[:, 1:, :]
-        if logits_to_keep is not None:
-            last_hidden_state = last_hidden_state[:, -logits_to_keep:, :]
-        return BaseModelOutputWithPast(
-            last_hidden_state=last_hidden_state,
-            past_key_values=outputs.past_key_values,
-        )
+    def markov_head_for_export(self, top_k: int) -> "MarkovHeadForExport":
+        if self.markov_head is None:
+            raise ValueError("The DSpark draft has no Markov head (markov_rank is 0).")
+        return DSparkVanillaMarkovHeadForExport(self.markov_head, self.config, top_k)
 
 
 class MarkovHeadForExport(nn.Module):
