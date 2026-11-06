@@ -14,6 +14,7 @@
 import logging
 import os
 import warnings
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -698,6 +699,12 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             # get decoder inputs from shifting lm labels to the right
             decoder_input_ids = self._shift_right(labels)
 
+        # An encoder that changes the length of the sequence reports the mask that matches its own
+        # output, and the incoming one no longer lines up with the states cross attention sees
+        encoder_attention_mask = getattr(encoder_outputs, "attention_mask", None)
+        if encoder_attention_mask is None:
+            encoder_attention_mask = attention_mask
+
         # Decode
         if past_key_values is None or self.decoder_with_past is None:
             decoder_outputs = self.decoder(
@@ -706,7 +713,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
                 ),
                 attention_mask=decoder_attention_mask,
                 encoder_hidden_states=encoder_outputs.last_hidden_state,
-                encoder_attention_mask=attention_mask,
+                encoder_attention_mask=encoder_attention_mask,
                 past_key_values=past_key_values,
                 cache_position=cache_position,
             )
@@ -715,7 +722,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
                 input_ids=decoder_input_ids[:, -1:],  # Cut decoder_input_ids if past is used
                 attention_mask=decoder_attention_mask,
                 encoder_hidden_states=encoder_outputs.last_hidden_state,
-                encoder_attention_mask=attention_mask,
+                encoder_attention_mask=encoder_attention_mask,
                 past_key_values=past_key_values,
                 cache_position=cache_position,
             )
@@ -763,7 +770,9 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             elif is_decoder and not inputs.get_any_name().startswith("encoder"):
                 if not inputs.get_any_name().startswith("beam_idx"):
                     shapes[inputs][1] = -1
-            else:
+            # Rank 1 encoder inputs such as the cohere_asr `length` only carry a batch dimension,
+            # which the assignment above already covers
+            elif len(shapes[inputs]) > 1:
                 shapes[inputs][1] = sequence_length
         model.reshape(shapes)
         return model
@@ -866,6 +875,17 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         return quantization_config
 
 
+@dataclass
+class OVEncoderOutput(BaseModelOutput):
+    """
+    `BaseModelOutput` that also carries the attention mask matching `last_hidden_state`, for encoders that change
+    the sequence length. It is a dataclass field rather than a plain attribute so that `generate()` expands it
+    together with `last_hidden_state` for beam search.
+    """
+
+    attention_mask: Optional[torch.Tensor] = None
+
+
 class OVEncoder(OVModelPart):
     def __init__(
         self,
@@ -917,6 +937,9 @@ class OVEncoder(OVModelPart):
         self,
         input_ids: torch.LongTensor = None,
         attention_mask: torch.LongTensor = None,
+        # Listed explicitly rather than picked up from kwargs because generate() inspects this
+        # signature when it decides which encoder arguments to forward
+        length: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> BaseModelOutput:
         self.compile()
@@ -930,6 +953,20 @@ class OVEncoder(OVModelPart):
                 attention_mask = torch.ones_like(inputs[self.main_input_name])
             inputs["attention_mask"] = attention_mask
 
+        # Frame count per sample, used by the Conformer encoder to mask the padded tail
+        if "length" in self.input_names:
+            if length is None:
+                # Same default as the eager ConformerEncoder, so callers that bypass generate()
+                # get the full time dimension for every sample. The traced graph always wants it
+                encoder_features = inputs[self.main_input_name]
+                length = torch.full(
+                    (encoder_features.shape[0],),
+                    encoder_features.shape[-1],
+                    dtype=torch.int64,
+                    device=getattr(encoder_features, "device", None),
+                )
+            inputs["length"] = length
+
         # Qwen3-ASR requires input_features chunking before passing to encoder for processing of long audios.
         if getattr(self.config, "model_type", None) == "qwen3_asr":
             input_features = inputs["input_features"]
@@ -941,9 +978,14 @@ class OVEncoder(OVModelPart):
             return BaseModelOutput(last_hidden_state=audio_features)
 
         # Run inference
-        last_hidden_state = torch.from_numpy(
-            self.request(inputs, share_inputs=True, share_outputs=True)["last_hidden_state"]
-        ).to(self.device)
+        request_outputs = self.request(inputs, share_inputs=True, share_outputs=True)
+        last_hidden_state = torch.from_numpy(request_outputs["last_hidden_state"]).to(self.device)
+
+        # Encoders that subsample the time axis hand back the mask that goes with the shortened
+        # states, which is the one cross attention needs rather than the one that came in
+        if "encoder_attention_mask" in self.output_names:
+            encoder_attention_mask = torch.from_numpy(request_outputs["encoder_attention_mask"]).to(self.device)
+            return OVEncoderOutput(last_hidden_state=last_hidden_state, attention_mask=encoder_attention_mask)
 
         return BaseModelOutput(last_hidden_state=last_hidden_state)
 
@@ -1521,6 +1563,8 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
 
             config.is_encoder_decoder = True
             return _OVModelForFunAsr._from_pretrained(model_id, config, **kwargs)
+        if getattr(config, "model_type", None) == "cohere_asr":
+            return _OVModelForCohereAsr._from_pretrained(model_id, config, **kwargs)
         if getattr(config, "model_type", None) == "qwen3_asr":
             if not _OVModelForQwen3ASR._is_split_export(model_id, **kwargs):
                 logger.warning(
@@ -1920,3 +1964,34 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
             logits_processor = super()._get_logits_processor(generation_config, *args, **kwargs)
             generation_config.forced_decoder_ids = forced_decoder_ids
         return logits_processor
+
+
+class _OVModelForCohereAsr(OVModelForSpeechSeq2Seq):
+    @classmethod
+    def _from_pretrained(
+        cls,
+        model_id: Union[str, Path],
+        config: "PretrainedConfig",
+        **kwargs,
+    ):
+        _register_for_asr_pipeline(cls)
+        return super(OVModelForSpeechSeq2Seq, cls)._from_pretrained(model_id, config, **kwargs)
+
+
+def _register_for_asr_pipeline(model_class):
+    """
+    `AutomaticSpeechRecognitionPipeline` picks the seq2seq path from the class name of the model and treats any other
+    class as CTC, which calls the model directly instead of `generate()`. Only the name of `model_class` is added, so
+    other OpenVINO ASR models are not affected.
+    """
+    try:
+        from transformers.models.auto.modeling_auto import MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES
+    except ImportError:
+        logger.warning(
+            f"Could not register {model_class.__name__} for transformers ASR pipelines, "
+            "call `generate()` on the model directly instead."
+        )
+        return
+
+    if model_class.__name__ not in MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES.values():
+        MODEL_FOR_SPEECH_SEQ_2_SEQ_MAPPING_NAMES[f"_optimum_intel_{model_class.__name__}"] = model_class.__name__
