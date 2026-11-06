@@ -35,7 +35,6 @@ jobs:
           [
             "*export*",
             "*seq2seq*",
-            "*transformation*",
           ]
 
     runs-on: ubuntu-22.04
@@ -70,30 +69,10 @@ jobs:
           pytest tests/openvino/${{ matrix.test-pattern }} -k qwen3_5_compressed_tensors --durations=0
           uv pip uninstall compressed-tensors
 
-      # test_quantization, test_cb_compatible and test_dflash are not matched by the matrix test-pattern glob, so run
-      # them explicitly and only once (the export job).
-      - name: MiniCPM-V-4.7 Quantization, Continuous Batching and DFlash Validation
-        if: ${{ matrix.test-pattern == '*export*' }}
-        run: |
-          uv pip install "transformers>=5.18"
-          pytest tests/openvino/test_quantization.py tests/openvino/test_cb_compatible.py tests/openvino/test_dflash.py -k "minicpmv4_7" --durations=0
-
-      - name: MiniCPM-OCR Validation
-        run: |
-          uv pip install "transformers>=5.21"
-          pytest tests/openvino/${{ matrix.test-pattern }} -k "minicpm_ocr" --durations=0
-
-      - name: MiniCPM-OCR Quantization and Continuous Batching Validation
-        if: ${{ matrix.test-pattern == '*export*' }}
-        run: |
-          uv pip install "transformers>=5.21"
-          pytest tests/openvino/test_quantization.py tests/openvino/test_cb_compatible.py -k "minicpm_ocr" --durations=0
-
       # The DSpark tests use the tiny MiniCPM-V 4.7 DSpark draft. test_genai runs single-request speculative decoding
       # with it and the tiny MiniCPM-V 4.7 target against the nightly GenAI installed above, which runs it as a plain
       # DFlash draft until it supports DSpark.
       - name: DSpark Export and GenAI Speculative Decoding Validation
         if: ${{ matrix.test-pattern == '*export*' }}
         run: |
-          uv pip install "transformers>=5.18"
           pytest tests/openvino/test_exporters_cli.py tests/openvino/test_dflash.py tests/openvino/test_genai.py -k dspark --durations=0

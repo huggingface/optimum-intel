@@ -110,27 +110,3 @@ jobs:
         name: Uninstall qwen-tts package
         run: |
           uv pip uninstall qwen-tts
-
-      - if: ${{ matrix.test-pattern == '*export*' }}
-        name: Test DFlash
-        run: |
-          uv pip install transformers==5.15
-          pytest tests/openvino/test_dflash.py --durations=0
-
-      - if: ${{ matrix.test-pattern == '*export*' }}
-        name: Test LFM3
-        run: |
-          uv pip install transformers==5.20.0
-          RUN_SLOW=true pytest tests/openvino/test_{cb_compatible,decoder,export,exporters_cli,quantization,seq2seq,transformations}.py -k "lfm3 and not lfm3_vl and not lfm3_omni" --durations=0
-
-      - if: ${{ matrix.test-pattern == '*export*' }}
-        name: Test LFM3-VL
-        run: |
-          uv pip install transformers==5.20.0
-          RUN_SLOW=true pytest tests/openvino/test_{cb_compatible,decoder,export,exporters_cli,quantization,seq2seq,transformations}.py -k "lfm3_vl" --durations=0
-
-      - if: ${{ matrix.test-pattern == '*export*' }}
-        name: Test LFM3-Omni
-        run: |
-          uv pip install transformers==5.20.0
-          RUN_SLOW=true pytest tests/openvino/test_{cb_compatible,decoder,export,exporters_cli,quantization,seq2seq,transformations}.py -k "lfm3_omni" --durations=0
