@@ -1158,23 +1158,6 @@ class OVWeightCompressionTest(unittest.TestCase):
         ),
     ]
 
-    # TODO: move to the list above once the minimum required NNCF version supports `nncf.ScopedConfig`
-    if is_nncf_version(">=", "3.5.0.dev0"):
-        TRANSFORMERS_4BIT_CONFIGURATIONS.append(
-            (
-                OVModelForCausalLM,
-                "gpt2",
-                False,
-                dict(
-                    bits=4,
-                    sym=False,
-                    group_size=32,
-                    scoped_configs=[{"patterns": [".*mlp.*"], "bits": 8, "sym": False, "group_size": -1}],
-                ),
-                {"model": {"int8": 24, "int4": 20}},
-            )
-        )
-
     # filter models type depending on min max transformers version
     LOAD_IN_4_BITS_SCOPE = [
         config
@@ -1779,6 +1762,19 @@ class OVWeightCompressionTest(unittest.TestCase):
 
             openvino_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
             self.assertEqual(openvino_config.quantization_config.to_dict(), ref_quantization_config.to_dict())
+
+    @unittest.skipIf(is_nncf_version("<", "3.5.0.dev0"), "NNCF version does not support scoped configs")
+    def test_ovmodel_4bit_compression_with_scoped_configs(self):
+        quantization_config = OVWeightQuantizationConfig(
+            bits=4,
+            sym=False,
+            group_size=32,
+            scoped_configs=[{"patterns": [".*mlp.*"], "bits": 8, "sym": False, "group_size": -1}],
+        )
+        model = OVModelForCausalLM.from_pretrained(
+            MODEL_NAMES["gpt2"], export=True, quantization_config=quantization_config
+        )
+        check_compression_state_per_model(self, model.ov_models, {"model": {"int8": 24, "int4": 20}})
 
     @parameterized.expand(((OVModelForCausalLM, "gpt2"),))
     def test_ovmodel_stateful_load_with_compressed_weights(self, model_cls, model_type):
@@ -2444,16 +2440,6 @@ class OVQuantizationConfigTest(unittest.TestCase):
             ),
         ),
     )
-    # TODO: move to the tuple above once the minimum required NNCF version supports `nncf.ScopedConfig`
-    if is_nncf_version(">=", "3.5.0.dev0"):
-        QUANTIZATION_CONFIGS += (
-            (
-                OVWeightQuantizationConfig(
-                    bits=4,
-                    scoped_configs=[{"patterns": [".*self_attn.*"], "bits": 8, "sym": False, "group_size": -1}],
-                ),
-            ),
-        )
 
     QUANTIZATION_CONFIG_DICTS = (
         (dict(bits=8, sym=True), OVWeightQuantizationConfig, None),
@@ -2655,6 +2641,18 @@ class OVQuantizationConfigTest(unittest.TestCase):
 
     @parameterized.expand(QUANTIZATION_CONFIGS)
     def test_config_serialization(self, quantization_config: OVQuantizationConfigBase):
+        ov_config = OVConfig(quantization_config=quantization_config)
+        with TemporaryDirectory() as tmp_dir:
+            ov_config.save_pretrained(tmp_dir)
+            loaded_ov_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
+            self.compare_objects(ov_config.quantization_config, loaded_ov_config.quantization_config)
+
+    @unittest.skipIf(is_nncf_version("<", "3.5.0.dev0"), "NNCF version does not support scoped configs")
+    def test_config_serialization_with_scoped_configs(self):
+        quantization_config = OVWeightQuantizationConfig(
+            bits=4,
+            scoped_configs=[{"patterns": [".*self_attn.*"], "bits": 8, "sym": False, "group_size": -1}],
+        )
         ov_config = OVConfig(quantization_config=quantization_config)
         with TemporaryDirectory() as tmp_dir:
             ov_config.save_pretrained(tmp_dir)
