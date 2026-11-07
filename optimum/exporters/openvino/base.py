@@ -143,6 +143,9 @@ class OpenVINOConfig(ExporterConfig, ABC):
 
         self.variant = "default"
         self._preprocessors = preprocessors
+        # Export configs may replace generic runtime defaults with
+        # architecture- or component-specific recommendations.
+        self.runtime_options: dict[str, str] = {}
 
     @property
     def variant(self) -> str:
