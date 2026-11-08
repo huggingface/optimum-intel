@@ -43,7 +43,7 @@ from utils_tests import (
     is_model_type_transformers_compatible,
 )
 
-from optimum.exporters.openvino.__main__ import main_export
+from optimum.exporters.openvino.__main__ import infer_task, main_export
 from optimum.exporters.openvino.utils import COMPLEX_CHAT_TEMPLATES
 from optimum.intel import (  # noqa
     OVFlux2KleinPipeline,
@@ -1848,3 +1848,32 @@ class OVCLIExportTestCase(unittest.TestCase):
                     )
                     self.assertTrue((Path(tmpdir) / "openvino_markov_head_model.xml").exists())
                     self.assertEqual(sorted(path.name for path in Path(tmpdir).glob("*tokenizer*")), [])
+
+    def test_exporters_cli_local_dir_task_inference(self):
+        for config_dict, expected_task in (
+            ({"architectures": ["Qwen2ForCausalLM"], "model_type": "qwen2"}, "text-generation-with-past"),
+            ({"architectures": ["BertForSequenceClassification"], "model_type": "bert"}, "text-classification"),
+        ):
+            with self.subTest(model_type=config_dict["model_type"]), TemporaryDirectory() as tmpdir:
+                (Path(tmpdir) / "config.json").write_text(json.dumps(config_dict))
+                self.assertEqual(infer_task("auto", tmpdir), expected_task)
+
+        with TemporaryDirectory() as local_model_dir, TemporaryDirectory() as output_dir:
+            model_id = MODEL_NAMES["gpt2"]
+            model = AutoModelForCausalLM.from_pretrained(model_id)
+            tokenizer = AutoTokenizer.from_pretrained(model_id)
+            model.save_pretrained(local_model_dir)
+            tokenizer.save_pretrained(local_model_dir)
+
+            subprocess.run(
+                [
+                    "optimum-cli",
+                    "export",
+                    "openvino",
+                    "--model",
+                    local_model_dir,
+                    output_dir,
+                ],
+                check=True,
+            )
+            self.assertTrue((Path(output_dir) / "openvino_model.xml").exists())
