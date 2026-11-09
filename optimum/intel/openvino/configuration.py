@@ -605,8 +605,36 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "scale_estimation": True,
     },
     "openbmb/MiniCPM5-15B-A2.5B": {
-        # Two-pass int4 + int8 compression, see `_MiniCPM5MoEQuantizationConfig`
-        "quantization_configs": {"model": {"config_class": "minicpm5_moe"}},
+        "quantization_configs": {
+            "model": {
+                "config_class": "minicpm_ocr",
+                # int4: routed experts, embeddings
+                "first_stage": {
+                    "bits": 4,
+                    "sym": False,
+                    "group_size": 128,
+                    "ratio": 1.0,
+                    "all_layers": True,
+                    "ignored_scope": {
+                        "patterns": [
+                            ".*\\.self_attn\\..*",
+                            ".*\\.layers\\.0\\.mlp\\..*",
+                            ".*\\.mlp\\.shared_experts\\..*",
+                            ".*lm_head.*",
+                            ".*\\.mlp\\.gate/.*",
+                            ".*rotary_emb.*",
+                        ]
+                    },
+                },
+                # int8: the rest; router and rotary stay uncompressed
+                "second_stage": {
+                    "bits": 8,
+                    "sym": False,
+                    "weight_only": True,
+                    "ignored_scope": {"patterns": [".*\\.mlp\\.gate/.*", ".*rotary_emb.*"]},
+                },
+            },
+        },
     },
     "BAAI/bge-reranker-v2-m3": {
         "bits": 4,
@@ -1975,44 +2003,6 @@ class _MiniCPMOCRQuantizationConfig(OVQuantizationConfigBase):
         return result
 
 
-class _MiniCPM5MoEQuantizationConfig(_MiniCPMOCRQuantizationConfig):
-    """
-    Two-pass, data-free weight compression config for openbmb/MiniCPM5-15B-A2.5B (MoE, 160 routed experts top-16).
-    The routed experts (~90% of the weights) take int4 well, while int4 attention (v_proj and o_proj above all), shared
-    expert and dense MLP of layer 0 break long generations, so they are compressed to int8 at the second pass.
-    """
-
-    CONFIG_CLASS = "minicpm5_moe"
-
-    # Op names differ between 16-bit (ov_ext::) and fp32 (aten::) exports, so the patterns match both
-    _INT8_PATTERNS = [
-        ".*\\.self_attn\\..*",
-        ".*\\.layers\\.0\\.mlp\\..*",
-        ".*\\.mlp\\.shared_experts\\..*",
-        ".*lm_head.*",
-    ]
-    # The router (fp32 logits, the expert selection depends on small bias differences) and the rotary embedding are
-    # kept in original precision
-    _NOT_COMPRESSED_PATTERNS = [".*\\.mlp\\.gate/.*", ".*rotary_emb.*"]
-
-    # Routed experts (packed (num_experts, out, in) weights of `MiniCPM5MoeExperts`) and embeddings
-    DEFAULT_FIRST_STAGE = {
-        "bits": 4,
-        "sym": False,
-        "group_size": 128,
-        "ratio": 1.0,
-        "all_layers": True,
-        "ignored_scope": {"patterns": _INT8_PATTERNS + _NOT_COMPRESSED_PATTERNS},
-    }
-    # Attention, shared expert, dense MLP of layer 0 and lm_head
-    DEFAULT_SECOND_STAGE = {
-        "bits": 8,
-        "sym": False,
-        "weight_only": True,
-        "ignored_scope": {"patterns": _NOT_COMPRESSED_PATTERNS},
-    }
-
-
 def _quantization_config_from_dict(config_dict: Dict[str, Any]) -> OVQuantizationConfigBase:
     """
     Helper function to create a quantization config from a dictionary.
@@ -2026,11 +2016,9 @@ def _quantization_config_from_dict(config_dict: Dict[str, Any]) -> OVQuantizatio
     if "quantization_configs" in config_dict:
         return OVPipelineQuantizationConfig.from_dict(config_dict)
 
-    # Check for MiniCPM-OCR and MiniCPM5-MoE quantization configs
+    # Check for MiniCPM-OCR quantization config
     if config_dict.get("config_class") == _MiniCPMOCRQuantizationConfig.CONFIG_CLASS:
         return _MiniCPMOCRQuantizationConfig.from_dict(config_dict)
-    if config_dict.get("config_class") == _MiniCPM5MoEQuantizationConfig.CONFIG_CLASS:
-        return _MiniCPM5MoEQuantizationConfig.from_dict(config_dict)
 
     # Check for GPT-OSS quantization config
     if "quantization_config1" in config_dict and "quantization_config2" in config_dict:
