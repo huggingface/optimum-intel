@@ -66,6 +66,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyMiniCPMVImageInputGenerator,
     DummyMiniCPMVResampleInputGenerator,
     DummyMistral3MultiModalProjectorInputGenerator,
+    DummyMistral3VisionInputGenerator,
     DummyMuseGlimmerVisionInputGenerator,
     DummyPhi3VisionProjectionInputGenerator,
     DummyQwen2VLLMInputGenerator,
@@ -2303,6 +2304,7 @@ class Mistral3MultiModalProjectorOpenVINOConfig(OpenVINOConfig):
 class Mistral3OpenVINOConfig(BaseVLMOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.50.0"
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in Mistral3ConfigBehavior]
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyMistral3VisionInputGenerator,)
 
     def __init__(
         self,
@@ -2331,13 +2333,13 @@ class Mistral3OpenVINOConfig(BaseVLMOpenVINOConfig):
     def inputs(self) -> Dict[str, Dict[int, str]]:
         if self._behavior != Mistral3ConfigBehavior.VISION_EMBEDDINGS:
             return {}
-        return {"pixel_values": {0: "batch_size", 2: "height", 3: "width"}}
+        return {"pixel_values": {0: "batch_size", 2: "height", 3: "width"}, "image_sizes": {0: "batch_size"}}
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
         if self._behavior != Mistral3ConfigBehavior.VISION_EMBEDDINGS:
             return {}
-        return {"last_hidden_state": {0: "batch_size"}}
+        return {"last_hidden_state": {0: "batch_size", 1: "sequence_length"}}
 
     def with_behavior(
         self,
