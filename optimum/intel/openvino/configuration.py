@@ -608,29 +608,27 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "quantization_configs": {
             "model": {
                 "config_class": "minicpm_ocr",
-                # int4: routed experts, embeddings
+                # int8: all but routed experts, embeddings, router and rotary
                 "first_stage": {
-                    "bits": 4,
+                    "bits": 8,
                     "sym": False,
-                    "group_size": 128,
-                    "ratio": 1.0,
-                    "all_layers": True,
+                    "weight_only": True,
                     "ignored_scope": {
                         "patterns": [
-                            ".*\\.self_attn\\..*",
-                            ".*\\.layers\\.0\\.mlp\\..*",
-                            ".*\\.mlp\\.shared_experts\\..*",
-                            ".*lm_head.*",
+                            ".*\\.mlp\\.experts/.*",
+                            ".*embed_tokens.*",
                             ".*\\.mlp\\.gate/.*",
                             ".*rotary_emb.*",
                         ]
                     },
                 },
-                # int8: the rest; router and rotary stay uncompressed
+                # int4: routed experts, embeddings; router and rotary stay uncompressed
                 "second_stage": {
-                    "bits": 8,
+                    "bits": 4,
                     "sym": False,
-                    "weight_only": True,
+                    "group_size": 128,
+                    "ratio": 1.0,
+                    "all_layers": True,
                     "ignored_scope": {"patterns": [".*\\.mlp\\.gate/.*", ".*rotary_emb.*"]},
                 },
             },
