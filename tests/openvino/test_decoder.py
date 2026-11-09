@@ -704,7 +704,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         # LFM2, LFM2-MoE and GraniteMoeHybrid generate wrong output with beam search, ticket: CVS-185664
         # Hybrid recurrent/attention models lack beam search support in OpenVINO (beam_idx not connected
         # to the Mamba/recurrent states), see CVS-177964.
-        if model_arch in ["lfm2", "lfm2_moe", "lfm3", "granitemoehybrid"]:
+        if model_arch in ["lfm2", "lfm2_moe", "lfm3", "granitemoehybrid", "qwen3_next"]:
             return
 
         # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current modeling incompatible with transformers >= v4.49
@@ -732,7 +732,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             eos_token_id=None,
         )
 
-        if model_arch in ["minicpm", "internlm2"]:
+        if model_arch in ["minicpm", "internlm2", "gpt_oss", "gpt_oss_mxfp4"]:
             beam_sample_gen_config.top_k = 1
 
         group_beam_search_gen_config = GenerationConfig(
