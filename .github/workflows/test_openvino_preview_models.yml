@@ -95,7 +95,6 @@ jobs:
           pytest tests/openvino/test_quantization.py tests/openvino/test_cb_compatible.py -k "minicpm_ocr" --durations=0
 
       - name: Scoped Config Validation with NNCF develop
-        if: ${{ matrix.test-pattern == '*export*' }}
         run: |
           uv pip install "nncf @ git+https://github.com/openvinotoolkit/nncf.git@develop"
           pytest tests/openvino/test_quantization.py -k "scoped_config" --durations=0
