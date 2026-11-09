@@ -3194,14 +3194,11 @@ def mistral3_vision_embed_forward(self, pixel_values, image_sizes):
     if pixel_values.is_floating_point():
         pixel_values = pixel_values.to(next(vision_tower.parameters()).dtype)
 
-    # Pixtral packs all images into one sequence in a Python loop, which tracing unrolls for the dummy batch.
-    # Instead, run it on the first image only to get rotary embeddings for the padded grid, and feed its
-    # transformer the whole batch, each image attending only to its own unpadded patches.
     transformer_forward = vision_tower.transformer.forward
 
     def batched_transformer_forward(inputs_embeds, attention_mask=None, **kwargs):
         patch_embeds = vision_tower.patch_conv(pixel_values)
-        batch_size, _, height, width = patch_embeds.shape
+        _, _, height, width = patch_embeds.shape
         patch_embeds = vision_tower.ln_pre(patch_embeds.flatten(2).transpose(1, 2))
         patch_sizes = image_sizes // vision_tower.patch_size
         valid_rows = torch.arange(height) < patch_sizes[:, :1]
@@ -3209,7 +3206,7 @@ def mistral3_vision_embed_forward(self, pixel_values, image_sizes):
         valid_patches = (valid_rows[:, :, None] & valid_cols[:, None, :]).flatten(1)
         attention_mask = torch.zeros(valid_patches.shape, dtype=patch_embeds.dtype)
         attention_mask = attention_mask.masked_fill(~valid_patches, torch.finfo(patch_embeds.dtype).min)
-        attention_mask = attention_mask[:, None, None, :].expand(-1, 1, height * width, -1)
+        attention_mask = attention_mask[:, None, None, :]
         return transformer_forward(patch_embeds, attention_mask=attention_mask, **kwargs)
 
     vision_tower.transformer.forward = batched_transformer_forward
