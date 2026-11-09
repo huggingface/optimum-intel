@@ -1793,8 +1793,9 @@ def _check_ltx2_rope_inputs(part: OVPipelinePart, required_inputs):
 
 
 class OVModelTransformerLTX2(OVPipelinePart):
-    # Class-level, so the unsupported-feature notice below is emitted once per process.
+    # Class-level, so the unsupported-feature notices below are emitted once per process.
     _warned_no_cross_modality_gate = False
+    _warned_no_cross_timestep_false = False
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1828,6 +1829,7 @@ class OVModelTransformerLTX2(OVPipelinePart):
         isolate_modalities: bool = False,
         spatio_temporal_guidance_blocks: Optional[List[int]] = None,
         perturbation_mask: Optional[torch.Tensor] = None,
+        use_cross_timestep: bool = True,
         attention_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = True,
         **kwargs,
@@ -1846,9 +1848,23 @@ class OVModelTransformerLTX2(OVPipelinePart):
             if value is not None and not torch.equal(torch.as_tensor(value), torch.as_tensor(audio_timestep)):
                 raise ValueError(
                     f"`{name}` differs from the scalar timestep, which the exported LTX-2 transformer "
-                    "cannot represent (the graph was traced with them tied together). This happens "
-                    "with `use_cross_timestep=True`, which the OpenVINO export does not support."
+                    "cannot represent (the graph was traced with them tied together)."
                 )
+
+        # The export traces `use_cross_timestep=True`, the diffusers pipelines' default. False only changes the
+        # result when the video timestep varies across tokens, and the IR cannot follow it there.
+        if (
+            not use_cross_timestep
+            and timestep is not None
+            and timestep.ndim == 2
+            and not torch.equal(timestep, timestep[:, :1].expand_as(timestep))
+            and not self._warned_no_cross_timestep_false
+        ):
+            logger.warning(
+                "`use_cross_timestep=False` is not supported by the exported LTX-2 transformer, which was traced "
+                "with `use_cross_timestep=True`, so the cross-modality noise level is used instead."
+            )
+            OVModelTransformerLTX2._warned_no_cross_timestep_false = True
 
         # T2V passes a scalar timestep [B]. The IR takes a per-token [B, S] timestep, which I2V needs (its
         # conditioning frames are already denoised), but a [B, 1] one broadcasts over the tokens. Feeding that

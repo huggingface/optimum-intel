@@ -12226,6 +12226,11 @@ class LTX2TransformerPatcher(ModelPatcher):
         # this keeps LTX-2.0 export working across diffusers versions.
         _fwd_params = inspect.signature(self._orig_model_forward).parameters
         _supports_sigma = "sigma" in _fwd_params
+        # The audio<->video cross-attention modulation takes the other modality's noise level with
+        # `use_cross_timestep=True`, and each token's own timestep otherwise. The transformer forward
+        # defaults to False, but the diffusers pipelines pass True for every LTX-2 checkpoint, so trace
+        # that. The two differ only when the video timestep varies per token (image-to-video, conditions).
+        _supports_cross_timestep = _supports_sigma and "use_cross_timestep" in _fwd_params
 
         # `sigma`/`audio_sigma` sit here, rather than after `audio_coords`, to keep the parameter
         # order of the wrapped forward. OpenVINO traces the model directly when the dummy inputs are
@@ -12297,6 +12302,8 @@ class LTX2TransformerPatcher(ModelPatcher):
                     audio_sigma = sigma
                 extra_forward_kwargs["sigma"] = sigma
                 extra_forward_kwargs["audio_sigma"] = audio_sigma
+            if _supports_cross_timestep:
+                extra_forward_kwargs["use_cross_timestep"] = True
             result = self._orig_model_forward(
                 hidden_states=hidden_states,
                 audio_hidden_states=audio_hidden_states,
