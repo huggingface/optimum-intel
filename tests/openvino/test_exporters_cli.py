@@ -160,6 +160,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "muse_glimmer_assistant"),
         ("text-generation-with-past", "qwen3_deepspec_dflash"),
         ("text-generation-with-past", "minicpmv4_7_dspark"),
+        ("text-generation-with-past", "minicpm_ocr_dspark"),
         ("text-generation-with-past", "zamba2"),
         ("text-generation-with-past", "exaone4"),
         ("text-generation-with-past", "ouro"),
@@ -1756,20 +1757,19 @@ class OVCLIExportTestCase(unittest.TestCase):
             for component in ["text_encoder", "tokenizer", "unet", "vae_encoder", "vae_decoder"]:
                 self.assertIsNotNone(getattr(model, component))
 
-    @unittest.skipIf(is_transformers_version("<", "5"), reason="DSpark drafts require transformers>=5")
-    def test_exporters_cli_dspark_markov_package(self):
+    @parameterized.expand((("minicpmv4_7_dspark", "vanilla", "64"), ("qwen3_dflash2", "dflash2", "4")))
+    def test_exporters_cli_markov_head_package(self, model_name, markov_head_type, top_k):
         import openvino as ov
 
-        def markov_table_types(model, config):
-            return {
-                op.get_output_element_type(0)
-                for op in model.get_ops()
-                if op.get_type_name() == "Constant"
-                and list(op.get_output_shape(0)) == [config["vocab_size"], config["markov_rank"]]
-            }
+        if markov_head_type == "vanilla" and is_transformers_version("<", "5"):
+            self.skipTest("DSpark drafts require transformers>=5")
+        if markov_head_type == "dflash2" and is_transformers_version("<", "4.57"):
+            self.skipTest("DFlash-2 requires Transformers 4.57 or newer")
 
-        model_path = MODEL_NAMES["minicpmv4_7_dspark"]
+        model_path = MODEL_NAMES[model_name]
         config = json.loads(Path(cached_file(model_path, "config.json")).read_text())
+        # Both tiny drafts have Markov tables of rank 8 over the target vocabulary.
+        table_shape = [config["vocab_size"], 8]
         float_types = {ov.Type.f32, ov.Type.bf16, ov.Type.f16}
         cases = (
             [],
@@ -1780,24 +1780,25 @@ class OVCLIExportTestCase(unittest.TestCase):
         checkpoint_types = None
         for weight_args in cases:
             with self.subTest(weight_args=weight_args), TemporaryDirectory() as tmpdir:
-                command = [
-                    "optimum-cli",
-                    "export",
-                    "openvino",
-                    "--model",
-                    model_path,
-                    "--task",
-                    "text-generation-with-past",
-                    "--trust-remote-code",
-                    *weight_args,
-                ]
+                command = ["optimum-cli", "export", "openvino", "--model", model_path, *weight_args]
                 subprocess.run([*command, tmpdir], check=True)
 
                 core = ov.Core()
                 draft_model = core.read_model(Path(tmpdir) / "openvino_model.xml")
-                self.assertEqual(draft_model.get_rt_info()["dflash"]["markov_rank"].value, "8")
+                draft_rt_info = draft_model.get_rt_info()["dflash"]
+                self.assertEqual(draft_rt_info["markov_rank"].value, "8")
+                self.assertEqual(draft_rt_info["markov_head_type"].value, markov_head_type)
+                if markov_head_type == "dflash2":
+                    # The GPU activation scale of a DFlash-2 draft is DFlash metadata instead of a runtime option.
+                    self.assertEqual(draft_rt_info["gpu_min_activations_scale_factor"].value, "32.0")
+                    self.assertFalse(draft_model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"]))
                 weight_format = weight_args[1] if weight_args else None
                 self.assertEqual(draft_model.has_rt_info(["nncf"]), weight_format in ("int8", "int4"))
+                if weight_format == "int4":
+                    # without --all-layers too: the draft has no lm_head for NNCF to keep in int8
+                    _, num_weight_nodes = get_num_quantized_nodes(draft_model)
+                    self.assertGreater(num_weight_nodes["int4"], 0)
+                    self.assertEqual(num_weight_nodes["int8"], 0)
 
                 self.assertEqual(
                     sorted(path.name for path in Path(tmpdir).glob("openvino_*model.xml")),
@@ -1805,18 +1806,50 @@ class OVCLIExportTestCase(unittest.TestCase):
                 )
                 markov_model = core.read_model(Path(tmpdir) / "openvino_markov_head_model.xml")
                 markov_rt_info = markov_model.get_rt_info()["dflash"]
-                self.assertEqual(markov_rt_info["interface"].value, "markov_head_v1")
-                self.assertEqual(markov_rt_info["top_k"].value, "64")
+                self.assertEqual(markov_rt_info["top_k"].value, top_k)
                 self.assertFalse(markov_model.has_rt_info(["runtime_options"]))
+                # The draft is exported stateful, its Markov head model is stateless.
+                self.assertGreater(len(draft_model.get_variables()), 0)
+                self.assertEqual(len(markov_model.get_variables()), 0)
                 # The Markov head model is never weight-compressed; a floating-point weight format still applies.
                 self.assertFalse(markov_model.has_rt_info(["nncf"]))
-                markov_types = markov_table_types(markov_model, config)
+                markov_types = {
+                    op.get_output_element_type(0)
+                    for op in markov_model.get_ops()
+                    if op.get_type_name() == "Constant" and list(op.get_output_shape(0)) == table_shape
+                }
                 if weight_format == "fp16":
                     self.assertEqual(markov_types, {ov.Type.f16})
                 else:
                     self.assertLessEqual(markov_types, float_types)
                     checkpoint_types = checkpoint_types or markov_types
                     self.assertEqual(markov_types, checkpoint_types)
+
+    def test_exporters_cli_dspark_pruned_vocabulary(self):
+        import openvino as ov
+        from safetensors.torch import load_file
+
+        model_path = MODEL_NAMES["minicpm_ocr_dspark"]
+        config = json.loads(Path(cached_file(model_path, "config.json")).read_text())
+        d2t = load_file(cached_file(model_path, "model.safetensors"))["d2t"].tolist()
+        with TemporaryDirectory() as tmpdir:
+            command = ["optimum-cli", "export", "openvino", "--model", model_path, "--weight-format", "int4"]
+            subprocess.run([*command, "--group-size", "16", tmpdir], check=True)
+
+            draft_model = ov.Core().read_model(Path(tmpdir) / "openvino_model.xml")
+            self.assertEqual([output.any_name for output in draft_model.outputs], ["logits", "d2t"])
+            d2t_source = draft_model.output("d2t").get_node().input_value(0).get_node()
+            self.assertEqual(d2t_source.get_data().tolist(), d2t)
+            # The draft's own lm_head is its last MatMul, which int4 compression keeps 8-bit.
+            lm_head_shape = [config["draft_vocab_size"], config["hidden_size"]]
+            lm_head_types = {
+                op.get_output_element_type(0)
+                for op in draft_model.get_ops()
+                if op.get_type_name() == "Constant" and list(op.get_output_shape(0)) == lm_head_shape
+            }
+            self.assertEqual(lm_head_types, {ov.Type.u8})
+            weight_types = {op.get_output_element_type(0) for op in draft_model.get_ops()}
+            self.assertIn(ov.Type.u4, weight_types)
 
     @unittest.skipIf(is_transformers_version("<", "5"), reason="DSpark drafts require transformers>=5")
     def test_exporters_cli_dspark_does_not_export_tokenizer(self):
@@ -1841,7 +1874,6 @@ class OVCLIExportTestCase(unittest.TestCase):
                             model_path,
                             "--task",
                             "text-generation-with-past",
-                            "--trust-remote-code",
                             tmpdir,
                         ],
                         check=True,

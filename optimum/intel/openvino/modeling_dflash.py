@@ -53,6 +53,11 @@ def is_dflash_draft_model(ov_model: ov.Model) -> bool:
     return ov_model.has_rt_info(["dflash_mode"]) and ov_model.get_rt_info(["dflash_mode"]).value == "True"
 
 
+def dflash_draft_has_lm_head(ov_model: ov.Model) -> bool:
+    """Whether a DFlash draft IR computes its own logits instead of reusing the target LM head at runtime."""
+    return any("logits" in output.get_names() for output in ov_model.outputs)
+
+
 # --------------------------------------------------------------------------------------
 # Subgraph extraction
 # --------------------------------------------------------------------------------------

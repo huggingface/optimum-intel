@@ -57,7 +57,14 @@ from transformers.utils import ModelOutput
 
 from optimum.exporters.openvino._ov_ops import convert_recurrent_attention_cell, convert_recurrent_selective_ssm_cell
 from optimum.exporters.openvino.base import OpenVINOConfig
-from optimum.exporters.openvino.dflash_utils import parse_and_validate_dspark_config
+from optimum.exporters.openvino.dflash_utils import (
+    DFLASH_ARCHITECTURES,
+    config_architecture,
+    dflash_draft_vocab_size,
+    has_pruned_draft_vocabulary,
+    parse_and_validate_dflash_config,
+    parse_and_validate_dspark_config,
+)
 from optimum.exporters.openvino.patching_utils import (
     ModelPatcher,
     eager_mask_without_vmap,
@@ -9953,6 +9960,24 @@ def _dflash_attention_masks(
     return full_mask, torch.where(masked, min_value, window_mask)
 
 
+def _dflash_block_tap_masks(
+    token_type_ids: torch.Tensor, block_rows: torch.Tensor, kernel_size: int
+) -> List[torch.Tensor]:
+    """Per-tap [N, 1] masks over the packed block rows for block-local causal convolution.
+
+    Entry `tap` is True where a block row and the `tap` rows before it all lie in one contiguous block run, so a
+    tap never reaches another block. In such a run the packed rows are the flattened rows minus the context
+    rows, so a tap of `tap` packed rows is also `tap` flattened rows. Blocks of different sequences must be
+    separated by context rows.
+    """
+    token_types = token_type_ids.reshape(-1, 1)
+    masks = [token_types == 1]
+    for tap in range(1, kernel_size):
+        shifted_types = F.pad(token_types, (0, 0, tap, 0))[:-tap]
+        masks.append(masks[-1] & (shifted_types == 1))
+    return [mask.index_select(0, block_rows) for mask in masks]
+
+
 # adopted from https://github.com/z-lab/dflash/blob/main/dflash/model.py#L185
 class Qwen3DFlashAttention(Qwen3Attention):
     """Qwen3 attention in which only the block rows get a query.
@@ -10001,7 +10026,7 @@ class Qwen3DFlashAttention(Qwen3Attention):
         query_states = query_states * block_cos.unsqueeze(1) + qwen3_rotate_half(query_states) * block_sin.unsqueeze(1)
         # zero queries for the context rows: attention needs one query per key row
         all_queries = query_states.new_zeros(batch_size * seq_len, num_heads, self.head_dim)
-        all_queries[block_rows] = query_states.transpose(1, 2)[0]
+        all_queries.index_put_((block_rows,), query_states.transpose(1, 2)[0])
         query_states = all_queries.view(batch_size, seq_len, num_heads, self.head_dim).transpose(1, 2)
 
         if past_key_values is not None:
@@ -10035,6 +10060,8 @@ class Qwen3DFlashDecoderLayer(nn.Module):
         self.mlp = Qwen3MLP(config)
         self.input_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.attention_conv = None
+        self.mlp_conv = None
 
     def forward(
         self,
@@ -10044,15 +10071,18 @@ class Qwen3DFlashDecoderLayer(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         past_key_values: Optional[Cache] = None,
         position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        block_tap_masks: Optional[List[torch.Tensor]] = None,
         **kwargs: Unpack[TransformersKwargs],
     ) -> torch.FloatTensor:
         # hidden_states holds only the block rows [N, hidden]: the norms, o_proj and MLP run on them alone.
         # Context rows enter as target_hidden, which feeds only their keys and values.
         residual = hidden_states
         block_states = self.input_layernorm(hidden_states)
+        attention_kernel = None
+        if self.attention_conv is not None:
+            block_states, attention_kernel = self.attention_conv.prepare(block_states, block_tap_masks)
         # attention input of every row: target features, with the normalized block rows written in
-        attention_input = target_hidden.flatten(0, 1).clone()
-        attention_input[block_rows] = block_states
+        attention_input = target_hidden.flatten(0, 1).clone().index_put_((block_rows,), block_states)
         hidden_states = self.self_attn(
             hidden_states=attention_input.view_as(target_hidden),
             block_states=block_states,
@@ -10062,11 +10092,18 @@ class Qwen3DFlashDecoderLayer(nn.Module):
             past_key_values=past_key_values,
             **kwargs,
         )
+        if attention_kernel is not None:
+            hidden_states = self.attention_conv.finish(hidden_states, attention_kernel, block_tap_masks)
         hidden_states = residual + hidden_states
 
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
+        mlp_kernel = None
+        if self.mlp_conv is not None:
+            hidden_states, mlp_kernel = self.mlp_conv.prepare(hidden_states, block_tap_masks)
         hidden_states = self.mlp(hidden_states)
+        if mlp_kernel is not None:
+            hidden_states = self.mlp_conv.finish(hidden_states, mlp_kernel, block_tap_masks)
         hidden_states = residual + hidden_states
         return hidden_states
 
@@ -10074,6 +10111,8 @@ class Qwen3DFlashDecoderLayer(nn.Module):
 # adopted from https://github.com/z-lab/dflash/blob/main/dflash/model.py#L302
 class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
     config_class = Qwen3Config
+    dflash_version = 1
+    decoder_layer_class = Qwen3DFlashDecoderLayer
     _no_split_modules = ["Qwen3DFlashDecoderLayer"]
 
     def __init__(self, config) -> None:
@@ -10081,22 +10120,47 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
         if not hasattr(config, "_orig_attn_implementation"):
             config._orig_attn_implementation = config._attn_implementation
         config._attn_implementation = "sdpa"
+        if config_architecture(config) in DFLASH_ARCHITECTURES:
+            dflash_config = parse_and_validate_dflash_config(config, expected_version=self.dflash_version).values
+        else:
+            dflash_config = getattr(config, "dflash_config", None) or config.to_dict()
         self.layers = nn.ModuleList(
-            [Qwen3DFlashDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
+            [self.decoder_layer_class(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
-        dflash_config = getattr(config, "dflash_config", None) or config.to_dict()
         self.target_layer_ids = dflash_config.get("target_layer_ids", [])
         self.norm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.rotary_emb = Qwen3RotaryEmbedding(config)
         self.fc = nn.Linear(len(self.target_layer_ids) * config.hidden_size, config.hidden_size, bias=False)
         self.hidden_norm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.mask_token_id = dflash_config.get("mask_token_id", None)
+        if has_pruned_draft_vocabulary(config):
+            # A pruned draft predicts its own vocabulary, where draft token i is target token i + d2t[i] (Eagle-3).
+            draft_vocab_size = dflash_draft_vocab_size(config)
+            self.lm_head = nn.Linear(config.hidden_size, draft_vocab_size, bias=False)
+            self.register_buffer("d2t", torch.zeros(draft_vocab_size, dtype=torch.long))
+        else:
+            self.lm_head = None
+            self.register_buffer("d2t", None)
         self._init_dflash_variant(config)
         self.post_init()
 
     def _init_dflash_variant(self, config) -> None:
         # Called before post_init(), so that the modules a variant adds are weight-initialized and loaded too.
         pass
+
+    def check_pruned_vocabulary(self, missing_keys) -> None:
+        """Checks that a pruned-vocabulary checkpoint provided its LM head and d2t mapping."""
+        if self.lm_head is None:
+            return
+        missing = sorted({"lm_head.weight", "d2t"}.intersection(missing_keys))
+        if missing:
+            raise ValueError(
+                "A DFlash draft with draft_vocab_size < vocab_size requires the checkpoint tensors "
+                f"{', '.join(missing)}."
+            )
+
+    def _dflash_layer_inputs(self, token_type_ids: torch.LongTensor, block_rows: torch.LongTensor) -> Dict[str, Any]:
+        return {}
 
     def forward(
         self,
@@ -10140,12 +10204,15 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
         # target features of every row; the layers use them only for the context rows' keys and values
         target_hidden = self.hidden_norm(self.fc(hidden_states.to(noise_states.dtype)))
         # indices of the block rows in flattened [batch * seq] order, which fits both [1, seq] (stateful SDPA)
-        # and [tokens, 1] (PagedAttention); empty for a context-only prompt chunk
+        # and [tokens, 1] (PagedAttention); empty for a context-only prompt chunk. Rows are written with index_put_:
+        # item assignment views a one-row value without its leading dimension, which the trace freezes as a shape.
         block_rows = torch.nonzero(token_type_ids.flatten() == 1).squeeze(-1)
         use_cache = use_cache if use_cache is not None else self.config.use_cache
         if use_cache:
             if past_key_values is None:
-                past_key_values = DynamicCache(config=self.config)
+                # Without the config every layer keeps its whole past: sliding layers apply the window through
+                # the mask, and a sliding cache layer would drop keys that the mask still indexes.
+                past_key_values = DynamicCache()
             elif not isinstance(past_key_values, Cache):
                 if is_transformers_version("<", "5"):
                     past_key_values = DynamicCache.from_legacy_cache(past_key_values)
@@ -10167,6 +10234,7 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
         )
         # cos/sin of every row: keys use all of them, queries pick the block rows
         position_embeddings = self.rotary_emb(noise_states, position_ids)
+        layer_inputs = self._dflash_layer_inputs(token_type_ids, block_rows)
         # from here on the residual stream holds only the block rows
         noise_states = noise_states.flatten(0, 1).index_select(0, block_rows)
         for layer in self.layers:
@@ -10177,15 +10245,25 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
                 attention_mask=full_mask if layer.self_attn.sliding_window is None else sliding_mask,
                 past_key_values=past_key_values,
                 position_embeddings=position_embeddings,
+                **layer_inputs,
                 **kwargs,
             )
         # write the block rows back into all rows; the caller ignores the context rows, which stay zero
         last_hidden_state = target_hidden.new_zeros(target_hidden.shape).flatten(0, 1)
-        last_hidden_state[block_rows] = self.norm(noise_states)
+        last_hidden_state.index_put_((block_rows,), self.norm(noise_states))
         return BaseModelOutputWithPast(
             last_hidden_state=last_hidden_state.view_as(target_hidden),
             past_key_values=past_key_values if use_cache else None,
         )
+
+
+@dataclass
+class DFlashDraftOutput(ModelOutput):
+    """Output of a DFlash draft with a pruned vocabulary: draft-vocabulary logits and the Eagle-3 d2t mapping."""
+
+    logits: Optional[torch.FloatTensor] = None
+    past_key_values: Optional[Cache] = None
+    d2t: Optional[torch.LongTensor] = None
 
 
 # adopted from https://github.com/z-lab/dflash/blob/main/dflash/model.py#L302
@@ -10197,6 +10275,9 @@ class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
     the context rows).
     OpenVINO GenAI selects each sequence's candidate rows (``dflash/candidate_position_offset`` rows
     into the block) and grafts the target lm_head onto them at load time.
+
+    A draft with a pruned vocabulary (``draft_vocab_size < vocab_size``) keeps its own lm_head instead and emits
+    the ``logits`` of every row over the draft vocabulary, together with the ``d2t`` mapping to target token ids.
     """
 
     def forward(
@@ -10209,8 +10290,8 @@ class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
         past_key_values: Optional[Cache] = None,
         use_cache: Optional[bool] = None,
         **kwargs,
-    ) -> BaseModelOutputWithPast:
-        return super().forward(
+    ) -> Union[BaseModelOutputWithPast, DFlashDraftOutput]:
+        outputs = super().forward(
             hidden_states=hidden_states,
             noise_embedding=inputs_embeds,
             position_ids=position_ids,
@@ -10219,6 +10300,13 @@ class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
             past_key_values=past_key_values,
             use_cache=use_cache,
             **kwargs,
+        )
+        if self.lm_head is None:
+            return outputs
+        return DFlashDraftOutput(
+            logits=self.lm_head(outputs.last_hidden_state),
+            past_key_values=outputs.past_key_values,
+            d2t=self.d2t,
         )
 
 
@@ -10265,7 +10353,7 @@ def _muse_glimmer_assistant_attention_forward(
     query_states = query_states * block_cos.unsqueeze(1) + rotate_half(query_states) * block_sin.unsqueeze(1)
     # zero queries for the context rows: attention needs one query per key row
     all_queries = query_states.new_zeros(batch_size * seq_len, num_heads, head_dim)
-    all_queries[block_rows] = query_states.transpose(1, 2)[0]
+    all_queries.index_put_((block_rows,), query_states.transpose(1, 2)[0])
     query_states = all_queries.view(batch_size, seq_len, num_heads, head_dim).transpose(1, 2)
 
     if past_key_values is not None:
@@ -10303,8 +10391,7 @@ def _muse_glimmer_assistant_decoder_layer_forward(
     residual = hidden_states
     block_states = layer.input_layernorm(hidden_states)
     # attention input of every row: target features, with the normalized block rows written in
-    attention_input = target_hidden.flatten(0, 1).clone()
-    attention_input[block_rows] = block_states
+    attention_input = target_hidden.flatten(0, 1).clone().index_put_((block_rows,), block_states)
     hidden_states = _muse_glimmer_assistant_attention_forward(
         layer.self_attn,
         attention_input.view_as(target_hidden),
@@ -10351,7 +10438,9 @@ def get_muse_glimmer_assistant_draft_model_class():
             # target features of every row; the layers use them only for the context rows' keys and values
             target_hidden = self.encoder(hidden_states.to(inputs_embeds.dtype))
             # indices of the block rows in flattened [batch * seq] order, which fits both [1, seq] (stateful SDPA)
-            # and [tokens, 1] (PagedAttention); empty for a context-only prompt chunk
+            # and [tokens, 1] (PagedAttention); empty for a context-only prompt chunk. Rows are written with
+            # index_put_: item assignment views a one-row value without its leading dimension, which the trace
+            # freezes as a shape.
             block_rows = torch.nonzero(token_type_ids.flatten() == 1).squeeze(-1)
             if use_cache and not isinstance(past_key_values, Cache):
                 # no config: the sliding layers keep every row, and the caller rolls the block rows back
@@ -10382,7 +10471,7 @@ def get_muse_glimmer_assistant_draft_model_class():
                 )
             # write the block rows back into all rows; the caller ignores the context rows, which stay zero
             last_hidden_state = target_hidden.new_zeros(target_hidden.shape).flatten(0, 1)
-            last_hidden_state[block_rows] = self.norm(noise_states)
+            last_hidden_state.index_put_((block_rows,), self.norm(noise_states))
             return BaseModelOutputWithPast(
                 last_hidden_state=last_hidden_state.view_as(target_hidden),
                 past_key_values=past_key_values if use_cache else None,
@@ -10391,17 +10480,143 @@ def get_muse_glimmer_assistant_draft_model_class():
     return MuseGlimmerAssistantDFlashForCausalLM
 
 
+class GroupedDynamicCausalConv(nn.Module):
+    """Block-local grouped dynamic convolution used around each DFlash-2 sublayer.
+
+    Taps shift along the packed block rows [N, hidden] that the decoder layers carry, which keep one order
+    whether the tokens lie along the sequence axis or, after SDPAToPagedAttention, along the batch axis.
+    block_tap_masks keep every tap inside the block of the row it produces.
+    """
+
+    def __init__(self, hidden_size: int, kernel_size: int, group_size: int):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.kernel_size = kernel_size
+        self.group_size = group_size
+        self.num_groups = hidden_size // group_size
+
+        self.base_kernel = nn.Parameter(torch.zeros(2, self.kernel_size, self.hidden_size))
+        with torch.no_grad():
+            self.base_kernel[:, 0, :].fill_(1.0)
+        self.kernel_projection = nn.Linear(
+            self.hidden_size,
+            2 * self.kernel_size * self.num_groups,
+            bias=False,
+        )
+
+    def _apply_kernel(
+        self,
+        hidden_states: torch.Tensor,
+        dynamic_kernel: torch.Tensor,
+        side: int,
+        block_tap_masks: List[torch.Tensor],
+    ) -> torch.Tensor:
+        rows = hidden_states.reshape(-1, self.hidden_size)
+        base_kernel = self.base_kernel[side].reshape(
+            self.kernel_size,
+            self.num_groups,
+            self.group_size,
+        )
+        kernel = dynamic_kernel.unsqueeze(-1) + base_kernel[None, :, :, :]
+
+        output = torch.zeros_like(rows).reshape(-1, self.num_groups, self.group_size)
+        for tap in range(self.kernel_size):
+            if tap == 0:
+                shifted_states = rows
+            else:
+                # select rather than multiply, so a row of another block can never inject inf/nan
+                shifted_states = F.pad(rows, (0, 0, tap, 0))[:-tap].masked_fill(~block_tap_masks[tap], 0.0)
+            output = output + shifted_states.reshape(-1, self.num_groups, self.group_size) * kernel[:, tap, :, :]
+        return output.reshape(hidden_states.shape)
+
+    def prepare(
+        self, hidden_states: torch.Tensor, block_tap_masks: List[torch.Tensor]
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        dynamic_kernel = self.kernel_projection(hidden_states).reshape(-1, 2, self.kernel_size, self.num_groups)
+        prepared = self._apply_kernel(hidden_states, dynamic_kernel[:, 0, :, :], 0, block_tap_masks)
+        return prepared, dynamic_kernel[:, 1, :, :]
+
+    def finish(
+        self, hidden_states: torch.Tensor, dynamic_kernel: torch.Tensor, block_tap_masks: List[torch.Tensor]
+    ) -> torch.Tensor:
+        return self._apply_kernel(hidden_states, dynamic_kernel, 1, block_tap_masks)
+
+
+class DFlash2CandidateSelector(nn.Module):
+    """Weights of the DFlash-2 candidate selector, which is exported as the Markov head of the draft.
+
+    ``DFlash2MarkovHeadForExport`` scores the top-K candidate transitions of every draft position with them.
+    """
+
+    def __init__(self, config: "Qwen3Config"):
+        super().__init__()
+        selector_rank = parse_and_validate_dflash_config(config, expected_version=2).values["selector_rank"]
+        self.predecessor_codebook = nn.Parameter(torch.empty(config.vocab_size, selector_rank))
+        self.successor_codebook = nn.Parameter(torch.empty(config.vocab_size, selector_rank))
+        self.hidden_projection = nn.Linear(config.hidden_size, selector_rank, bias=False)
+        std = getattr(config, "initializer_range", 0.02)
+        nn.init.normal_(self.predecessor_codebook, mean=0.0, std=std)
+        nn.init.normal_(self.successor_codebook, mean=0.0, std=std)
+
+
+class Qwen3DFlash2DecoderLayer(Qwen3DFlashDecoderLayer):
+    def __init__(self, config: "Qwen3Config", layer_idx: int):
+        super().__init__(config, layer_idx)
+        dflash_config = parse_and_validate_dflash_config(config, expected_version=2).values
+        conv_sizes = (config.hidden_size, dflash_config["conv_kernel_size"], dflash_config["conv_group_size"])
+        self.attention_conv = GroupedDynamicCausalConv(*conv_sizes)
+        self.mlp_conv = GroupedDynamicCausalConv(*conv_sizes)
+
+
+class Qwen3DFlash2DraftModel(Qwen3DFlashDraftModel):
+    dflash_version = 2
+    decoder_layer_class = Qwen3DFlash2DecoderLayer
+    _no_split_modules = ["Qwen3DFlash2DecoderLayer"]
+
+    def _init_dflash_variant(self, config) -> None:
+        self.candidate_selector = DFlash2CandidateSelector(config)
+
+    def _dflash_layer_inputs(self, token_type_ids: torch.LongTensor, block_rows: torch.LongTensor) -> Dict[str, Any]:
+        kernel_size = self.layers[0].attention_conv.kernel_size
+        return {"block_tap_masks": _dflash_block_tap_masks(token_type_ids, block_rows, kernel_size)}
+
+
+class Qwen3DFlash2ForCausalLM(Qwen3DFlash2DraftModel, Qwen3DFlashForCausalLM):
+    """DFlash-2 backbone exported like the DFlash one: embeddings in, the hidden states of every row out.
+
+    The candidate selector is exported separately, as the Markov head of the draft.
+    """
+
+    def markov_head_for_export(self, top_k: int) -> "MarkovHeadForExport":
+        return DFlash2MarkovHeadForExport(self.candidate_selector, self.config, top_k)
+
+
 # adopted from https://github.com/deepseek-ai/DeepSpec/blob/main/deepspec/modeling/dspark/markov_head.py
 class DSparkVanillaMarkovHead(nn.Module):
-    """DeepSpec vanilla Markov head: the next-token logit bias is ``markov_w2(markov_w1[previous token])``."""
+    """DeepSpec vanilla Markov head: the next-token logit bias is ``markov_w2(markov_w1[previous token])``.
 
-    def __init__(self, vocab_size: int, markov_rank: int):
+    Previous tokens are target tokens, so markov_w1 covers the target vocabulary even when markov_w2 covers a
+    pruned draft vocabulary.
+    """
+
+    def __init__(self, vocab_size: int, markov_rank: int, draft_vocab_size: Optional[int] = None):
         super().__init__()
         self.markov_w1 = nn.Embedding(vocab_size, markov_rank)
-        self.markov_w2 = nn.Linear(markov_rank, vocab_size, bias=False)
+        self.markov_w2 = nn.Linear(markov_rank, draft_vocab_size or vocab_size, bias=False)
 
     def forward(self, prev_token_ids: torch.LongTensor) -> torch.Tensor:
         return self.markov_w2(self.markov_w1(prev_token_ids))
+
+    def to_target_vocabulary(self, d2t: torch.LongTensor, vocab_size: int) -> "DSparkVanillaMarkovHead":
+        """The same head over the target vocabulary, where tokens outside the draft vocabulary get a zero bias."""
+        draft_rows = self.markov_w2.weight.detach()
+        target_ids = torch.arange(d2t.numel(), device=d2t.device) + d2t
+        target_rows = draft_rows.new_zeros(vocab_size, draft_rows.shape[1]).index_copy(0, target_ids, draft_rows)
+        with torch.device("meta"):
+            head = DSparkVanillaMarkovHead(vocab_size, draft_rows.shape[1])
+        head.markov_w1 = self.markov_w1
+        head.markov_w2.weight = nn.Parameter(target_rows, requires_grad=False)
+        return head
 
 
 # adopted from https://github.com/deepseek-ai/DeepSpec/blob/main/deepspec/modeling/dspark/qwen3/modeling.py#L201
@@ -10418,29 +10633,33 @@ class Qwen3DSparkForCausalLM(Qwen3DFlashForCausalLM):
         dspark_config = parse_and_validate_dspark_config(config)
         self.markov_head = None
         if dspark_config.markov_rank > 0:
-            self.markov_head = DSparkVanillaMarkovHead(config.vocab_size, dspark_config.markov_rank)
+            self.markov_head = DSparkVanillaMarkovHead(
+                config.vocab_size, dspark_config.markov_rank, dflash_draft_vocab_size(config)
+            )
 
     def markov_head_for_export(self, top_k: int) -> "MarkovHeadForExport":
         if self.markov_head is None:
             raise ValueError("The DSpark draft has no Markov head (markov_rank is 0).")
-        return DSparkVanillaMarkovHeadForExport(self.markov_head, self.config, top_k)
+        return DSparkVanillaMarkovHeadForExport(self.markov_head, self.config, top_k, d2t=self.d2t)
 
 
 class MarkovHeadForExport(nn.Module):
-    """Export-only first-order Markov head with two independent computations over the same weights.
+    """Export-only first-order Markov head of a DFlash draft, with two independent computations over the same weights.
 
-    - Dense step: ``prev_token_ids`` [N] -> ``markov_bias`` [N, vocab], one full-vocabulary bias row per
-      previous token. The runtime calls it once per draft position.
     - Top-K lattice: ``draft_logits`` [T, vocab], ``anchor_token_ids`` [N], ``subsequence_begins`` [N + 1] ->
       ``candidate_ids`` [T, K], ``edge_scores`` [T, K, K]. The rows of N draft blocks are packed back to back,
       and block n spans rows ``subsequence_begins[n]`` to ``subsequence_begins[n + 1]``. Every row keeps the
-      Top-K draft candidates. ``edge_scores[t, i, j]`` is the draft logit of candidate j plus the Markov
-      transition score from predecessor i to j, where the predecessors are the candidates of row t - 1, or
-      the block's anchor token on the first row of a block, so blocks never mix. ``subsequence_begins`` must
-      start at 0, increase strictly and end at T; the graph does not check it.
+      Top-K draft candidates. ``edge_scores[t, i, j]`` is the unary score of candidate j (its draft logit) plus
+      the Markov transition score from predecessor i to j, where the predecessors are the candidates of row
+      t - 1, or the block's anchor token on the first row of a block, so blocks never mix.
+      ``subsequence_begins`` must start at 0, increase strictly and end at T; the graph does not check it.
+    - Dense step: ``prev_token_ids`` [N] -> ``markov_bias`` [N, vocab], one full-vocabulary bias row per
+      previous token. The runtime calls it once per draft position.
 
-    Subclasses define the head through ``markov_bias`` and ``transition_scores``. Runtimes keep the computation
-    they use and may replace the K of the TopK.
+    Subclasses define the head through ``transition_scores`` and, optionally, ``unary_scores`` and
+    ``markov_bias``. A gated head also reads ``draft_hidden_states`` [T, hidden], the backbone rows that produced
+    ``draft_logits``, and has no dense step. Runtimes keep the computation they use and may replace the K of the
+    TopK.
     """
 
     def __init__(self, top_k: int):
@@ -10450,7 +10669,16 @@ class MarkovHeadForExport(nn.Module):
     def markov_bias(self, prev_token_ids: torch.LongTensor) -> torch.Tensor:
         raise NotImplementedError
 
-    def transition_scores(self, predecessor_ids: torch.LongTensor, candidate_ids: torch.LongTensor) -> torch.Tensor:
+    def unary_scores(self, unary_logits: torch.Tensor) -> torch.Tensor:
+        """Maps the Top-K draft logits [T, K] to the FP32 scores added to every transition into a candidate."""
+        return unary_logits.to(torch.float32)
+
+    def transition_scores(
+        self,
+        predecessor_ids: torch.LongTensor,
+        candidate_ids: torch.LongTensor,
+        draft_hidden_states: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         """Maps predecessor and candidate ids [T, K] to FP32 transition scores [T, K, K]."""
         raise NotImplementedError
 
@@ -10472,12 +10700,13 @@ class MarkovHeadForExport(nn.Module):
         anchor_token_ids: torch.LongTensor,
         subsequence_begins: torch.LongTensor,
         top_k: int,
+        draft_hidden_states: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         unary_logits, candidate_ids = torch.topk(draft_logits, top_k, dim=-1)
         candidate_ids = candidate_ids.to(torch.int64)
         predecessor_ids = self.predecessor_ids(candidate_ids, anchor_token_ids, subsequence_begins)
-        edge_scores = self.transition_scores(predecessor_ids, candidate_ids)
-        edge_scores = edge_scores + unary_logits.to(torch.float32).unsqueeze(-2)
+        edge_scores = self.transition_scores(predecessor_ids, candidate_ids, draft_hidden_states)
+        edge_scores = edge_scores + self.unary_scores(unary_logits).unsqueeze(-2)
         return edge_scores, candidate_ids
 
     def forward(
@@ -10496,10 +10725,22 @@ class MarkovHeadForExport(nn.Module):
 
 
 class DSparkVanillaMarkovHeadForExport(MarkovHeadForExport):
-    """DSpark vanilla Markov head: the transition score from token i to token j is ``markov_w1[i] . markov_w2[j]``."""
+    """DSpark vanilla Markov head: the transition score from token i to token j is ``markov_w1[i] . markov_w2[j]``.
 
-    def __init__(self, markov_head: DSparkVanillaMarkovHead, config: "Qwen3Config", top_k: int):
+    The head always scores target-vocabulary logits. For a pruned draft, given by ``d2t``, the runtime maps the
+    draft logits to the target vocabulary with -inf outside the draft vocabulary.
+    """
+
+    def __init__(
+        self,
+        markov_head: DSparkVanillaMarkovHead,
+        config: "Qwen3Config",
+        top_k: int,
+        d2t: Optional[torch.LongTensor] = None,
+    ):
         super().__init__(top_k)
+        if d2t is not None:
+            markov_head = markov_head.to_target_vocabulary(d2t, config.vocab_size)
         self.markov_head = markov_head
         self.config = config
         # Weights must be read through modules: 16-bit export hides raw `.weight` tensors behind placeholders.
@@ -10508,10 +10749,65 @@ class DSparkVanillaMarkovHeadForExport(MarkovHeadForExport):
     def markov_bias(self, prev_token_ids: torch.LongTensor) -> torch.Tensor:
         return self.markov_head(prev_token_ids).to(torch.float32)
 
-    def transition_scores(self, predecessor_ids: torch.LongTensor, candidate_ids: torch.LongTensor) -> torch.Tensor:
+    def transition_scores(
+        self,
+        predecessor_ids: torch.LongTensor,
+        candidate_ids: torch.LongTensor,
+        draft_hidden_states: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         predecessor_codes = self.markov_head.markov_w1(predecessor_ids).to(torch.float32)
         successor_rows = self.markov_w2_rows(candidate_ids).to(torch.float32)
         return torch.matmul(predecessor_codes, successor_rows.transpose(-1, -2))
+
+
+class DFlash2MarkovHeadForExport(MarkovHeadForExport):
+    """DFlash-2 candidate selector as a gated Markov head without a dense step.
+
+    The transition score from token i to token j on row t is
+    ``(predecessor_codebook[i] * hidden_projection(draft_hidden_states[t])) . successor_codebook[j]``, and the
+    unary score is the draft logit after the checkpoint's output_multiplier and final_logit_softcapping.
+    """
+
+    def __init__(self, candidate_selector: DFlash2CandidateSelector, config: "Qwen3Config", top_k: int):
+        super().__init__(top_k)
+        self.config = config
+        self.hidden_projection = candidate_selector.hidden_projection
+        dflash_config = parse_and_validate_dflash_config(config, expected_version=2).values
+        self.output_multiplier = dflash_config.get("output_multiplier", 1.0)
+        self.final_logit_softcapping = dflash_config.get("final_logit_softcapping", 0.0)
+        # 16-bit export keeps module weights in checkpoint precision but casts bare parameters to float32.
+        self.predecessor_lookup = nn.Embedding.from_pretrained(candidate_selector.predecessor_codebook, freeze=True)
+        self.successor_lookup = nn.Embedding.from_pretrained(candidate_selector.successor_codebook, freeze=True)
+
+    def unary_scores(self, unary_logits: torch.Tensor) -> torch.Tensor:
+        unary_scores = unary_logits.to(torch.float32) * self.output_multiplier
+        if self.final_logit_softcapping > 0.0:
+            unary_scores = torch.tanh(unary_scores / self.final_logit_softcapping) * self.final_logit_softcapping
+        return unary_scores
+
+    def transition_scores(
+        self,
+        predecessor_ids: torch.LongTensor,
+        candidate_ids: torch.LongTensor,
+        draft_hidden_states: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        projection_input = draft_hidden_states.to(self.hidden_projection.weight.dtype)
+        projected_hidden = self.hidden_projection(projection_input).to(torch.float32)
+        gated_predecessors = self.predecessor_lookup(predecessor_ids).to(torch.float32) * projected_hidden.unsqueeze(1)
+        successor_codes = self.successor_lookup(candidate_ids).to(torch.float32)
+        return torch.matmul(gated_predecessors, successor_codes.transpose(-1, -2))
+
+    def forward(
+        self,
+        draft_logits: torch.Tensor,
+        draft_hidden_states: torch.Tensor,
+        anchor_token_ids: torch.LongTensor,
+        subsequence_begins: torch.LongTensor,
+    ) -> ModelOutput:
+        edge_scores, candidate_ids = self.score_candidates(
+            draft_logits, anchor_token_ids, subsequence_begins, self.top_k, draft_hidden_states
+        )
+        return ModelOutput(edge_scores=edge_scores, candidate_ids=candidate_ids)
 
 
 # Patched implementation of the gated delta rule in recurrent form.
