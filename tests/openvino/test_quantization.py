@@ -1311,7 +1311,8 @@ class OVWeightCompressionTest(unittest.TestCase):
                 OVLTX2Pipeline,
                 "ltx2.5",
                 8,
-                _DEFAULT_8BIT_WQ_CONFIGS["Lightricks/LTX-2.5-Diffusers"],
+                # The config for older NNCF versions: any NNCF version compresses the tiny model with it
+                _DEFAULT_8BIT_WQ_CONFIGS_FOR_OLDER_NNCF["Lightricks/LTX-2.5-Diffusers"],
                 {
                     "transformer": {"int8": 192},
                     "text_encoder": {"int8": 28},
@@ -1887,29 +1888,45 @@ class OVWeightCompressionTest(unittest.TestCase):
     # instead with an NNCF version that does not support it
     LTX2_3_INT8_CONFIG = _DEFAULT_8BIT_WQ_CONFIGS["diffusers/LTX-2.3-Diffusers"]
     LTX2_3_INT8_CONFIG_FOR_OLDER_NNCF = _DEFAULT_8BIT_WQ_CONFIGS_FOR_OLDER_NNCF["diffusers/LTX-2.3-Diffusers"]
+    LTX2_5_INT8_CONFIG = _DEFAULT_8BIT_WQ_CONFIGS["Lightricks/LTX-2.5-Diffusers"]
+    LTX2_5_INT8_CONFIG_FOR_OLDER_NNCF = _DEFAULT_8BIT_WQ_CONFIGS_FOR_OLDER_NNCF["Lightricks/LTX-2.5-Diffusers"]
 
     @parameterized.expand(
-        [
-            # (installed NNCF version, `quantization_config` given to `from_pretrained`, int8 config registered for
-            #  the model, the config expected to be applied or None if nothing is compressed, whether a warning to
-            #  install the latest NNCF version is expected)
-            # The tuned config is applied without a weight format, to the large transformer, connectors and text
-            # encoder, and with an int8 weight format
-            ("3.5.0", None, LTX2_3_INT8_CONFIG, LTX2_3_INT8_CONFIG, False),
-            ("3.5.0", {"bits": 8}, LTX2_3_INT8_CONFIG, LTX2_3_INT8_CONFIG, False),
-            # An older NNCF version does not support it: nothing is compressed by default, and the config for older
-            # NNCF versions is applied with an int8 weight format
-            ("3.4.0", None, LTX2_3_INT8_CONFIG, None, True),
-            ("3.4.0", {"bits": 8}, LTX2_3_INT8_CONFIG, LTX2_3_INT8_CONFIG_FOR_OLDER_NNCF, True),
-            # A registered config that any NNCF version supports, e.g. a per-channel one, is applied by default too
-            ("3.4.0", None, LTX2_3_INT8_CONFIG_FOR_OLDER_NNCF, LTX2_3_INT8_CONFIG_FOR_OLDER_NNCF, False),
-        ]
-        if is_diffusers_version(">=", "0.40.0")
-        else [],
+        (
+            [
+                # (model, installed NNCF version, `quantization_config` given to `from_pretrained`, int8 config
+                #  registered for the model, the config expected to be applied or None if nothing is compressed,
+                #  whether a warning to install the latest NNCF version is expected)
+                # The tuned config is applied without a weight format, to the large transformer, connectors and text
+                # encoder, and with an int8 weight format
+                ("ltx2.3", "3.5.0", None, LTX2_3_INT8_CONFIG, LTX2_3_INT8_CONFIG, False),
+                ("ltx2.3", "3.5.0", {"bits": 8}, LTX2_3_INT8_CONFIG, LTX2_3_INT8_CONFIG, False),
+                # An older NNCF version does not support it: nothing is compressed by default, and the config for
+                # older NNCF versions is applied with an int8 weight format
+                ("ltx2.3", "3.4.0", None, LTX2_3_INT8_CONFIG, None, True),
+                ("ltx2.3", "3.4.0", {"bits": 8}, LTX2_3_INT8_CONFIG, LTX2_3_INT8_CONFIG_FOR_OLDER_NNCF, True),
+                # A registered config that any NNCF version supports, e.g. a per-channel one, is applied by default
+                # too
+                ("ltx2.3", "3.4.0", None, LTX2_3_INT8_CONFIG_FOR_OLDER_NNCF, LTX2_3_INT8_CONFIG_FOR_OLDER_NNCF, False),
+            ]
+            if is_diffusers_version(">=", "0.40.0")
+            else []
+        )
+        + (
+            [
+                ("ltx2.5", "3.5.0", None, LTX2_5_INT8_CONFIG, LTX2_5_INT8_CONFIG, False),
+                ("ltx2.5", "3.5.0", {"bits": 8}, LTX2_5_INT8_CONFIG, LTX2_5_INT8_CONFIG, False),
+                ("ltx2.5", "3.4.0", None, LTX2_5_INT8_CONFIG, None, True),
+                ("ltx2.5", "3.4.0", {"bits": 8}, LTX2_5_INT8_CONFIG, LTX2_5_INT8_CONFIG_FOR_OLDER_NNCF, True),
+                ("ltx2.5", "3.4.0", None, LTX2_5_INT8_CONFIG_FOR_OLDER_NNCF, LTX2_5_INT8_CONFIG_FOR_OLDER_NNCF, False),
+            ]
+            if is_transformers_version(">=", "5.10.0") and is_diffusers_version(">=", "0.40.0")
+            else []
+        ),
         skip_on_empty=True,
     )
     def test_ovmodel_default_int8_config(
-        self, nncf_version, quantization_config, registered_config, applied_config, expect_warning
+        self, model_arch, nncf_version, quantization_config, registered_config, applied_config, expect_warning
     ):
         # NNCF is not run: the layers of the tiny model do not fit the real configs (a group size of 32 and the ignored
         # scopes), so the arguments `nncf.compress_weights` gets are stored in the compressed submodels. The installed
@@ -1926,7 +1943,11 @@ class OVWeightCompressionTest(unittest.TestCase):
         from optimum.exporters.openvino.__main__ import logger as main_export_logger
         from optimum.intel.openvino.configuration import logger as configuration_logger
 
-        model_id = MODEL_NAMES["ltx2.3"]
+        model_id = MODEL_NAMES[model_arch]
+        config_for_older_nncf = {
+            "ltx2.3": self.LTX2_3_INT8_CONFIG_FOR_OLDER_NNCF,
+            "ltx2.5": self.LTX2_5_INT8_CONFIG_FOR_OLDER_NNCF,
+        }[model_arch]
         with contextlib.ExitStack() as stack:
             stack.enter_context(
                 unittest.mock.patch.dict(
@@ -1936,7 +1957,7 @@ class OVWeightCompressionTest(unittest.TestCase):
             stack.enter_context(
                 unittest.mock.patch.dict(
                     "optimum.intel.openvino.configuration._DEFAULT_8BIT_WQ_CONFIGS_FOR_OLDER_NNCF",
-                    {model_id: self.LTX2_3_INT8_CONFIG_FOR_OLDER_NNCF},
+                    {model_id: config_for_older_nncf},
                 )
             )
             stack.enter_context(unittest.mock.patch("optimum.intel.utils.import_utils._nncf_version", nncf_version))
