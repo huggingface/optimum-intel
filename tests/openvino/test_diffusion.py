@@ -1779,8 +1779,9 @@ class OVLTX2ConditionPipelineTest(unittest.TestCase):
             "conditions": [
                 # Video-to-video: the input video from the first frame, partly kept.
                 LTX2VideoCondition(frames=video, index=0, strength=0.6),
-                # A keyframe on the last frame, appended to the sequence.
-                LTX2VideoCondition(frames=video[-1], index=num_frames - 1, strength=1.0, **image_kwargs),
+                # A keyframe on the last frame, appended to the sequence. `index` counts latent frames (8 video
+                # frames each), so the last frame is -1: a video frame number past the latent count is skipped.
+                LTX2VideoCondition(frames=video[-1], index=-1, strength=1.0, **image_kwargs),
             ],
             "prompt": "a dog running in a field",
             "negative_prompt": "static, motionless",
@@ -1811,8 +1812,9 @@ class OVLTX2ConditionPipelineTest(unittest.TestCase):
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
     def test_static_shape_generation(self, model_arch: str):
-        # The conditions have different frame counts (a video and an image), so the VAE encoder must keep a dynamic
-        # frame axis after the pipeline is reshaped to a static size.
+        # A video and an image condition have different frame counts, so the VAE encoder must keep a dynamic frame
+        # axis after the pipeline is reshaped to a static size. Both go at the first frame: a condition at a later
+        # latent frame is appended to the video tokens, which a statically reshaped transformer cannot take.
         height, width, num_frames = 64, 96, 9
         pipeline = OVLTX2ConditionPipeline.from_pretrained(
             MODEL_NAMES[model_arch], ov_config=F32_CONFIG, device=OPENVINO_DEVICE, compile=False
@@ -1820,8 +1822,12 @@ class OVLTX2ConditionPipelineTest(unittest.TestCase):
         pipeline.reshape(batch_size=1, height=height, width=width, num_images_per_prompt=1, num_frames=num_frames)
         pipeline.compile()
 
-        frames = pipeline(**self.generate_inputs(height, width, num_frames, model_arch), output_type="np").frames
-        self.assertEqual(frames.shape, (1, num_frames, height, width, 3))
+        inputs = self.generate_inputs(height, width, num_frames, model_arch)
+        video_condition, image_condition = inputs.pop("conditions")
+        image_condition.index = 0
+        for condition in (video_condition, image_condition):
+            frames = pipeline(**inputs, conditions=[condition], output_type="np").frames
+            self.assertEqual(frames.shape, (1, num_frames, height, width, 3))
 
 
 class OVLTX2AutoDurationTest(unittest.TestCase):

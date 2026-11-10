@@ -2603,6 +2603,8 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
     # Shared base rather than i2v subclassing t2v: LTX2ImageToVideoPipeline does not subclass
     # LTX2Pipeline, so subclassing would resolve `prepare_latents` to the text-to-video version.
     _is_ltx_pipeline = True
+    # Class-level, so the distilled-transformer notice below is emitted once per process.
+    _warned_ltx2_5_distilled_defaults = False
 
     @classproperty
     def _all_ov_model_paths(cls) -> Dict[str, str]:
@@ -2816,6 +2818,26 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
 
     def maybe_free_model_hooks(self):
         pass
+
+    def __call__(self, *args, **kwargs):
+        # Lightricks/LTX-2.5-Diffusers ships a distilled transformer in `transformer/` (the full one is in
+        # `transformer_full/`). Nothing in its config tells them apart, but the export keeps the folder it was loaded
+        # from, so a call without `sigmas` -- the pipeline defaults, tuned for full models -- can be pointed out.
+        source = str(getattr(self.transformer, "config", {}).get("_name_or_path", "")).replace("\\", "/").rstrip("/")
+        if (
+            "sigmas" not in kwargs
+            and "LTX-2.5-Diffusers" in source
+            and source.endswith("/transformer")
+            and not _OVLTX2Base._warned_ltx2_5_distilled_defaults
+        ):
+            logger.warning(
+                "This LTX-2.5 export uses the distilled transformer, which is meant to run with "
+                "`sigmas=DISTILLED_SIGMA_VALUES` and guidance off (`guidance_scale=1.0`, `audio_guidance_scale=1.0`, "
+                "`stg_scale=0.0`, `audio_stg_scale=0.0`, `modality_scale=1.0`, `audio_modality_scale=1.0`). The current "
+                "call uses the pipeline defaults, which are tuned for full models."
+            )
+            _OVLTX2Base._warned_ltx2_5_distilled_defaults = True
+        return super().__call__(*args, **kwargs)
 
     @property
     def components(self) -> Dict[str, Any]:
