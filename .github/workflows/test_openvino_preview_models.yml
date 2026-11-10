@@ -35,6 +35,8 @@ jobs:
           [
             "*export*",
             "*seq2seq*",
+            "*dflash*",
+            "*cb_compatible*",
           ]
 
     runs-on: ubuntu-22.04
@@ -62,6 +64,17 @@ jobs:
         run: |
           uv pip install --pre -U openvino openvino-tokenizers openvino-genai --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
 
+      - name: DFlash Validation
+        if: ${{ matrix.test-pattern == '*dflash*' }}
+        run: |
+          pytest tests/openvino/${{ matrix.test-pattern }} --durations=0
+
+      # qwen3_asr and qwen3_tts need qwen-asr / qwen-tts (pinned transformers), so they run in the remote code workflow
+      - name: Continuous Batching Compatibility Validation
+        if: ${{ matrix.test-pattern == '*cb_compatible*' }}
+        run: |
+          pytest tests/openvino/${{ matrix.test-pattern }} -k "not (qwen3_asr or qwen3_tts)" --durations=0
+
       - name: Qwen3.5 Compressed-Tensors Validation
         if: ${{ matrix.test-pattern == '*export*' || matrix.test-pattern == '*seq2seq*' }}
         run: |
@@ -70,6 +83,7 @@ jobs:
           uv pip uninstall compressed-tensors
 
       - name: Scoped Config Validation with NNCF develop
+        if: ${{ matrix.test-pattern != '*dflash*' && matrix.test-pattern != '*cb_compatible*' }}
         run: |
           uv pip install "nncf @ git+https://github.com/openvinotoolkit/nncf.git@develop"
           pytest tests/openvino/test_quantization.py -k "scoped_config" --durations=0
