@@ -443,6 +443,8 @@ def init_model_configs():
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS.setdefault("image-to-video", {})
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["image-to-video"]["ltx-video"] = "LTXImageToVideoPipeline"
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["image-to-video"]["ltx2"] = "LTX2ImageToVideoPipeline"
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS.setdefault("video-to-video", {})
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["video-to-video"]["ltx2"] = "LTX2ConditionPipeline"
 
 
 init_model_configs()

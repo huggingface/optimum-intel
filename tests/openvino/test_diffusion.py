@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import dataclasses
 import json
 import logging
 import unittest
@@ -28,10 +29,12 @@ from diffusers import (
 from diffusers.pipelines.stable_diffusion import StableDiffusionSafetyChecker
 from diffusers.utils import load_image
 from parameterized import parameterized
+from PIL import Image
 from utils_tests import F32_CONFIG, HUB_MODEL_NAMES, MODEL_NAMES, OPENVINO_DEVICE, SEED
 
 from optimum.intel.openvino import (
     OVDiffusionPipeline,
+    OVLTX2ConditionPipeline,
     OVPipelineForImage2Image,
     OVPipelineForImage2Video,
     OVPipelineForInpainting,
@@ -1748,6 +1751,77 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
         # num_frames is floored to the nearest latent frame count, not rejected
         invalid_inputs = self.generate_inputs(height=64, width=96, batch_size=1, num_frames=10, model_arch=model_arch)
         self.assertEqual(len(np.array(pipeline(**invalid_inputs).frames[0])), 9)
+
+
+class OVLTX2ConditionPipelineTest(unittest.TestCase):
+    """`OVLTX2ConditionPipeline`: LTX-2 generation conditioned on videos and images placed at given frames.
+
+    Every condition is VAE-encoded on its own and the conditioned tokens get their own timestep, so this covers the
+    multi-frame VAE encoder and the per-token audio-video cross-attention modulation that text-to-video never reaches.
+    """
+
+    SUPPORTED_ARCHITECTURES = []
+    if is_diffusers_version(">=", "0.38.0"):
+        SUPPORTED_ARCHITECTURES.append("ltx2")
+    if is_diffusers_version(">=", "0.40.0"):
+        SUPPORTED_ARCHITECTURES.append("ltx2.3")
+    if is_transformers_version(">=", "5.10.0") and is_diffusers_version(">=", "0.40.0"):
+        SUPPORTED_ARCHITECTURES.append("ltx2.5")
+
+    def generate_inputs(self, height=64, width=96, num_frames=9, model_arch=""):
+        from diffusers.pipelines.ltx2.pipeline_ltx2_condition import LTX2VideoCondition
+
+        rng = np.random.default_rng(SEED)
+        video = [Image.fromarray(frame) for frame in rng.integers(0, 255, (num_frames, height, width, 3), np.uint8)]
+        # Image conditions are H.264 re-compressed by default (diffusers>=0.40.0), which would tie the result to the codec.
+        image_kwargs = {"crf": 0} if "crf" in {field.name for field in dataclasses.fields(LTX2VideoCondition)} else {}
+        inputs = {
+            "conditions": [
+                # Video-to-video: the input video from the first frame, partly kept.
+                LTX2VideoCondition(frames=video, index=0, strength=0.6),
+                # A keyframe on the last frame, appended to the sequence.
+                LTX2VideoCondition(frames=video[-1], index=num_frames - 1, strength=1.0, **image_kwargs),
+            ],
+            "prompt": "a dog running in a field",
+            "negative_prompt": "static, motionless",
+            "height": height,
+            "width": width,
+            "num_frames": num_frames,
+            "num_inference_steps": 2,
+            "guidance_scale": 4.5,
+        }
+        inputs.update(_ltx2_modality_isolation_off(model_arch))
+        return inputs
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
+    @require_diffusers
+    def test_compare_to_diffusers_pipeline(self, model_arch: str):
+        from diffusers import LTX2ConditionPipeline
+
+        ov_pipeline = OVLTX2ConditionPipeline.from_pretrained(
+            MODEL_NAMES[model_arch], ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+        diffusers_pipeline = LTX2ConditionPipeline.from_pretrained(MODEL_NAMES[model_arch])
+        inputs = self.generate_inputs(model_arch=model_arch)
+
+        ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED), output_type="np").frames
+        diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED), output_type="np").frames
+        np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
+    @require_diffusers
+    def test_static_shape_generation(self, model_arch: str):
+        # The conditions have different frame counts (a video and an image), so the VAE encoder must keep a dynamic
+        # frame axis after the pipeline is reshaped to a static size.
+        height, width, num_frames = 64, 96, 9
+        pipeline = OVLTX2ConditionPipeline.from_pretrained(
+            MODEL_NAMES[model_arch], ov_config=F32_CONFIG, device=OPENVINO_DEVICE, compile=False
+        )
+        pipeline.reshape(batch_size=1, height=height, width=width, num_images_per_prompt=1, num_frames=num_frames)
+        pipeline.compile()
+
+        frames = pipeline(**self.generate_inputs(height, width, num_frames, model_arch), output_type="np").frames
+        self.assertEqual(frames.shape, (1, num_frames, height, width, 3))
 
 
 class OVLTX2AutoDurationTest(unittest.TestCase):

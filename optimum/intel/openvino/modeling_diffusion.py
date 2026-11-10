@@ -95,10 +95,11 @@ else:
     LTXImageToVideoPipeline = object
 
 if is_diffusers_version(">=", "0.38.0"):
-    from diffusers import LTX2ImageToVideoPipeline, LTX2Pipeline
+    from diffusers import LTX2ConditionPipeline, LTX2ImageToVideoPipeline, LTX2Pipeline
 else:
     LTX2Pipeline = object
     LTX2ImageToVideoPipeline = object
+    LTX2ConditionPipeline = object
 
 if is_diffusers_version(">=", "0.40.0"):
     # LTX-2.5 onwards. Imported for `predict_num_frames`, which `OVModelDurationHead` reuses verbatim.
@@ -2997,6 +2998,29 @@ class OVLTX2ImageToVideoPipeline(_OVLTX2Base, LTX2ImageToVideoPipeline):
         return models_paths
 
 
+class OVLTX2ConditionPipeline(_OVLTX2Base, LTX2ConditionPipeline):
+    """
+    LTX-2 generation conditioned on images or videos placed at given frames (`LTX2VideoCondition`): video-to-video
+    with the input video at frame 0 and a `strength` below 1, keyframes, or first-last-frame interpolation. Exported
+    as `video-to-video`, with the same submodels as text-to-video and image-to-video, so their exports load into it.
+    """
+
+    main_input_name = "prompt"
+    export_feature = "video-to-video"
+    auto_model_class = LTX2ConditionPipeline
+
+    @classproperty
+    def _all_ov_model_paths(cls) -> Dict[str, str]:
+        models_paths = _OVLTX2Base._all_ov_model_paths
+        models_paths["vae_encoder"] = os.path.join(DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER, OV_XML_FILE_NAME)
+        return models_paths
+
+    def _reshape_vae_encoder(self, model, batch_size=-1, height=-1, width=-1, num_frames=-1):
+        # Every condition is encoded on its own, with its own frame count -- one for an image, its length for a
+        # video -- so the frame axis stays dynamic.
+        return super()._reshape_vae_encoder(model, batch_size, height, width, num_frames=-1)
+
+
 class OVQwenImagePipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, QwenImagePipeline):
     main_input_name = "prompt"
     export_feature = "text-to-image"
@@ -3542,6 +3566,7 @@ if is_diffusers_version(">=", "0.38.0"):
     OV_IMAGE2VIDEO_PIPELINES_MAPPING["ltx2"] = OVLTX2ImageToVideoPipeline
     SUPPORTED_OV_PIPELINES.append(OVLTX2Pipeline)
     SUPPORTED_OV_PIPELINES.append(OVLTX2ImageToVideoPipeline)
+    SUPPORTED_OV_PIPELINES.append(OVLTX2ConditionPipeline)
 
 if is_diffusers_version(">=", "0.29.0"):
     SUPPORTED_OV_PIPELINES.extend(
