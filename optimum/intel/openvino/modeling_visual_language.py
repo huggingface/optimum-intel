@@ -338,9 +338,11 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
         # verifier can roll back after a rejected block.
         dflash_hidden_states = None
         if getattr(self, "_dflash_hidden_state_names", None):
-            # Keyed like transformers' `hidden_states` tuple (entry 0 is the embeddings), so layer `i` is at `i + 1`.
+            # `DFlashTokenCandidateGenerator` indexes `hidden_states` by layer: up to transformers 5.16 it reads the full
+            # tuple (entry 0 is the embeddings, so layer `i` is at `i + 1`), since 5.17 the requested layers are keyed by id
+            offset = 1 if is_transformers_version("<", "5.17") else 0
             dflash_hidden_states = {
-                layer_id + 1: torch.from_numpy(self.request.get_tensor(name).data).clone().to(self.device)
+                layer_id + offset: torch.from_numpy(self.request.get_tensor(name).data).clone().to(self.device)
                 for layer_id, name in zip(self._dflash_layer_ids, self._dflash_hidden_state_names)
             }
             past_key_values = OVStatefulCacheProxy(self)
