@@ -94,6 +94,11 @@ jobs:
           uv pip install "transformers>=5.21"
           pytest tests/openvino/test_quantization.py tests/openvino/test_cb_compatible.py -k "minicpm_ocr" --durations=0
 
+      - name: Scoped Config Validation with NNCF develop
+        run: |
+          uv pip install "nncf @ git+https://github.com/openvinotoolkit/nncf.git@develop"
+          pytest tests/openvino/test_quantization.py -k "scoped_config" --durations=0
+
       # The DSpark tests use the tiny MiniCPM-V 4.7 DSpark draft. test_genai runs single-request speculative decoding
       # with it and the tiny MiniCPM-V 4.7 target against the nightly GenAI installed above, which runs it as a plain
       # DFlash draft until it supports DSpark.

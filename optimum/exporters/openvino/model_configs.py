@@ -148,7 +148,6 @@ from optimum.exporters.openvino.model_patcher import (
     DeepseekOCR2LMPatcher,
     DeepseekOCR2VisionEmbeddingsPatcher,
     DeepseekPatcher,
-    DSparkVanillaMarkovHeadForExport,
     FalconModelPatcher,
     FluxTransformerModelPatcher,
     FunASRModelPatcher,
@@ -555,20 +554,20 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
                 Eagle3DummyGenerator,
                 GemmaDummyPastKeyValuesGenerator,
             )
-            self.PAD_ATTENTION_MASK_TO_PAST = False
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         if self.dflash:
             common_inputs = super().inputs
             common_inputs.pop("input_ids", None)
-            common_inputs["inputs_embeds"] = {0: "batch_size", 1: "block_size"}
-            common_inputs["hidden_states"] = {0: "batch_size", 1: "context_length"}
-            common_inputs["position_ids"] = {0: "batch_size", 1: "context_length + block_size"}
+            # Every per-token input covers the new rows [context; block]: hidden_states is read in the context
+            # rows and inputs_embeds in the block rows, as token_type_ids (0 context, 1 block) tells.
+            for name in ("inputs_embeds", "hidden_states", "position_ids", "token_type_ids"):
+                common_inputs[name] = {0: "batch_size", 1: "sequence_length"}
             if self.use_past_in_inputs:
-                mask_length = "past_sequence_length + context_length + block_size"
+                mask_length = "past_sequence_length + sequence_length"
             else:
-                mask_length = "context_length + block_size"
+                mask_length = "sequence_length"
             common_inputs["attention_mask"] = {0: "batch_size", 1: mask_length}
             return common_inputs
         if self.task in ["feature-extraction"]:
@@ -586,42 +585,10 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
             common_outputs = super().outputs
             common_outputs.pop("logits", None)
             return {
-                "last_hidden_state": {0: "batch_size", 1: "draft_sequence_length"},
+                "last_hidden_state": {0: "batch_size", 1: "sequence_length"},
                 **common_outputs,
             }
         return super().outputs
-
-    def overwrite_shape_and_generate_input(
-        self, dummy_input_gen: DummyInputGenerator, input_name: str, framework: str, input_shapes: dict
-    ):
-        if self.dflash and input_name in {"inputs_embeds", "hidden_states", "position_ids", "attention_mask"}:
-            sequence_length = dummy_input_gen.sequence_length
-            block_length = sequence_length + 1
-            if input_name == "inputs_embeds":
-                dummy_input_gen.sequence_length = block_length
-            elif input_name == "hidden_states":
-                dummy_input_gen.sequence_length = sequence_length
-            elif input_name == "position_ids":
-                dummy_input_gen.sequence_length = sequence_length + block_length
-            else:
-                if self.use_past_in_inputs:
-                    dummy_input_gen.sequence_length = sequence_length * 2 + block_length
-                else:
-                    dummy_input_gen.sequence_length = sequence_length + block_length
-            dummy_input = dummy_input_gen.generate(
-                input_name, framework=framework, int_dtype=self.int_dtype, float_dtype=self.float_dtype
-            )
-            dummy_input_gen.sequence_length = sequence_length
-            return dummy_input
-        return super().overwrite_shape_and_generate_input(dummy_input_gen, input_name, framework, input_shapes)
-
-    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
-        super().add_past_key_values(inputs_or_outputs, direction)
-        if self.dflash and direction == "outputs":
-            for axes in inputs_or_outputs.values():
-                for axis, name in axes.items():
-                    if name == "past_sequence_length + sequence_length":
-                        axes[axis] = "past_sequence_length + context_length"
 
     def with_behavior(self, behavior: str):
         if behavior == "markov_head":
@@ -636,9 +603,7 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
 
     def get_model_for_behavior(self, model, behavior: str):
         if behavior == "markov_head":
-            return DSparkVanillaMarkovHeadForExport(
-                model.markov_head, model.config, markov_head_default_top_k(model.config)
-            )
+            return model.markov_head_for_export(markov_head_default_top_k(model.config))
         raise ValueError(f"Unsupported behavior {behavior} for {type(self).__name__}.")
 
 
@@ -2574,16 +2539,15 @@ class MuseGlimmerTextOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
 class MuseGlimmerAssistantOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     """Export config for the MuseGlimmer DFlash drafter (``Muse-Glimmer-30B-assistant``).
 
-    Follows the same I/O contract as the Qwen3 DFlash draft export: ``inputs_embeds``
-    carries the diffusion window (the anchor token plus ``block_size - 1`` mask tokens)
-    embedded with the target's raw lookup table, ``hidden_states`` carries the target's
-    hidden states at ``target_layer_ids`` concatenated on the last axis, and the model
-    emits ``last_hidden_state`` for the drafted positions only. Neither the embedding
-    table nor the lm_head is part of the export - the drafter borrows the target's.
+    Follows the I/O of the Qwen3 DFlash draft export: every per-token input covers the new rows
+    [context; block]. ``hidden_states`` (the target's hidden states at ``target_layer_ids``, concatenated
+    on the last axis) is read in the context rows and ``inputs_embeds`` (the target's raw token
+    embeddings) in the block rows, as ``token_type_ids`` (0 context, 1 block) tells. The model emits
+    ``last_hidden_state`` for every row. Neither the embedding table nor the lm_head is part of the
+    export - the drafter borrows the target's.
 
-    Unlike the Qwen3 drafters this is a native transformers architecture, so no
-    re-implementation is needed; only the KV-cache handling is restructured for export
-    (see ``MuseGlimmerAssistantDFlashForCausalLM``).
+    Unlike the Qwen3 drafters this is a native transformers architecture, so it runs the native modules;
+    only the forward is restructured for export (see ``MuseGlimmerAssistantDFlashForCausalLM``).
     """
 
     MIN_TRANSFORMERS_VERSION = "5.15.0"
@@ -2596,7 +2560,6 @@ class MuseGlimmerAssistantOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfi
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     _MODEL_PATCHER = OVDecoderModelPatcher
-    PAD_ATTENTION_MASK_TO_PAST = False
     # Tells `convert.py` to stamp the DFlash RT-info block onto the exported graph.
     dflash = True
 
@@ -2613,13 +2576,12 @@ class MuseGlimmerAssistantOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfi
     def inputs(self) -> Dict[str, Dict[int, str]]:
         common_inputs = super().inputs
         common_inputs.pop("input_ids", None)
-        common_inputs["inputs_embeds"] = {0: "batch_size", 1: "block_size"}
-        common_inputs["hidden_states"] = {0: "batch_size", 1: "context_length"}
-        common_inputs["position_ids"] = {0: "batch_size", 1: "context_length + block_size"}
+        for name in ("inputs_embeds", "hidden_states", "position_ids", "token_type_ids"):
+            common_inputs[name] = {0: "batch_size", 1: "sequence_length"}
         if self.use_past_in_inputs:
-            mask_length = "past_sequence_length + context_length + block_size"
+            mask_length = "past_sequence_length + sequence_length"
         else:
-            mask_length = "context_length + block_size"
+            mask_length = "sequence_length"
         common_inputs["attention_mask"] = {0: "batch_size", 1: mask_length}
         return common_inputs
 
@@ -2628,43 +2590,9 @@ class MuseGlimmerAssistantOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfi
         common_outputs = super().outputs
         common_outputs.pop("logits", None)
         return {
-            "last_hidden_state": {0: "batch_size", 1: "draft_sequence_length"},
+            "last_hidden_state": {0: "batch_size", 1: "sequence_length"},
             **common_outputs,
         }
-
-    def overwrite_shape_and_generate_input(
-        self, dummy_input_gen: DummyInputGenerator, input_name: str, framework: str, input_shapes: dict
-    ):
-        if input_name in {"inputs_embeds", "hidden_states", "position_ids", "attention_mask"}:
-            sequence_length = dummy_input_gen.sequence_length
-            block_length = sequence_length + 1
-            if input_name == "inputs_embeds":
-                dummy_input_gen.sequence_length = block_length
-            elif input_name == "hidden_states":
-                dummy_input_gen.sequence_length = sequence_length
-            elif input_name == "position_ids":
-                dummy_input_gen.sequence_length = sequence_length + block_length
-            else:
-                if self.use_past_in_inputs:
-                    dummy_input_gen.sequence_length = sequence_length * 2 + block_length
-                else:
-                    dummy_input_gen.sequence_length = sequence_length + block_length
-            dummy_input = dummy_input_gen.generate(
-                input_name, framework=framework, int_dtype=self.int_dtype, float_dtype=self.float_dtype
-            )
-            dummy_input_gen.sequence_length = sequence_length
-            return dummy_input
-        return super().overwrite_shape_and_generate_input(dummy_input_gen, input_name, framework, input_shapes)
-
-    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
-        super().add_past_key_values(inputs_or_outputs, direction)
-        if direction == "outputs":
-            # Only the target context is written to the cache; the diffusion window's
-            # K/V is local to the forward, so the cache grows by `context_length`.
-            for axes in inputs_or_outputs.values():
-                for axis, name in axes.items():
-                    if name == "past_sequence_length + sequence_length":
-                        axes[axis] = "past_sequence_length + context_length"
 
 
 @register_in_tasks_manager("muse_glimmer", *["image-text-to-text"], library_name="transformers")
