@@ -851,6 +851,20 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         """
         return
 
+    def _valid_auto_compile_criteria(self, model_kwargs, generation_config):
+        # The forward pass runs through an OpenVINO InferRequest and cannot be compiled with torch.compile.
+        return False
+
+    def _prefill(self, input_ids, generation_config, model_kwargs, **kwargs):
+        if (
+            isinstance(model_kwargs.get("past_key_values"), (tuple, list))
+            and generation_config.prefill_chunk_size is None
+        ):
+            # OV input preparation already slices the input according to its legacy cache representation.
+            model_inputs = self.prepare_inputs_for_generation(input_ids, **model_kwargs, **kwargs)
+            return self(**model_inputs, return_dict=True)
+        return super()._prefill(input_ids, generation_config, model_kwargs, **kwargs)
+
     @classmethod
     def _from_pretrained(
         cls,
