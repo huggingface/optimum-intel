@@ -420,7 +420,7 @@ class OVQuantizerTest(unittest.TestCase):
                 num_samples=1,
             ),
             {
-                "lm_model": 16 if is_transformers_version("<", "5.22") else 15,
+                "lm_model": 16 if is_transformers_version("<", "5.17") else 15,
                 "text_embeddings_model": 0,
                 "vision_embeddings_model": 1,
                 "vision_embeddings_merger_model": 16,
