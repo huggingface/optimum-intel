@@ -587,7 +587,7 @@ class OVModelForImageClassification(OVModel):
             config = TimmConfig.from_pretrained(model_id, **kwargs)
             #  If locally saved timm model, directly load
             if local_timm_model:
-                return super()._from_pretrained(model_id=model_id, config=config)
+                return super()._from_pretrained(model_id=model_id, config=config, **kwargs)
             model = TimmForImageClassification.from_pretrained(model_id, **kwargs)
             openvino_config = TimmOpenVINOConfig(model.config)
 

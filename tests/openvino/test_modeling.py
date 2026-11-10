@@ -1322,6 +1322,20 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
             model(pixel_values=torch.zeros((5, 3, model.config.image_size, model.config.image_size)))
         gc.collect()
 
+    @parameterized.expand(TIMM_MODELS)
+    def test_timm_local_load_kwargs(self, model_id):
+        ov_model = OVModelForImageClassification.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
+        with TemporaryDirectory() as tmpdirname:
+            ov_model.save_pretrained(tmpdirname)
+            model = OVModelForImageClassification.from_pretrained(
+                tmpdirname, device=OPENVINO_DEVICE, compile=False, ov_config=F32_CONFIG
+            )
+            self.assertIsNone(model.request)
+            self.assertEqual(model.ov_config["INFERENCE_PRECISION_HINT"], F32_CONFIG["INFERENCE_PRECISION_HINT"])
+            model(pixel_values=torch.zeros((5, 3, model.config.image_size, model.config.image_size)))
+            self.assertEqual(model.request.get_property("INFERENCE_PRECISION_HINT").to_string(), "f32")
+        gc.collect()
+
 
 class OVModelForAudioClassificationIntegrationTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = (
