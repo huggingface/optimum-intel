@@ -200,6 +200,11 @@ HUB_MODEL_NAMES = {
     "detr": "optimum-intel-internal-testing/tiny-random-DetrModel",
     "electra": "optimum-intel-internal-testing/tiny-random-electra",
     "esm": "optimum-intel-internal-testing/tiny-random-EsmModel",
+    "eurobert": "hf-tiny-v2/tiny-random-EuroBertModel",
+    # checkpoints that include the task head weights: the base EuroBertModel checkpoint has none, so a head loaded
+    # from it is randomly initialised on every load and cannot be compared across two loads
+    "eurobert-sequence-classification": "hf-tiny-v2/tiny-random-EuroBertForSequenceClassification",
+    "eurobert-token-classification": "hf-tiny-v2/tiny-random-EuroBertForTokenClassification",
     "exaone": "optimum-intel-internal-testing/tiny-random-exaone",
     "exaone4": "optimum-intel-internal-testing/tiny-random-exaone4",
     "gemma": "optimum-intel-internal-testing/tiny-random-GemmaForCausalLM",
@@ -1166,6 +1171,8 @@ TEST_NAME_TO_MODEL_TYPE = {
     "baichuan2-13b": "baichuan",
     "chatglm4": "chatglm",
     "codegen2": "codegen",
+    "eurobert-sequence-classification": "eurobert",
+    "eurobert-token-classification": "eurobert",
     "falcon-40b": "falcon",
     "gemma4_dflash": "qwen3",
     "gemma4_moe": "gemma4",

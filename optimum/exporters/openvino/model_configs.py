@@ -7152,6 +7152,16 @@ class CamembertOpenVINOConfig(DistilBertOpenVINOConfig):
     pass
 
 
+@register_in_tasks_manager(
+    "eurobert",
+    *["feature-extraction", "fill-mask", "text-classification", "token-classification"],
+)
+class EuroBertOpenVINOConfig(DistilBertOpenVINOConfig):
+    # EuroBERT is natively available in transformers starting with 5.3. The model takes `input_ids` and
+    # `attention_mask` only (default `position_ids` are built in the forward pass), same contract as DistilBert.
+    MIN_TRANSFORMERS_VERSION = "5.3"
+
+
 @register_in_tasks_manager("flaubert", *COMMON_TEXT_TASKS)
 class FlaubertOpenVINOConfig(BertOpenVINOConfig):
     MAX_TRANSFORMERS_VERSION = "4.57.6"
