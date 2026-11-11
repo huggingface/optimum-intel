@@ -258,6 +258,7 @@ from optimum.exporters.openvino.model_patcher import (
     QwenModelPatcher,
     SAMModelPatcher,
     SanaTextEncoderModelPatcher,
+    SenseVoiceModelPatcher,
     SentenceTransformersTransformerPatcher,
     SpeechT5ModelPatcher,
     VideoChatFlashQwenVisionEmbeddingModelPatcher,
@@ -5346,6 +5347,7 @@ class SenseVoiceOpenVINOConfig(AudioOpenVINOConfig):
 
     DUMMY_INPUT_GENERATOR_CLASSES = (SenseVoiceDummyInputGenerator,)
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(feature_size="num_mel_bins", allow_new=True)
+    _MODEL_PATCHER = SenseVoiceModelPatcher
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:

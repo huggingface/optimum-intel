@@ -16,6 +16,7 @@ import gc
 import unittest
 
 import numpy as np
+import openvino as ov
 import pytest
 import torch
 from parameterized import parameterized
@@ -226,6 +227,63 @@ class OVASRTest(unittest.TestCase):
         self.assertFalse(ov_model.encoder.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"]))
 
         del ov_model
+        gc.collect()
+
+    @pytest.mark.skipif(
+        is_transformers_version("<", "4.57") or is_transformers_version(">=", "4.58"),
+        reason="Currently, we support SenseVoice only for transformers==4.57 since it is a trust-remote-code model.",
+    )
+    def test_sense_voice_sdpa_with_padding_mask(self):
+        # SenseVoiceModelPatcher exports the SANM attention as ScaledDotProductAttention with an additive
+        # padding mask, instead of MatMul + Select + Softmax + Select + MatMul.
+        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
+            MODEL_NAMES["sense_voice"], export=True, trust_remote_code=True, compile=False
+        )
+        op_types = [op.get_type_name() for op in ov_model.model.get_ordered_ops()]
+        self.assertGreater(op_types.count("ScaledDotProductAttention"), 0)
+        self.assertEqual(op_types.count("Softmax"), 0)
+
+        compiled = ov.Core().compile_model(ov_model.model, OPENVINO_DEVICE, F32_CONFIG)
+        feature_size = ov_model.model.input("input_features").get_partial_shape()[2].get_length()
+        rng = np.random.default_rng(SEED)
+        long_len, short_len = 40, 17
+        features = rng.standard_normal((2, long_len, feature_size)).astype(np.float32)
+        features[1, short_len:] = 0
+        lengths = [long_len, short_len]
+
+        def inputs(feats, lens):
+            return {
+                "input_features": feats,
+                "speech_lengths": np.array(lens, dtype=np.int64),
+                "language": np.zeros(len(lens), dtype=np.int64),
+                "textnorm": np.full(len(lens), 15, dtype=np.int64),
+            }
+
+        def run(feats, lens):
+            outputs = compiled(inputs(feats, lens))
+            return outputs["logits"], outputs["encoder_out_lens"]
+
+        batch_logits, batch_lens = run(features, lengths)
+        self.assertFalse(np.isnan(batch_logits).any())
+
+        # The exported model matches the original (unpatched) PyTorch attention on a padded batch.
+        from optimum.intel.openvino.modeling_funasr import _SenseVoiceForCTC
+
+        pt_model = _SenseVoiceForCTC.from_pretrained(MODEL_NAMES["sense_voice"]).eval()
+        with torch.no_grad():
+            pt_inputs = {name: torch.from_numpy(value.copy()) for name, value in inputs(features, lengths).items()}
+            pt_logits, pt_lens = pt_model(**pt_inputs)
+        np.testing.assert_array_equal(batch_lens, pt_lens.numpy())
+        for i, valid in enumerate(batch_lens):
+            np.testing.assert_allclose(batch_logits[i, :valid], pt_logits[i, :valid].numpy(), rtol=1e-3, atol=1e-3)
+
+        # The padding mask must still work: a padded sample in a batch gives the same logits as when run alone.
+        alone_logits, alone_lens = run(features[1:, :short_len], [short_len])
+        self.assertEqual(int(batch_lens[1]), int(alone_lens[0]))
+        valid = int(alone_lens[0])
+        np.testing.assert_allclose(batch_logits[1, :valid], alone_logits[0, :valid], atol=1e-4)
+
+        del ov_model, pt_model
         gc.collect()
 
     def _get_pt_reference(self, model_arch):
