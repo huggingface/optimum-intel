@@ -228,6 +228,98 @@ class OVASRTest(unittest.TestCase):
         del ov_model
         gc.collect()
 
+    @pytest.mark.skipif(
+        is_transformers_version("<", "4.57") or is_transformers_version(">=", "4.58"),
+        reason="Currently, we support Qwen3-ASR only for transformers==4.57 since it is a trust-remote-code model.",
+    )
+    def test_qwen3_asr_audio_encoder_cross_chunk_attention(self):
+        """Regression test for Qwen3-ASR cross-chunk audio-encoder attention.
+
+        The exported audio encoder convolves each ``n_window * 2`` frame window as a separate batch
+        element, but the reference encoder (``qwen_asr``) groups the post-convolution tokens of all
+        conv chunks inside one ``n_window_infer`` window into a single attention sequence, so tokens
+        attend across conv chunks within a window (and are isolated between windows). A per-chunk
+        export limits self-attention to a single chunk and drops this cross-chunk attention. This
+        test asserts (1) the exported encoder reproduces the reference audio features, and (2) that
+        attention genuinely crosses conv chunks inside a window while staying isolated across
+        windows.
+        """
+        from qwen_asr.core.transformers_backend.modeling_qwen3_asr import Qwen3ASRForConditionalGeneration
+
+        model_id = MODEL_NAMES["qwen3_asr"]
+        set_seed(SEED)
+
+        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+        audio_data, sample_rate = self._generate_audio_data()
+        text_prompt = processor.apply_chat_template(
+            [
+                {"role": "system", "content": ""},
+                {"role": "user", "content": [{"type": "audio", "audio": ""}]},
+            ],
+            add_generation_prompt=True,
+            tokenize=False,
+        )
+        inputs = processor(text=text_prompt, audio=audio_data, sampling_rate=sample_rate, return_tensors="pt")
+        input_features = inputs["input_features"]
+        feature_attention_mask = inputs["feature_attention_mask"]
+
+        # Reference audio features: the qwen_asr encoder applies windowed cross-chunk attention.
+        pt_model = Qwen3ASRForConditionalGeneration.from_pretrained(model_id, trust_remote_code=True).eval()
+        with torch.no_grad():
+            ref_features = pt_model.thinker.get_audio_features(
+                input_features, feature_attention_mask=feature_attention_mask
+            )
+
+        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
+            model_id, export=True, trust_remote_code=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+        encoder = ov_model.audio_encoder
+
+        ov_features, _ = encoder.encode(input_features, feature_attention_mask)
+        ov_features = torch.as_tensor(ov_features)
+
+        # (1) The exported encoder must reproduce the reference (cross-chunk) audio features.
+        # A per-chunk export diverges here because each window spans several conv chunks.
+        self.assertEqual(tuple(ov_features.shape), tuple(ref_features.shape))
+        max_abs_diff = float((ov_features - ref_features.to(ov_features.dtype)).abs().max())
+        self.assertLess(max_abs_diff, 1e-3, msg=f"OV audio features diverge from reference: {max_abs_diff}")
+
+        # (2) Explicit cross-chunk / window-isolation probe on the exported graph.
+        audio_config = getattr(getattr(ov_model.config, "thinker_config", ov_model.config), "audio_config", None)
+        chunks_per_window = audio_config.n_window_infer // (audio_config.n_window * 2)
+        self.assertGreaterEqual(chunks_per_window, 2, "fixture must group >=2 conv chunks per window")
+
+        enc_inputs, _, chunk_output_lens = encoder._prepare_inputs(input_features, feature_attention_mask)
+        num_chunks = enc_inputs["padded_feature"].shape[0]
+        self.assertGreater(num_chunks, chunks_per_window, "need conv chunks beyond the first window")
+
+        def run_raw(padded_feature):
+            local = dict(enc_inputs)
+            local["padded_feature"] = padded_feature
+            return torch.as_tensor(encoder.forward(**local))
+
+        base = run_raw(enc_inputs["padded_feature"])
+        len0 = int(chunk_output_lens[0])
+
+        # Perturb a chunk inside the SAME window as chunk 0 -> chunk 0 output must change.
+        same_window = enc_inputs["padded_feature"].clone()
+        same_window[1] = torch.randn_like(same_window[1]) + 2.0
+        same_change = float((base[0, :len0] - run_raw(same_window)[0, :len0]).abs().max())
+
+        # Perturb a chunk in a DIFFERENT window -> chunk 0 output must stay unchanged.
+        other_window = enc_inputs["padded_feature"].clone()
+        other_window[chunks_per_window] = torch.randn_like(other_window[chunks_per_window]) + 2.0
+        other_change = float((base[0, :len0] - run_raw(other_window)[0, :len0]).abs().max())
+
+        self.assertLess(other_change, 1e-6, "attention leaked across windows")
+        self.assertGreater(same_change, 1e-6, "cross-chunk attention missing within a window")
+        self.assertGreater(
+            same_change, 1e3 * other_change, "within-window response not dominated by cross-chunk attention"
+        )
+
+        del pt_model, ov_model
+        gc.collect()
+
     def _get_pt_reference(self, model_arch):
         if model_arch == "fun_asr":
             return self._get_pt_reference_funasr()
