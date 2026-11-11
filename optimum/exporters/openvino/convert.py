@@ -155,6 +155,11 @@ def _set_runtime_options(
             and getattr(getattr(sub_export_config, "_config", None), "export_model_type", None) == "fun_asr"
         ):
             sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "4.0"
+        # GraniteMoeHybrid (Granite-4.0) overflows fp16 on GPU and emits only token 0 ("!") without
+        # activation scaling. Because the GPU plugin ignores the default 8.0 for LLMs
+        # (openvinotoolkit/openvino#39233), set a non-default scale factor that the plugin applies.
+        if getattr(getattr(sub_export_config, "_config", None), "model_type", None) == "granitemoehybrid":
+            sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "4.0"
 
 
 def _save_model(
