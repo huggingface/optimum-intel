@@ -9503,8 +9503,10 @@ class NemotronHModelPatcher(GraniteMoeHybridModelPatcher):
     """
     NemotronH shares the cache layout and the Mamba2 mixer of GraniteMoeHybrid. Differences:
     - each layer has a single mixer, so the Mamba2 mixers are selected by block type;
-    - `dt` is clamped with `config.time_step_limit`, (0, inf) for the released models, as in NVIDIA's
-      implementation and mamba_ssm. The transformers PyTorch path clamps at `time_step_min` instead;
+    - `dt` is clamped at `config.time_step_min`, as in the PyTorch path of transformers (prefill and decode up to
+      5.14, prefill only since 5.15). NVIDIA's implementation, mamba_ssm and vLLM use `config.time_step_limit`
+      instead, (0, inf) for the released models, and https://github.com/huggingface/transformers/pull/48989 would
+      switch transformers to it. Update this clamp if it is merged;
     - the experts are also patched before transformers 5.13, with `ov_batched_mm`.
     """
 
@@ -9515,7 +9517,7 @@ class NemotronHModelPatcher(GraniteMoeHybridModelPatcher):
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(config, model, model_kwargs)
-        self._mamba_time_step_limit = tuple(self._model.config.time_step_limit)
+        self._mamba_time_step_limit = (self._model.config.time_step_min, float("inf"))
 
     def _get_mamba_layers(self):
         return [
