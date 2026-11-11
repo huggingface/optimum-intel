@@ -267,6 +267,7 @@ from optimum.exporters.openvino.model_patcher import (
     ZImageTransformerModelPatcher,
     _get_model_attribute,
 )
+from optimum.exporters.openvino.stateful import patch_stateful_prefix_cache
 from optimum.exporters.openvino.utils import (
     GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE,
     GRANITEMOEHYBRID_MAMBA_LAYER_TYPE,
@@ -3356,26 +3357,47 @@ class QwenImage21TransformerOpenVINOConfig(UNetOpenVINOConfig):
     _MODEL_PATCHER = QwenImage21TransformerModelPatcher
 
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
-        return OpenVINOConfig.generate_dummy_inputs(self, framework=framework, **kwargs)
+        # The per-layer `past_key_values.{i}.key/value` inputs are traced from one nested `past_key_values` argument.
+        dummy_input_generator = self._create_dummy_input_generator_classes(**kwargs)[0]
+        input_names = [name for name in self.inputs if not name.startswith("past_key_values.")] + ["past_key_values"]
+        return {
+            name: dummy_input_generator.generate(
+                name, framework=framework, int_dtype=self.int_dtype, float_dtype=self.float_dtype
+            )
+            for name in input_names
+        }
 
     @property
     def inputs(self):
-        return {
+        inputs = {
             "hidden_states": {0: "batch_size", 1: "packed_height_width", 2: "in_channels"},
             "encoder_hidden_states": {0: "batch_size", 1: "text_sequence_length", 2: "context_in_dim"},
             "timestep": {0: "batch_size"},
             "cos": {1: "joint_sequence_length"},
             "sin": {1: "joint_sequence_length"},
             "gather_idx": {0: "joint_sequence_length"},
-            "attn_mask": {0: "batch_size", 2: "joint_sequence_length", 3: "joint_sequence_length"},
+            "attn_mask": {0: "batch_size", 2: "joint_sequence_length", 3: "key_sequence_length"},
             "modulation_mask": {0: "joint_sequence_length"},
         }
+        for i in range(self._config.num_layers):
+            inputs[f"past_key_values.{i}.key"] = {0: "batch_size", 2: "past_sequence_length"}
+            inputs[f"past_key_values.{i}.value"] = {0: "batch_size", 2: "past_sequence_length"}
+        return inputs
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
-        return {
+        outputs = {
             "out_hidden_states": {0: "batch_size", 1: "joint_sequence_length"},
         }
+        for i in range(self._config.num_layers):
+            outputs[f"prefix_key_values.{i}.key"] = {0: "batch_size", 2: "prefix_sequence_length"}
+            outputs[f"prefix_key_values.{i}.value"] = {0: "batch_size", 2: "prefix_sequence_length"}
+        return outputs
+
+    def post_process_ov_model(self, ov_model):
+        # The prefix KV cache is filled once per generation by the host (OVModelQwenImage21Transformer), so the past
+        # inputs become OpenVINO state that the graph only reads.
+        patch_stateful_prefix_cache(ov_model)
 
 
 @register_in_tasks_manager("qwenimage21-text-encoder", *["feature-extraction"], library_name="diffusers")

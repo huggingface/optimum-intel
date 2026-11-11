@@ -309,6 +309,57 @@ def patch_stateful_hybrid_ssm(ov_model: ov.Model):
     make_stateful(ov_model, not_cache_inputs, cache_inputs, cache_outputs, batch_dim)
 
 
+def patch_stateful_prefix_cache(
+    ov_model: ov.Model, cache_input_prefix: str = "past_key_values", batch_input_name: str = "hidden_states"
+):
+    """
+    Turns read-only cache inputs into OpenVINO state: every `cache_input_prefix*` input is replaced by a `ReadValue`
+    initialized to an empty sequence, paired with an `Assign` that writes the read value back unchanged.
+
+    Unlike the decoder KV cache, the graph never updates this state: the host fills it with `set_state` (for example
+    from a prefill call's outputs) and every later call only reads it. The plugins require each `ReadValue` to have a
+    matching `Assign`, and an identity `Assign` costs no copy.
+
+    Parameters:
+        ov_model (ov.Model):
+            openvino model
+        cache_input_prefix (str):
+            name prefix of the cache inputs, laid out as [batch, ..., sequence, ...] with batch first
+        batch_input_name (str):
+            input whose first dimension provides the batch size of the initial (empty) state
+    """
+    from openvino.op.util import Variable, VariableInfo
+
+    batch = opset13.gather(
+        opset13.shape_of(ov_model.input(batch_input_name), output_type="i64"),
+        opset13.constant([0]),
+        opset13.constant(0),
+    )
+    sinks = []
+    cache_params = [
+        p for p in ov_model.get_parameters() if p.get_output_tensor(0).get_any_name().startswith(cache_input_prefix)
+    ]
+    for param in cache_params:
+        name = param.get_output_tensor(0).get_any_name()
+        shape = param.get_output_partial_shape(0)
+        info = VariableInfo()
+        info.data_shape = shape
+        info.data_type = param.get_output_element_type(0)
+        info.variable_id = name
+        variable = Variable(info)
+        # Empty initial state: the batch size taken from the model inputs, static dims kept, dynamic (sequence) dims 0.
+        dims = [batch] + [opset13.constant([dim.get_length() if dim.is_static else 0]) for dim in list(shape)[1:]]
+        init = opset13.broadcast(opset13.constant(0.0, dtype=info.data_type), opset13.concat(dims, axis=0))
+        read_value = opset13.read_value(init, variable)
+        param.output(0).replace(read_value.output(0))
+        sinks.append(opset13.assign(read_value, variable))
+        ov_model.add_variables([variable])
+    for param in cache_params:
+        ov_model.remove_parameter(param)
+    ov_model.add_sinks(sinks)
+    ov_model.validate_nodes_and_infer_types()
+
+
 def patch_stateful(config: PretrainedConfig, ov_model: ov.Model):
     if config.is_encoder_decoder and model_has_input_output_name(ov_model, "encoder_hidden_states"):
         return patch_stateful_encoder_decoder(config, ov_model)

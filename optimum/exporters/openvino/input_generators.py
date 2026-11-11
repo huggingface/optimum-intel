@@ -2748,8 +2748,10 @@ class DummyQwenImageResolutionInputGenerator(DummyInputGenerator):
 class DummyQwenImage21TransformerInputGenerator(DummyInputGenerator):
     # QwenImage21's traceable single-pass transformer consumes host-precomputed tensors instead of the
     # data-dependent joint-sequence assembly / complex rotary / flex attention of the eager model. All
-    # eight inputs must be mutually consistent: a text-to-image layout (text tokens followed by the
+    # inputs must be mutually consistent: a text-to-image layout (text tokens followed by the
     # target image's latent tokens) is generated, for which the joint gather index is the identity.
+    # The prefix KV cache is traced non-empty so that its concatenation with the current keys/values
+    # keeps a dynamic sequence length; the attention mask spans the cached and the current tokens.
     SUPPORTED_INPUT_NAMES = (
         "hidden_states",
         "encoder_hidden_states",
@@ -2759,6 +2761,7 @@ class DummyQwenImage21TransformerInputGenerator(DummyInputGenerator):
         "gather_idx",
         "attn_mask",
         "modulation_mask",
+        "past_key_values",
     )
 
     def __init__(
@@ -2779,9 +2782,12 @@ class DummyQwenImage21TransformerInputGenerator(DummyInputGenerator):
         self.in_channels = cfg.in_channels
         self.context_in_dim = cfg.context_in_dim
         self.head_dim = cfg.attention_head_dim
+        self.num_heads = cfg.num_attention_heads
+        self.num_layers = cfg.num_layers
         # target image latent tokens (patch_size == 1, unpacked), 2x downsampled per axis
         self.n_lat = (height // 2) * (width // 2)
         self.seq = self.text_len + self.n_lat
+        self.past_len = 2
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name == "hidden_states":
@@ -2803,8 +2809,17 @@ class DummyQwenImage21TransformerInputGenerator(DummyInputGenerator):
             ) + torch.arange(self.seq, dtype=getattr(torch, int_dtype))
         if input_name == "attn_mask":
             return self.random_float_tensor(
-                [self.batch_size, 1, self.seq, self.seq], framework=framework, dtype=float_dtype
+                [self.batch_size, 1, self.seq, self.past_len + self.seq], framework=framework, dtype=float_dtype
             )
+        if input_name == "past_key_values":
+            shape = [self.batch_size, self.num_heads, self.past_len, self.head_dim]
+            return [
+                (
+                    self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
+                    self.random_float_tensor(shape, framework=framework, dtype=float_dtype),
+                )
+                for _ in range(self.num_layers)
+            ]
         if input_name == "modulation_mask":
             mask = torch.zeros(self.seq, dtype=torch.bool)
             mask[self.text_len :] = True
