@@ -3015,9 +3015,7 @@ class _OVMiniCPMV4_6ForCausalLM(OVModelForVisualCausalLM):
     def merge_vision_text_embeddings(
         self, vision_embeds, inputs_embeds, input_ids=None, attention_mask=None, position_ids=None, **kwargs
     ):
-        image_features = (
-            torch.cat(vision_embeds, dim=0) if isinstance(vision_embeds, (list, tuple)) else vision_embeds
-        )
+        image_features = torch.cat(vision_embeds, dim=0) if isinstance(vision_embeds, (list, tuple)) else vision_embeds
         if isinstance(inputs_embeds, np.ndarray):
             inputs_embeds = torch.from_numpy(inputs_embeds)
         image_features = image_features.to(inputs_embeds.dtype)
