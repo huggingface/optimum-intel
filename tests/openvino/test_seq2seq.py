@@ -635,6 +635,21 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "lfm3_omni",
     ]
     SUPPORT_AUDIO = ["gemma4", "gemma4_unified-it", "qwen3_omni_moe", "lfm3_omni"]
+    SUPPORT_BATCHED_IMAGES = [
+        "llava",
+        "qwen2_5_vl",
+        "gemma3",
+        "gemma3n",
+        "gemma4",
+        "gemma4_moe",
+        "qwen3_5",
+        "qwen3_5_mtp",
+        "qwen3_5_moe",
+        "qwen3_5_moe_mtp",
+        "qwen3_5_moe_mtp_legacy_weights",
+        "mistral3",
+        "ministral3",
+    ]
     # "llama" is registered for image-text-to-text
     # to support VLM Eagle3 draft models (tested separately in test_genai.py).
     UNSUPPORTED_ARCHITECTURES = {"phi4_multimodal", "llama"}
@@ -1011,21 +1026,26 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         del transformers_model, ov_model
         gc.collect()
 
-    def test_mistral3_batched_images(self):
-        model_id = MODEL_NAMES["mistral3"]
+    @parameterized.expand(SUPPORT_BATCHED_IMAGES)
+    def test_batched_images(self, model_arch):
+        if model_arch not in self.SUPPORTED_ARCHITECTURES:
+            self.skipTest(f"{model_arch} is not supported by the installed transformers version")
+        model_id = MODEL_NAMES[model_arch]
         processor = AutoProcessor.from_pretrained(model_id)
-        transformers_model = self.get_transformer_model_class("mistral3").from_pretrained(model_id).eval()
+        transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(model_id).eval()
         ov_model = self.OVMODEL_CLASS.from_pretrained(
             model_id, export=True, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
         )
         conversation = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": "Describe"}]}]
         prompt = processor.apply_chat_template(conversation, add_generation_prompt=True, tokenize=False)
-        images = [self.IMAGE.resize((64, 48)), self.IMAGE.resize((32, 64))]
+        images = [[self.IMAGE.resize((64, 48))], [self.IMAGE.resize((32, 64))]]
         inputs = processor(images=images, text=[prompt, prompt], padding=True, return_tensors="pt")
         with torch.no_grad():
             transformers_outputs = transformers_model(**inputs)
         ov_outputs = ov_model(**inputs)
-        max_diff = torch.abs(ov_outputs.logits - transformers_outputs.logits).max()
+        # logits at padded positions are not meaningful
+        mask = inputs["attention_mask"].bool()
+        max_diff = torch.abs(ov_outputs.logits[mask] - transformers_outputs.logits[mask]).max()
         self.assertLess(max_diff, 4e-3, f"Max abs diff {max_diff}")
 
         del transformers_model, ov_model
