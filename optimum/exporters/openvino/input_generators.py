@@ -1350,6 +1350,13 @@ class DummyMiniCPMVImageInputGenerator(DummyVisionInputGenerator):
 
 
 class DummyMiniCPMV4_6VisionInputGenerator(DummyVisionInputGenerator):
+    """Generate one NaViT-packed image per vision invocation, not a batch of padded images.
+
+    The runtime invokes the vision graph separately for each image, and its spatial
+    mergers consume a single packed patch sequence. ``batch_size`` applies to the
+    language model, not to this per-image graph.
+    """
+
     SUPPORTED_INPUT_NAMES = ("pixel_values", "position_ids", "window_index", "merge_index")
 
     def __init__(

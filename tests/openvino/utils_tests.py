@@ -956,6 +956,7 @@ ARCH_TO_MODEL_CLASS = {
     "gemma4_moe": "OVModelForVisualCausalLM",
     "gemma4_unified": "OVModelForVisualCausalLM",
     "muse_glimmer": "OVModelForVisualCausalLM",
+    "minicpmv4_6": "OVModelForVisualCausalLM",
     "minicpmv4_7": "OVModelForVisualCausalLM",
     "minicpm_ocr": "OVModelForVisualCausalLM",
     "qwen3_omni_moe": "OVModelForMultimodalLM",

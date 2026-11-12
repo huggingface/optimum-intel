@@ -50,6 +50,10 @@ ARCH_TO_CB_COMPATIBLE_SUBMODELS = {
         "submodels": ("language_model",),
     },
     # dense hybrid Gated DeltaNet + full attention language model
+    "minicpmv4_6": {
+        "task": "image-text-to-text",
+        "submodels": ("language_model",),
+    },
     "minicpm_ocr": {
         "task": "image-text-to-text",
         "submodels": ("language_model",),

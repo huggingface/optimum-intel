@@ -367,6 +367,30 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "ConvertToSwishCPU",
         ],
     },
+    "minicpmv4_6": {
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+            "CommonFusions",
+            "TransposeConvert",
+        ],
+        "compile": [
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "CommonDecompositions",
+            "MultiplyFusions",
+            "ConvertSoftMax8ToSoftMax1",
+            "ConvertBroadcast3",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "RMSFusion",
+            "GatedDeltaNetFusion",
+            "ConvertMatMulToFC",
+            "ConvertToSwishCPU",
+        ],
+    },
     "minicpm_ocr": {
         "convert": [
             "SDPAFusion",
