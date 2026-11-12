@@ -28,14 +28,15 @@ except Exception as error:
 
 INSTALL_REQUIRE = [
     "torch>=2.1",
-    "optimum@git+https://github.com/huggingface/optimum.git",
-    "transformers>=4.45,<5.1",
+    "optimum~=2.3.0",
+    "transformers>=4.51,<5.16",
     "setuptools",
     "huggingface-hub>=0.23.2,<2.0",
-    "nncf>=2.19.0",
+    "nncf>=3.3.0",
     "openvino>=2026.0",
     "openvino-tokenizers>=2026.0",
     "requests>=2.33,<3.0",
+    "torchvision",
 ]
 
 TESTS_REQUIRE = [
@@ -59,7 +60,6 @@ TESTS_REQUIRE = [
     "peft",
     "datasets>=1.4.0,<4.0.0",
     "tbb",
-    "langchain-huggingface",
     "hf_xet",
     "num2words",
     "vocos",
@@ -77,7 +77,7 @@ QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]
 EXTRAS_REQUIRE = {
     "nncf": ["nncf>=2.19.0"],
     "openvino": ["nncf>=2.19.0", "openvino>=2026.0", "openvino-tokenizers>=2026.0"],
-    "diffusers": ["diffusers"],
+    "diffusers": ["diffusers>=0.32,<0.42"],
     "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,
 }
@@ -97,9 +97,10 @@ setup(
         "Intended Audience :: Education",
         "Intended Audience :: Science/Research",
         "Operating System :: OS Independent",
-        "Programming Language :: Python :: 3.9",
-        "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
+        "Programming Language :: Python :: 3.14",
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
     ],
     keywords="transformers, quantization, pruning, knowledge distillation, optimization, training",
@@ -110,6 +111,7 @@ setup(
     packages=find_namespace_packages(include=["optimum*"]),
     install_requires=INSTALL_REQUIRE,
     extras_require=EXTRAS_REQUIRE,
+    python_requires=">=3.11",
     include_package_data=True,
     zip_safe=False,
     entry_points={"console_scripts": ["optimum-cli=optimum.commands.optimum_cli:main"]},

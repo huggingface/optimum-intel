@@ -13,6 +13,7 @@
 #  limitations under the License.
 import logging
 import os
+import warnings
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Union
 
@@ -23,8 +24,11 @@ from huggingface_hub import snapshot_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from openvino import CompiledModel, Core
 from openvino._offline_transformations import apply_moc_transformations, compress_model_transformation
+from torch import nn
+from torch.nn import functional as F
 from transformers import (
     AutoConfig,
+    AutoModelForImageTextToText,
     AutoModelForSeq2SeqLM,
     AutoModelForSpeechSeq2Seq,
     GenerationConfig,
@@ -36,6 +40,7 @@ from transformers.file_utils import add_start_docstrings, add_start_docstrings_t
 from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import BaseModelOutput, Seq2SeqLMOutput
 from transformers.utils import http_user_agent
+from transformers.utils.hub import cached_file
 
 from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import model_has_state
@@ -43,28 +48,27 @@ from .. import OVConfig
 from ..utils import is_transformers_version
 from .configuration import OVQuantizationConfigBase, OVWeightQuantizationConfig
 from .modeling_base import OVBaseModel, OVModelPart
+from .modeling_visual_language import (
+    OVModelWithEmbedForCausalLM,
+    OVQwen3AudioEncoder,
+)
 from .utils import (
     ONNX_DECODER_NAME,
     ONNX_DECODER_WITH_PAST_NAME,
     ONNX_ENCODER_NAME,
+    OV_AUDIO_ENCODER_MODEL_NAME,
     OV_DECODER_NAME,
     OV_DECODER_WITH_PAST_NAME,
     OV_ENCODER_NAME,
+    OV_LANGUAGE_MODEL_NAME,
+    OV_TEXT_EMBEDDINGS_MODEL_NAME,
     TemporaryDirectory,
     classproperty,
 )
 
 
-# AutoModelForVision2Seq is deprecated since v4.54
-# https://github.com/huggingface/transformers/blob/v4.54.0/src/transformers/models/auto/modeling_auto.py#L2151
-if is_transformers_version(">=", "4.54.0"):
-    from transformers import AutoModelForImageTextToText
-
-    transformers_auto_class = AutoModelForImageTextToText
-else:
-    from transformers import AutoModelForVision2Seq
-
-    transformers_auto_class = AutoModelForVision2Seq
+class FunASRPretrainedConfig(PretrainedConfig):
+    model_type = "fun_asr"
 
 
 core = Core()
@@ -449,18 +453,22 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         trust_remote_code: bool = False,
         **kwargs,
     ):
+        """Load the components named by ``_all_ov_model_paths``; a cached decoder is optional."""
         generation_config = kwargs.pop("generation_config", None)
         subfolder = kwargs.pop("subfolder", "")
 
-        default_encoder_file_name = ONNX_ENCODER_NAME if from_onnx else cls._all_ov_model_paths["encoder"]
-        default_decoder_file_name = ONNX_DECODER_NAME if from_onnx else cls._all_ov_model_paths["decoder"]
-        default_decoder_with_past_file_name = (
-            ONNX_DECODER_WITH_PAST_NAME if from_onnx else cls._all_ov_model_paths["decoder_with_past"]
-        )
-        encoder_file_name = encoder_file_name or default_encoder_file_name
-        decoder_file_name = decoder_file_name or default_decoder_file_name
-        decoder_with_past_file_name = decoder_with_past_file_name or default_decoder_with_past_file_name
-        decoder_with_past = None
+        model_file_names = cls._all_ov_model_paths.copy()
+        if "encoder" in model_file_names:
+            default_encoder_name = ONNX_ENCODER_NAME if from_onnx else model_file_names["encoder"]
+            model_file_names["encoder"] = encoder_file_name or default_encoder_name
+        if "decoder" in model_file_names:
+            default_decoder_name = ONNX_DECODER_NAME if from_onnx else model_file_names["decoder"]
+            model_file_names["decoder"] = decoder_file_name or default_decoder_name
+        if "decoder_with_past" in model_file_names:
+            default_decoder_with_past_name = (
+                ONNX_DECODER_WITH_PAST_NAME if from_onnx else model_file_names["decoder_with_past"]
+            )
+            model_file_names["decoder_with_past"] = decoder_with_past_file_name or default_decoder_with_past_name
 
         compile_only = kwargs.pop("compile_only", False)
         device = kwargs.pop("device", "CPU")
@@ -468,15 +476,11 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
 
         # Load model from hub
         if not os.path.isdir(model_id):
-            allow_patterns = {
-                encoder_file_name,
-                decoder_file_name,
-                decoder_with_past_file_name,
-                encoder_file_name.replace(".xml", ".bin"),
-                decoder_file_name.replace(".xml", ".bin"),
-                decoder_with_past_file_name.replace(".xml", ".bin"),
-                cls.config_name,
-            }
+            allow_patterns = {cls.config_name}
+            for file_name in model_file_names.values():
+                allow_patterns.add(str(Path(subfolder) / file_name))
+                if not from_onnx:
+                    allow_patterns.add(str(Path(subfolder) / file_name.replace(".xml", ".bin")))
 
             ignore_patterns = ["*.msgpack", "*.safetensors", "*pytorch_model.bin"]
             if not from_onnx:
@@ -494,28 +498,28 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
                 ignore_patterns=ignore_patterns,
             )
 
-            model_save_dir = Path(model_save_folder)
+            model_save_dir = Path(model_save_folder) / subfolder
 
         else:
-            model_save_dir = Path(model_id)
+            model_save_dir = Path(model_id) / subfolder
 
-        file_names = {
-            "encoder": model_save_dir / encoder_file_name,
-            "decoder": model_save_dir / decoder_file_name,
-            "decoder_with_past": model_save_dir / decoder_with_past_file_name,
-        }
-        if not compile_only:
-            encoder = cls.load_model(file_names["encoder"])
-            decoder = cls.load_model(file_names["decoder"])
-            if use_cache and not model_has_state(decoder) and os.path.exists(file_names["decoder_with_past"]):
-                decoder_with_past = cls.load_model(file_names["decoder_with_past"])
-        else:
-            model_kwargs = {"device": device, "ov_config": ov_config, "model_save_dir": model_save_dir}
-            encoder = cls._compile_model(file_names["encoder"], **model_kwargs)
-            decoder = cls._compile_model(file_names["decoder"], **model_kwargs)
+        file_names = {name: model_save_dir / file_name for name, file_name in model_file_names.items()}
+        model_kwargs = {"device": device, "ov_config": ov_config, "model_save_dir": model_save_dir}
 
-            if use_cache and not model_has_state(decoder) and os.path.exists(file_names["decoder_with_past"]):
-                decoder_with_past = cls._compile_model(file_names["decoder_with_past"], **model_kwargs)
+        def load_component(name):
+            if compile_only:
+                return cls._compile_model(file_names[name], **model_kwargs)
+            return cls.load_model(file_names[name])
+
+        components = {name: load_component(name) for name in file_names if name != "decoder_with_past"}
+        if "decoder_with_past" in file_names:
+            components["decoder_with_past"] = None
+            if (
+                use_cache
+                and not model_has_state(components["decoder"])
+                and os.path.exists(file_names["decoder_with_past"])
+            ):
+                components["decoder_with_past"] = load_component("decoder_with_past")
 
         if generation_config is None:
             try:
@@ -538,9 +542,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         quantization_config = quantization_config or (OVWeightQuantizationConfig(bits=8) if load_in_8bit else None)
         compile_model = kwargs.pop("compile", True)
         model = cls(
-            encoder=encoder,
-            decoder=decoder,
-            decoder_with_past=decoder_with_past,
+            **components,
             config=config,
             model_save_dir=model_save_dir,
             quantization_config=quantization_config,
@@ -613,6 +615,10 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         # now we use model_kwargs only for text-to-speech models to specify vocoder
         model_kwargs = kwargs if cls.export_feature == "text-to-audio" else None
 
+        # FunASR has no transformers processor, so its tokenizer/detokenizer IR is needed at inference
+        # time (e.g. by preprocess_input). Always export them for this model type.
+        convert_tokenizer = getattr(config, "model_type", None) == "fun_asr"
+
         main_export(
             model_name_or_path=model_id,
             output=save_dir_path,
@@ -628,6 +634,7 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
             stateful=stateful,
             variant=variant,
             model_kwargs=model_kwargs,
+            convert_tokenizer=convert_tokenizer,
         )
 
         # Reload the config from the export output directory, as the export process
@@ -635,7 +642,19 @@ class OVModelForSeq2SeqLM(OVBaseModel, GenerationMixin):
         exported_config_path = save_dir_path / "config.json"
         if exported_config_path.exists():
             original_name_or_path = getattr(config, "_name_or_path", None) or model_id
-            config = AutoConfig.from_pretrained(save_dir_path, trust_remote_code=trust_remote_code)
+            try:
+                config = AutoConfig.from_pretrained(save_dir_path, trust_remote_code=trust_remote_code)
+            except (KeyError, ValueError):
+                # Custom model types not registered with transformers AutoConfig (e.g. `fun_asr`,
+                # loaded via the funasr library) are stored as a plain PretrainedConfig.
+                if getattr(config, "model_type", None) == "fun_asr":
+                    config = FunASRPretrainedConfig.from_pretrained(save_dir_path)
+                else:
+                    config = PretrainedConfig.from_pretrained(save_dir_path)
+            # PretrainedConfig does not serialize the instance-level `model_type`; restore it
+            # from `export_model_type` so downstream model_type-based dispatch keeps working.
+            if not getattr(config, "model_type", None) and getattr(config, "export_model_type", None):
+                config.model_type = config.export_model_type
             # Preserve the original model identifier so that default quantization
             # config lookup based on the model id keeps working.
             config._name_or_path = original_name_or_path
@@ -871,6 +890,28 @@ class OVEncoder(OVModelPart):
         super().__init__(model, parent_model, ov_config, model_name)
         self.main_input_name = self.parent_model.main_input_name or "input_ids"
 
+    # Adapted from https://github.com/QwenLM/Qwen3-ASR/blob/c17a131fe028b2e428b6e80a33d30bb4fa57b8df/qwen_asr/core/transformers_backend/modeling_qwen3_asr.py#L669
+    def chunked_forward(self, input_features, n_window):
+        feature_lens = input_features.shape[-1]
+        chunk_num = torch.ceil(torch.tensor([feature_lens]) / (n_window * 2)).long()
+
+        chunk_lengths = torch.tensor(
+            [n_window * 2] * chunk_num.sum(),
+            dtype=torch.long,
+        )
+
+        tail_chunk_index = F.pad(chunk_num, (1, 0), value=-1).cumsum(0)[1:]
+        chunk_lengths[tail_chunk_index] = feature_lens % (n_window * 2)
+        chunk_lengths[chunk_lengths == 0] = n_window * 2
+
+        chunk_list = input_features.T.split(chunk_lengths.tolist(), dim=0)
+        padded_feature = nn.utils.rnn.pad_sequence(chunk_list, batch_first=True).transpose(1, 2)
+        inputs = {}
+        inputs["input_features"] = padded_feature
+        last_hidden_state = torch.from_numpy(self.request(inputs)["last_hidden_state"]).to(self.device)
+
+        return last_hidden_state.view(1, -1, last_hidden_state.shape[-1])
+
     @add_start_docstrings_to_model_forward(ENCODER_INPUTS_DOCSTRING)
     def forward(
         self,
@@ -885,7 +926,19 @@ class OVEncoder(OVModelPart):
 
         # Add the attention_mask inputs when needed
         if "attention_mask" in self.input_names:
+            if attention_mask is None:
+                attention_mask = torch.ones_like(inputs[self.main_input_name])
             inputs["attention_mask"] = attention_mask
+
+        # Qwen3-ASR requires input_features chunking before passing to encoder for processing of long audios.
+        if getattr(self.config, "model_type", None) == "qwen3_asr":
+            input_features = inputs["input_features"]
+            audio_features = []
+            for idx, input_feature in enumerate(input_features):
+                audio_feature = self.chunked_forward(input_feature, self.config.n_window)
+                audio_features.append(audio_feature)
+            audio_features = torch.cat(audio_features, dim=0)
+            return BaseModelOutput(last_hidden_state=audio_features)
 
         # Run inference
         last_hidden_state = torch.from_numpy(
@@ -1069,8 +1122,8 @@ class OVDecoder(OVModelPart):
     """,
     INPUTS_DOCSTRING,
 )
-class OVModelForVision2Seq(OVModelForSeq2SeqLM):
-    auto_model_class = transformers_auto_class
+class OVModelForImageTextToText(OVModelForSeq2SeqLM):
+    auto_model_class = AutoModelForImageTextToText
     main_input_name = "pixel_values"
     export_feature = "image-to-text"
 
@@ -1128,7 +1181,7 @@ class OVModelForVision2Seq(OVModelForSeq2SeqLM):
         + IMAGE_TO_TEXT_EXAMPLE.format(
             processor_class=_PROCESSOR_FOR_DOC,
             tokenizer_class=_TOKENIZER_FOR_DOC,
-            model_class="OVModelForVision2Seq",
+            model_class="OVModelForImageTextToText",
             checkpoint="microsoft/trocr-small-handwritten",
         )
     )
@@ -1174,15 +1227,15 @@ class OVModelForVision2Seq(OVModelForSeq2SeqLM):
     """,
     INPUTS_DOCSTRING,
 )
-class OVModelForPix2Struct(OVModelForVision2Seq):
+class OVModelForPix2Struct(OVModelForImageTextToText):
     auto_model_class = Pix2StructForConditionalGeneration
     main_input_name = "flattened_patches"
     export_feature = "image-to-text"
 
-    # this is needed to avoid circular calls when OVModelForVision2Seq is called to instantiate a OVModelForPix2Struct
+    # this is needed to avoid circular calls when OVModelForImageTextToText is called to instantiate a OVModelForPix2Struct
     @classmethod
     def _from_pretrained(cls, model_id: Union[str, Path], config: "PretrainedConfig", **kwargs):
-        return super(OVModelForVision2Seq, cls)._from_pretrained(model_id, config, **kwargs)
+        return super(OVModelForImageTextToText, cls)._from_pretrained(model_id, config, **kwargs)
 
     def prepare_inputs_for_generation(
         self,
@@ -1258,6 +1311,18 @@ class OVModelForPix2Struct(OVModelForVision2Seq):
         return model
 
 
+class OVModelForVision2Seq(OVModelForImageTextToText):
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        warnings.warn(
+            "OVModelForVision2Seq is deprecated and will be removed in a future release. "
+            "Use OVModelForImageTextToText instead.",
+            FutureWarning,
+            stacklevel=2,
+        )
+        return super().from_pretrained(*args, **kwargs)
+
+
 @add_start_docstrings(
     """
     Speech Sequence-to-sequence model with a language modeling head for OpenVINO inference. This class officially supports whisper, speech_to_text.
@@ -1268,6 +1333,23 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
     auto_model_class = AutoModelForSpeechSeq2Seq
     main_input_name = "input_features"
     export_feature = "automatic-speech-recognition"
+
+    @classmethod
+    def from_pretrained(cls, model_id, export: bool = False, config: Optional["PretrainedConfig"] = None, **kwargs):
+        from .modeling_funasr import (
+            _is_funasr_source,
+            _is_sensevoice_source,
+            _OVModelForFunAsr,
+            _OVModelForSenseVoice,
+        )
+
+        # the original SenseVoice/FunASR models have no config.json, so _from_pretrained() dispatch does not work
+        if config is None and _is_sensevoice_source(model_id, **kwargs):
+            return _OVModelForSenseVoice._from_pretrained_sensevoice(model_id, export=export, **kwargs)
+        if config is None and _is_funasr_source(model_id, **kwargs):
+            return _OVModelForFunAsr._from_pretrained_funasr(model_id, export=export, **kwargs)
+
+        return super().from_pretrained(model_id, export=export, config=config, **kwargs)
 
     def _prepare_decoder_input_ids_for_generation(
         self, batch_size, model_input_name, model_kwargs, decoder_start_token_id, device=None
@@ -1432,14 +1514,303 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
         config: "PretrainedConfig",
         **kwargs,
     ):
-        if "WhisperForConditionalGeneration" in getattr(config, "architectures", []):
+        if "WhisperForConditionalGeneration" in (getattr(config, "architectures", None) or []):
             return _OVModelForWhisper._from_pretrained(model_id, config, **kwargs)
-        elif getattr(config, "model_type", None) == "qwen3_asr":
-            # Ensure is_encoder_decoder is set for proper model loading
+        if getattr(config, "model_type", None) == "fun_asr":
+            from .modeling_funasr import _OVModelForFunAsr
+
             config.is_encoder_decoder = True
-            return super()._from_pretrained(model_id, config, **kwargs)
+            return _OVModelForFunAsr._from_pretrained(model_id, config, **kwargs)
+        if getattr(config, "model_type", None) == "qwen3_asr":
+            if not _OVModelForQwen3ASR._is_split_export(model_id, **kwargs):
+                logger.warning(
+                    "The Qwen3-ASR encoder/decoder export format is deprecated. Re-export the model with the "
+                    "current version of Optimum Intel to use the audio_encoder, text_embeddings, and "
+                    "language_model format. Loading the legacy export for backward compatibility."
+                )
+                config.is_encoder_decoder = True
+                return super()._from_pretrained(model_id, config, **kwargs)
+            return _OVModelForQwen3ASR._from_pretrained(model_id, config, **kwargs)
+        return super()._from_pretrained(model_id, config, **kwargs)
+
+
+class _OVModelForQwen3ASR(OVModelForSpeechSeq2Seq):
+    @classproperty
+    def _all_ov_model_paths(cls) -> Dict[str, str]:
+        return {
+            "audio_encoder": OV_AUDIO_ENCODER_MODEL_NAME,
+            "text_embeddings": OV_TEXT_EMBEDDINGS_MODEL_NAME,
+            "language_model": OV_LANGUAGE_MODEL_NAME,
+        }
+
+    def __init__(
+        self,
+        audio_encoder: openvino.Model,
+        text_embeddings: openvino.Model,
+        language_model: openvino.Model,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = True,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        **kwargs,
+    ):
+        config.is_encoder_decoder = False
+        self.config = config
+        self.name_or_path = getattr(config, "name_or_path", None)
+        self.model_save_dir = model_save_dir
+        self._compile_only = kwargs.get("compile_only", False)
+        self._device = device.upper()
+        self.is_dynamic = dynamic_shapes
+        self.ov_config = {} if ov_config is None else {**ov_config}
+        self.preprocessors = kwargs.get("preprocessors", [])
+        self.generation_config = kwargs.get("generation_config") or GenerationConfig.from_model_config(config)
+        self._openvino_config = None
+        if quantization_config:
+            self._openvino_config = OVConfig(quantization_config=quantization_config)
+        self._set_ov_config_parameters()
+
+        enable_compilation = kwargs.get("compile", True)
+        if self._compile_only and not enable_compilation:
+            raise ValueError("`compile_only=True` requires `compile=True`.")
+
+        self.audio_encoder = OVQwen3AudioEncoder(
+            audio_encoder,
+            self,
+            ov_config=self.ov_config,
+            model_name="audio_encoder",
+        )
+        self.language_model = OVModelWithEmbedForCausalLM(
+            language_model,
+            text_embeddings,
+            config=config,
+            device=device,
+            dynamic_shapes=dynamic_shapes,
+            ov_config=self.ov_config,
+            model_save_dir=model_save_dir,
+            quantization_config=quantization_config,
+            compile=self._compile_only,
+            compile_only=self._compile_only,
+        )
+        self.encoder = self.audio_encoder
+        self.decoder = self.language_model
+        self.decoder_with_past = None
+        self.use_cache = True
+        self.main_input_name = "input_ids"
+
+        if enable_compilation and not self._compile_only:
+            self.compile()
+
+    @property
+    def _component_names(self) -> List[str]:
+        return ["audio_encoder", "language_model"]
+
+    @property
+    def _ov_model_names(self) -> List[str]:
+        return ["audio_encoder", "text_embeddings", "language_model"]
+
+    @property
+    def ov_models(self) -> Dict[str, Union[openvino.Model, CompiledModel]]:
+        return {
+            "audio_encoder": self.audio_encoder.model,
+            "text_embeddings": self.language_model.text_emb_model,
+            "language_model": self.language_model.model,
+        }
+
+    @property
+    def dtype(self) -> Optional[torch.dtype]:
+        return self.audio_encoder.dtype or self.language_model.dtype
+
+    def to(self, device):
+        self.language_model.to(device)
+        return super().to(device)
+
+    def reshape(self, batch_size: int, sequence_length: int):
+        raise ValueError("Qwen3-ASR models only support dynamic shapes (`batch_size=-1`, `sequence_length=-1`).")
+
+    def _process_audio_inputs(self, input_features, feature_attention_mask):
+        return self.audio_encoder.encode(input_features, feature_attention_mask)
+
+    @staticmethod
+    def _get_prefill_positions(attention_mask):
+        position_ids = attention_mask.long().cumsum(-1) - 1
+        position_ids.masked_fill_(attention_mask == 0, 1)
+        position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
+        max_position_ids = position_ids.max(0).values.max(-1, keepdim=True).values
+        rope_deltas = max_position_ids + 1 - attention_mask.shape[-1]
+        return position_ids, rope_deltas
+
+    def _merge_audio_embeddings(self, input_ids, text_embeddings, audio_features, audio_feature_lens):
+        audio_token_id = getattr(getattr(self.config, "thinker_config", self.config), "audio_token_id", None)
+        if audio_token_id is None:
+            audio_token_id = getattr(self.config, "audio_token_id", None)
+        if audio_token_id is None:
+            raise ValueError("Qwen3-ASR config does not define `audio_token_id`.")
+
+        merged = text_embeddings.clone()
+        audio_features = torch.as_tensor(audio_features, dtype=merged.dtype, device=merged.device)
+        feature_offset = 0
+        for batch_idx, feature_len in enumerate(audio_feature_lens.tolist()):
+            placeholder_mask = input_ids[batch_idx] == audio_token_id
+            placeholder_count = int(placeholder_mask.sum().item())
+            if placeholder_count != feature_len:
+                raise ValueError(
+                    f"Qwen3-ASR sample {batch_idx} has {placeholder_count} audio placeholders but "
+                    f"the encoder produced {feature_len} valid features."
+                )
+            merged[batch_idx, placeholder_mask] = audio_features[feature_offset : feature_offset + feature_len]
+            feature_offset += feature_len
+        if feature_offset != audio_features.shape[0]:
+            raise ValueError(
+                f"Qwen3-ASR consumed {feature_offset} audio features but the encoder returned {audio_features.shape[0]}."
+            )
+        return merged
+
+    def generate(
+        self,
+        input_features=None,
+        attention_mask=None,
+        decoder_input_ids=None,
+        decoder_attention_mask=None,
+        input_ids=None,
+        feature_attention_mask=None,
+        **kwargs,
+    ):
+        input_ids = decoder_input_ids if decoder_input_ids is not None else input_ids
+        if input_ids is None:
+            raise ValueError("Qwen3-ASR generation requires `decoder_input_ids` or `input_ids`.")
+        if decoder_attention_mask is None and (feature_attention_mask is not None or input_features is None):
+            decoder_attention_mask = attention_mask
+        feature_attention_mask = feature_attention_mask if feature_attention_mask is not None else attention_mask
+        if decoder_attention_mask is None:
+            decoder_attention_mask = torch.ones_like(input_ids)
+
+        inputs_embeds = torch.as_tensor(self.language_model.embed_tokens(input_ids))
+        if input_features is not None:
+            if feature_attention_mask is None:
+                raise ValueError("`attention_mask` or `feature_attention_mask` is required with `input_features`.")
+            audio_features, audio_feature_lens = self._process_audio_inputs(input_features, feature_attention_mask)
+            inputs_embeds = self._merge_audio_embeddings(input_ids, inputs_embeds, audio_features, audio_feature_lens)
+
+        _, rope_deltas = self._get_prefill_positions(decoder_attention_mask)
+        return GenerationMixin.generate(
+            self,
+            input_ids=input_ids,
+            attention_mask=decoder_attention_mask,
+            inputs_embeds=inputs_embeds,
+            rope_deltas=rope_deltas,
+            **kwargs,
+        )
+
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        past_key_values=None,
+        position_ids=None,
+        inputs_embeds=None,
+        cache_position=None,
+        **kwargs,
+    ):
+        """Run the decoder with token IDs or prepared text/audio embeddings."""
+        return self.language_model(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            past_key_values=past_key_values,
+            position_ids=position_ids,
+            inputs_embeds=inputs_embeds,
+            cache_position=cache_position,
+            **kwargs,
+        )
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        attention_mask=None,
+        inputs_embeds=None,
+        cache_position=None,
+        position_ids=None,
+        rope_deltas=None,
+        use_cache=True,
+        **kwargs,
+    ):
+        if past_key_values is None:
+            if position_ids is None:
+                position_ids, computed_rope_deltas = self._get_prefill_positions(attention_mask)
+                rope_deltas = computed_rope_deltas if rope_deltas is None else rope_deltas
+            return {
+                "input_ids": None if inputs_embeds is not None else input_ids,
+                "inputs_embeds": inputs_embeds,
+                "attention_mask": attention_mask,
+                "position_ids": position_ids,
+                "past_key_values": past_key_values,
+                "cache_position": cache_position,
+                "rope_deltas": rope_deltas,
+                "use_cache": use_cache,
+            }
+
+        if rope_deltas is None:
+            raise ValueError("Qwen3-ASR cached decoding requires `rope_deltas` from the prefill step.")
+        if cache_position is not None:
+            input_ids = input_ids[:, -cache_position.shape[0] :]
+            position_start = cache_position[0]
         else:
-            return super()._from_pretrained(model_id, config, **kwargs)
+            input_ids = input_ids[:, -1:]
+            position_start = attention_mask.shape[-1] - input_ids.shape[-1]
+        batch_size, sequence_length = input_ids.shape
+        delta = position_start + rope_deltas.to(input_ids.device)
+        position_ids = torch.arange(sequence_length, device=input_ids.device).view(1, -1).expand(batch_size, -1)
+        position_ids = position_ids.add(delta).unsqueeze(0).expand(3, -1, -1)
+        return {
+            "input_ids": input_ids,
+            "inputs_embeds": None,
+            "attention_mask": attention_mask,
+            "position_ids": position_ids,
+            "past_key_values": past_key_values,
+            "cache_position": cache_position,
+            "rope_deltas": rope_deltas,
+            "use_cache": use_cache,
+        }
+
+    @classmethod
+    def _is_split_export(
+        cls,
+        model_id: Union[str, Path],
+        token: Optional[Union[bool, str]] = None,
+        revision: Optional[str] = None,
+        force_download: bool = False,
+        cache_dir: str = HUGGINGFACE_HUB_CACHE,
+        subfolder: str = "",
+        local_files_only: bool = False,
+        **kwargs,
+    ) -> bool:
+        """
+        Check if separate language model file exist.
+        That means model was exported with a separate audio_encoder + text_embeddings + language model.
+        """
+        language_model_path = cached_file(
+            path_or_repo_id=model_id,
+            token=token,
+            revision=revision,
+            force_download=force_download,
+            cache_dir=cache_dir,
+            filename=cls._all_ov_model_paths["language_model"],
+            subfolder=subfolder,
+            local_files_only=local_files_only,
+            _raise_exceptions_for_missing_entries=False,
+        )
+        return language_model_path is not None and Path(language_model_path).is_file()
+
+    @classmethod
+    def _from_pretrained(
+        cls,
+        model_id: Union[str, Path],
+        config: PretrainedConfig,
+        **kwargs,
+    ):
+        return super(OVModelForSpeechSeq2Seq, cls)._from_pretrained(model_id, config, **kwargs)
 
 
 class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneration):
@@ -1545,9 +1916,7 @@ class _OVModelForWhisper(OVModelForSpeechSeq2Seq, WhisperForConditionalGeneratio
             logits_processor = super()._get_logits_processor(generation_config, *args, **kwargs)
         else:
             forced_decoder_ids = generation_config.forced_decoder_ids
-
-            if is_transformers_version(">=", "4.50.0"):
-                generation_config.forced_decoder_ids = None
+            generation_config.forced_decoder_ids = None
             logits_processor = super()._get_logits_processor(generation_config, *args, **kwargs)
             generation_config.forced_decoder_ids = forced_decoder_ids
         return logits_processor

@@ -3,11 +3,13 @@ name: Security Checks
 on:
   push:
 
-permissions:
-  contents: read
+
+permissions: {}
 
 jobs:
   secrets:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
 
     steps:
@@ -21,16 +23,16 @@ jobs:
         run: |
           if [ "$EVENT_NAME" == "push" ]; then
             echo "depth=$(($(jq length <<< "$EVENT_COMMITS") + 2))" >> $GITHUB_ENV
-            echo "branch=$REF_NAME" >> $GITHUB_ENV
+            printf "branch=%s\n" "$REF_NAME" >> $GITHUB_ENV
           fi
           if [ "$EVENT_NAME" == "pull_request" ]; then
             echo "depth=$(($PR_COMMITS+2))" >> $GITHUB_ENV
-            echo "branch=$HEAD_REF" >> $GITHUB_ENV
+            printf "branch=%s\n" "$HEAD_REF" >> $GITHUB_ENV
           fi
       - name: Checkout code
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{env.branch}}
           fetch-depth: ${{env.depth}}
       - name: Scan for secrets
-        uses: trufflesecurity/trufflehog@37b77001d0174ebec2fcca2bd83ff83a6d45a3ab  # main
+        uses: trufflesecurity/trufflehog@ea68ca03c865c5f324e86e849ced20ed3cf9dbbb # v3.99.8

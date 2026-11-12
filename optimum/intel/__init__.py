@@ -20,8 +20,34 @@ from .utils import (
     is_diffusers_available,
     is_nncf_available,
     is_sentence_transformers_available,
+    is_transformers_version,
 )
 from .version import __version__
+
+
+# Patch Transformers 5.0 Qwen3OmniMoeTalkerCodePredictorConfig bug
+# Bug: __init__ references self.use_sliding_window and self.max_window_layers before they're set
+# TODO: Narrow to specific broken versions once upstream fix is released (expected in 5.1+)
+if is_transformers_version(">=", "5.0") and is_transformers_version("<", "5.1"):
+    try:
+        from transformers.models.qwen3_omni_moe.configuration_qwen3_omni_moe import (
+            Qwen3OmniMoeTalkerCodePredictorConfig,
+        )
+
+        _original_code_predictor_init = Qwen3OmniMoeTalkerCodePredictorConfig.__init__
+
+        def _patched_code_predictor_init(self, *args, use_sliding_window=False, max_window_layers=28, **kwargs):
+            # Set these attributes before calling original __init__ which references them
+            self.use_sliding_window = use_sliding_window
+            self.max_window_layers = max_window_layers
+            _original_code_predictor_init(
+                self, *args, use_sliding_window=use_sliding_window, max_window_layers=max_window_layers, **kwargs
+            )
+
+        Qwen3OmniMoeTalkerCodePredictorConfig.__init__ = _patched_code_predictor_init
+    except (ImportError, AttributeError):
+        # Model not available or already fixed in newer Transformers version
+        pass
 
 
 _import_structure = {
@@ -40,13 +66,17 @@ _import_structure = {
         "OVModelForFeatureExtraction",
         "OVModelForImageClassification",
         "OVModelForMaskedLM",
+        "OVModelForMultimodalLM",
         "OVModelForPix2Struct",
         "OVModelForQuestionAnswering",
         "OVModelForSeq2SeqLM",
         "OVModelForSpeechSeq2Seq",
+        "OVModelForImageTextToText",
         "OVModelForTextToSpeechSeq2Seq",
         "OVModelForVision2Seq",
         "OVModelForVisualCausalLM",
+        "OVAssistantForCausalLM",
+        "OVModelForVisualSequenceClassification",
         "OVModelForSequenceClassification",
         "OVModelForTokenClassification",
         "OVConfig",
@@ -103,13 +133,24 @@ except OptionalDependencyNotAvailable:
             "OVStableDiffusion3InpaintPipeline",
             "OVLatentConsistencyModelPipeline",
             "OVLatentConsistencyModelImg2ImgPipeline",
+            "OVLTXImageToVideoPipeline",
             "OVLTXPipeline",
+            "OVLTX2Pipeline",
+            "OVLTX2ImageToVideoPipeline",
             "OVFluxPipeline",
+            "OVFlux2KleinPipeline",
             "OVFluxImg2ImgPipeline",
             "OVFluxInpaintPipeline",
             "OVFluxFillPipeline",
             "OVSanaPipeline",
+            "OVQwenImagePipeline",
+            "OVQwenImage21Pipeline",
+            "OVQwenImage21Img2ImgPipeline",
+            "OVZImagePipeline",
+            "OVZImageImg2ImgPipeline",
+            "OVZImageInpaintPipeline",
             "OVPipelineForImage2Image",
+            "OVPipelineForImage2Video",
             "OVPipelineForText2Image",
             "OVPipelineForInpainting",
             "OVPipelineForText2Video",
@@ -130,13 +171,24 @@ else:
             "OVStableDiffusion3InpaintPipeline",
             "OVLatentConsistencyModelPipeline",
             "OVLatentConsistencyModelImg2ImgPipeline",
+            "OVLTXImageToVideoPipeline",
             "OVLTXPipeline",
+            "OVLTX2Pipeline",
+            "OVLTX2ImageToVideoPipeline",
             "OVFluxPipeline",
+            "OVFlux2KleinPipeline",
             "OVFluxImg2ImgPipeline",
             "OVFluxInpaintPipeline",
             "OVFluxFillPipeline",
             "OVSanaPipeline",
+            "OVQwenImagePipeline",
+            "OVQwenImage21Pipeline",
+            "OVQwenImage21Img2ImgPipeline",
+            "OVZImagePipeline",
+            "OVZImageImg2ImgPipeline",
+            "OVZImageInpaintPipeline",
             "OVPipelineForImage2Image",
+            "OVPipelineForImage2Video",
             "OVPipelineForText2Image",
             "OVPipelineForInpainting",
             "OVPipelineForText2Video",
@@ -156,6 +208,7 @@ else:
 
 if TYPE_CHECKING:
     from .openvino import (
+        OVAssistantForCausalLM,
         OVConfig,
         OVModelForAudioClassification,
         OVModelForAudioFrameClassification,
@@ -165,7 +218,9 @@ if TYPE_CHECKING:
         OVModelForCustomTasks,
         OVModelForFeatureExtraction,
         OVModelForImageClassification,
+        OVModelForImageTextToText,
         OVModelForMaskedLM,
+        OVModelForMultimodalLM,
         OVModelForQuestionAnswering,
         OVModelForSeq2SeqLM,
         OVModelForSequenceClassification,
@@ -174,6 +229,7 @@ if TYPE_CHECKING:
         OVModelForTokenClassification,
         OVModelForVision2Seq,
         OVModelForVisualCausalLM,
+        OVModelForVisualSequenceClassification,
         OVModelForZeroShotImageClassification,
         OVModelOpenCLIPForZeroShotImageClassification,
         OVModelOpenCLIPText,
@@ -212,9 +268,15 @@ if TYPE_CHECKING:
             OVFluxPipeline,
             OVLatentConsistencyModelImg2ImgPipeline,
             OVLatentConsistencyModelPipeline,
+            OVLTX2ImageToVideoPipeline,
+            OVLTXImageToVideoPipeline,
             OVPipelineForImage2Image,
+            OVPipelineForImage2Video,
             OVPipelineForInpainting,
             OVPipelineForText2Image,
+            OVQwenImage21Img2ImgPipeline,
+            OVQwenImage21Pipeline,
+            OVQwenImagePipeline,
             OVSanaPipeline,
             OVSanaSprintPipeline,
             OVStableDiffusion3Img2ImgPipeline,
@@ -226,6 +288,9 @@ if TYPE_CHECKING:
             OVStableDiffusionXLImg2ImgPipeline,
             OVStableDiffusionXLInpaintPipeline,
             OVStableDiffusionXLPipeline,
+            OVZImageImg2ImgPipeline,
+            OVZImageInpaintPipeline,
+            OVZImagePipeline,
         )
     else:
         from .openvino import (
@@ -233,9 +298,15 @@ if TYPE_CHECKING:
             OVFluxPipeline,
             OVLatentConsistencyModelImg2ImgPipeline,
             OVLatentConsistencyModelPipeline,
+            OVLTX2ImageToVideoPipeline,
+            OVLTXImageToVideoPipeline,
             OVPipelineForImage2Image,
+            OVPipelineForImage2Video,
             OVPipelineForInpainting,
             OVPipelineForText2Image,
+            OVQwenImage21Img2ImgPipeline,
+            OVQwenImage21Pipeline,
+            OVQwenImagePipeline,
             OVSanaPipeline,
             OVSanaSprintPipeline,
             OVStableDiffusion3Img2ImgPipeline,
@@ -247,6 +318,9 @@ if TYPE_CHECKING:
             OVStableDiffusionXLImg2ImgPipeline,
             OVStableDiffusionXLInpaintPipeline,
             OVStableDiffusionXLPipeline,
+            OVZImageImg2ImgPipeline,
+            OVZImageInpaintPipeline,
+            OVZImagePipeline,
         )
 
     try:

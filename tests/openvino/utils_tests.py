@@ -23,7 +23,9 @@ from typing import Dict, Optional
 import numpy as np
 import openvino as ov
 import torch
+from huggingface_hub import constants, scan_cache_dir
 
+import optimum.exporters.openvino  # noqa: F401 (registers OpenVINO export configs in TasksManager)
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import is_transformers_version
 
@@ -150,7 +152,7 @@ TENSOR_ALIAS_TO_TYPE = {"pt": torch.Tensor, "np": np.ndarray}
 
 OPENVINO_DEVICE = os.getenv("OPENVINO_TEST_DEVICE", "CPU")
 
-MODEL_NAMES = {
+HUB_MODEL_NAMES = {
     "afmoe": "optimum-intel-internal-testing/tiny-random-trinity",
     "albert": "optimum-intel-internal-testing/tiny-random-albert",
     "aquila": "optimum-intel-internal-testing/tiny-random-aquilachat",
@@ -187,6 +189,7 @@ MODEL_NAMES = {
     "deberta-v2": "optimum-intel-internal-testing/tiny-random-DebertaV2Model",
     "decilm": "optimum-intel-internal-testing/tiny-random-decilm",
     "deepseek": "optimum-intel-internal-testing/tiny-random-deepseek-v3",
+    "deepseek_ocr2": "optimum-intel-internal-testing/tiny-random-deepseek-ocr-2",
     "deit": "optimum-intel-internal-testing/tiny-random-DeiTModel",
     "convnext": "optimum-intel-internal-testing/tiny-random-convnext",
     "convnextv2": "optimum-intel-internal-testing/tiny-random-ConvNextV2Model",
@@ -204,8 +207,13 @@ MODEL_NAMES = {
     "got_ocr2": "optimum-intel-internal-testing/tiny-random-got-ocr2-hf",
     "gemma3_text": "optimum-intel-internal-testing/tiny-random-gemma3-text",
     "gemma3": "optimum-intel-internal-testing/tiny-random-gemma3",
+    "gemma3n": "optimum-intel-internal-testing/tiny-random-gemma3n",
+    "gemma3n_text": "optimum-intel-internal-testing/tiny-random-gemma3n-text",
     "gemma4": "optimum-intel-internal-testing/tiny-random-gemma4",
+    "gemma4_dflash": "optimum-intel-internal-testing/tiny-random-gemma4-dflash",
     "gemma4_moe": "optimum-intel-internal-testing/tiny-random-gemma4-moe",
+    "gemma4_unified": "optimum-intel-internal-testing/tiny-random-gemma4-unified",
+    "gemma4_unified-it": "optimum-intel-internal-testing/tiny-random-gemma4-unified-it",
     "falcon": "optimum-intel-internal-testing/really-tiny-falcon-testing",
     "falcon-40b": "optimum-intel-internal-testing/tiny-random-falcon-40b",
     "falcon_mamba": "optimum-intel-internal-testing/tiny-falcon-mamba",
@@ -237,9 +245,13 @@ MODEL_NAMES = {
     "levit": "optimum-intel-internal-testing/tiny-random-LevitModel",
     "lfm2": "optimum-intel-internal-testing/tiny-random-lfm2",
     "lfm2_moe": "optimum-intel-internal-testing/tiny-random-lfm2-moe",
+    "lfm3": "optimum-intel-internal-testing/tiny-random-lfm3",
+    "lfm3_vl": "optimum-intel-internal-testing/tiny-random-lfm3-vl",
+    "lfm3_omni": "optimum-intel-internal-testing/tiny-random-lfm3-omni",
     "longt5": "optimum-intel-internal-testing/tiny-random-longt5",
     "llama": "optimum-intel-internal-testing/tiny-random-LlamaForCausalLM",
     "llama_awq": "optimum-intel-internal-testing/tiny-random-LlamaForCausalLM",
+    "llama_compressed_tensors": "optimum-intel-internal-testing/tiny-random-llama-compressed-tensors",
     "llama4": "optimum-intel-internal-testing/tiny-random-llama4",
     "llava": "optimum-intel-internal-testing/tiny-random-llava",
     "llava_next": "optimum-intel-internal-testing/tiny-random-llava-next",
@@ -257,9 +269,15 @@ MODEL_NAMES = {
     "minicpm": "optimum-intel-internal-testing/tiny-random-minicpm",
     "minicpm3": "optimum-intel-internal-testing/tiny-random-minicpm3",
     "minicpmv": "optimum-intel-internal-testing/tiny-random-minicpmv-2_6",
+    "minicpmv4_7": "optimum-intel-internal-testing/tiny-random-minicpmv47",
+    "minicpmv4_7_dspark": "optimum-intel-internal-testing/tiny-random-minicpmv47-dspark",
+    "minicpm_ocr": "optimum-intel-internal-testing/tiny-random-minicpm-ocr",
     "minicpmo": "optimum-intel-internal-testing/tiny-random-MiniCPM-o-2_6",
+    "minicpm_v4_5": "optimum-intel-internal-testing/tiny-random-minicpm-v-4_5",
     "mistral": "optimum-intel-internal-testing/tiny-random-mistral",
     "mistral-nemo": "optimum-intel-internal-testing/tiny-random-mistral-nemo",
+    "mistral3": "optimum-intel-internal-testing/tiny-random-mistral3",
+    "ministral3": "optimum-intel-internal-testing/tiny-random-ministral3",
     "mixtral": "optimum-intel-internal-testing/tiny-mixtral",
     "mixtral_awq": "optimum-intel-internal-testing/tiny-mixtral-AWQ-4bit",
     "mobilebert": "optimum-intel-internal-testing/tiny-random-MobileBertModel",
@@ -268,12 +286,15 @@ MODEL_NAMES = {
     "mobilevit": "optimum-intel-internal-testing/tiny-random-mobilevit",
     "mpt": "optimum-intel-internal-testing/tiny-random-MptForCausalLM",
     "mpnet": "optimum-intel-internal-testing/tiny-random-MPNetModel",
+    "muse_glimmer": "optimum-intel-internal-testing/tiny-random-muse-glimmer",
+    "muse_glimmer_assistant": "optimum-intel-internal-testing/tiny-random-muse-glimmer-assistant",
     "mt5": "optimum-intel-internal-testing/mt5-tiny-random",
     "llava-qwen2": "optimum-intel-internal-testing/tiny-random-nanollava",
     "nanollava_vision_tower": "optimum-intel-internal-testing/tiny-random-siglip",
     "nystromformer": "optimum-intel-internal-testing/tiny-random-NystromformerModel",
     "olmo": "optimum-intel-internal-testing/tiny-random-olmo-hf",
     "orion": "optimum-intel-internal-testing/tiny-random-orion",
+    "ouro": "optimum-intel-internal-testing/tiny-random-ouro",
     "pegasus": "optimum-intel-internal-testing/tiny-random-pegasus",
     "perceiver_text": "optimum-intel-internal-testing/tiny-random-language_perceiver",
     "perceiver_vision": "optimum-intel-internal-testing/tiny-random-vision_perceiver_conv",
@@ -281,6 +302,7 @@ MODEL_NAMES = {
     "pix2struct": "optimum-intel-internal-testing/pix2struct-tiny-random",
     "phi": "optimum-intel-internal-testing/tiny-random-PhiForCausalLM",
     "phi3": "optimum-intel-internal-testing/tiny-random-Phi3ForCausalLM",
+    "phi3-longrope": "optimum-intel-internal-testing/tiny-random-phi3-longrope",
     "phimoe": "optimum-intel-internal-testing/phi-3.5-moe-tiny-random",
     "phi3_v": "optimum-intel-internal-testing/tiny-random-phi3-vision",
     "phi4mm": "optimum-intel-internal-testing/tiny-random-phi-4-multimodal",
@@ -293,10 +315,24 @@ MODEL_NAMES = {
     "qwen3": "optimum-intel-internal-testing/tiny-random-qwen3",
     "qwen3_moe": "optimum-intel-internal-testing/tiny-random-qwen3moe",
     "qwen3_vl": "optimum-intel-internal-testing/tiny-random-qwen3-vl",
+    "qwen3_vl_embedding": "optimum-intel-internal-testing/tiny-random-qwen3-vl-embedding",
+    "qwen3_omni_moe": "optimum-intel-internal-testing/tiny-random-qwen3-omni",
+    "qwen3_tts": "optimum-intel-internal-testing/tiny-random-qwen3-tts",
     "qwen3_next": "optimum-intel-internal-testing/tiny-random-qwen3-next",
     "qwen3_5": "optimum-intel-internal-testing/tiny-random-qwen3.5",
+    "qwen3_5_compressed_tensors": "optimum-intel-internal-testing/tiny-random-qwen3.5-compressed-tensors",
+    "qwen3_5_mtp": "optimum-intel-internal-testing/tiny-random-qwen3.5-mtp",
+    "qwen3_5_seq_cls": "optimum-intel-internal-testing/tiny-random-qwen3.5-seq-cls",
+    "qwen3_5_dflash": "optimum-intel-internal-testing/tiny-random-qwen3.5-dflash",
     "qwen3_5_moe": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe",
+    "qwen3_5_moe_mtp": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe-mtp",
+    "qwen3_5_moe_mtp_legacy_weights": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe-mtp-legacy",
+    "qwen3_5_moe_dflash": "optimum-intel-internal-testing/tiny-random-qwen3.5-moe-dflash",
     "qwen3_asr": "optimum-intel-internal-testing/tiny-random-qwen3-asr",
+    "qwen3_dflash": "optimum-intel-internal-testing/tiny-random-qwen3-dflash",
+    "qwen3_deepspec_dflash": "optimum-intel-internal-testing/tiny-random-qwen3-deepspec-dflash",
+    "fun_asr": "optimum-intel-internal-testing/tiny-random-fun-asr",
+    "sense_voice": "optimum-intel-internal-testing/tiny-random-sense-voice-small",
     "rembert": "optimum-intel-internal-testing/tiny-random-rembert",
     "resnet": "optimum-intel-internal-testing/tiny-random-resnet",
     "roberta": "optimum-intel-internal-testing/tiny-random-roberta",
@@ -304,6 +340,7 @@ MODEL_NAMES = {
     "segformer": "optimum-intel-internal-testing/tiny-random-SegformerModel",
     "sentence-transformers-bert": "optimum-intel-internal-testing/stsb-bert-tiny-safetensors",
     "sam": "optimum-intel-internal-testing/sam-vit-tiny-random",
+    "smollm3": "optimum-intel-internal-testing/tiny-random-smollm3",
     "smolvlm": "optimum-intel-internal-testing/tiny-random-smolvlm2",
     "speecht5": "optimum-intel-internal-testing/tiny-random-SpeechT5ForTextToSpeech",
     "speech_to_text": "optimum-intel-internal-testing/tiny-random-Speech2TextModel",
@@ -350,44 +387,104 @@ MODEL_NAMES = {
     "sana": "optimum-intel-internal-testing/tiny-random-sana",
     "sana-sprint": "optimum-intel-internal-testing/tiny-random-sana-sprint",
     "ltx-video": "optimum-intel-internal-testing/tiny-random-ltx-video",
+    "ltx-video-0.9.5": "optimum-intel-internal-testing/tiny-random-ltx-video-0.9.5",
+    "qwenimage": "optimum-intel-internal-testing/tiny-random-qwen-image",
+    "qwenimage21": "optimum-intel-internal-testing/tiny-random-qwen-image-2.1",
+    "ltx2": "optimum-intel-internal-testing/tiny-random-ltx2",
+    "ltx2.3": "optimum-intel-internal-testing/tiny-random-ltx2.3",
+    "ltx2.5": "optimum-intel-internal-testing/tiny-random-ltx2.5",
     "zamba2": "optimum-intel-internal-testing/tiny-random-zamba2",
     "qwen3_eagle3": "AngelSlim/Qwen3-1.7B_eagle3",
+    "qwen3_eagle3_target": "Qwen/Qwen3-1.7B",
+    "flux.2-klein": "optimum-intel-internal-testing/tiny-random-flux.2-klein",
+    "z-image": "optimum-intel-internal-testing/tiny-random-z-image",
     "qwen3_vl_eagle3": "optimum-intel-internal-testing/tiny-random-qwen3-vl-eagle3",
+    "qwen3_vl_eagle3_target": "optimum-intel-internal-testing/tiny-random-qwen3-vl-layer10",
     "videochat_flash_qwen": "optimum-intel-internal-testing/tiny-videochat-flash-qwen",
 }
 
 if os.environ.get("RUN_SLOW_EXPORT_TESTS") == "1" and is_transformers_version(">=", "5.0"):
-    MODEL_NAMES["lasr_ctc"] = "google/medasr"
+    HUB_MODEL_NAMES["lasr_ctc"] = "google/medasr"
 
-EAGLE3_MODELS = {"qwen3_eagle3": ("AngelSlim/Qwen3-1.7B_eagle3", "Qwen/Qwen3-1.7B")}
+
+def _resolve_cached_model_paths(model_names: dict) -> dict:
+    try:
+        if not os.path.exists(constants.HF_HUB_CACHE):
+            return model_names
+
+        repo_id_to_local_paths = {}
+        for repo in scan_cache_dir().repos:
+            if not repo.revisions:
+                continue
+            best = None
+            for rev in sorted(repo.revisions, key=lambda r: r.last_modified, reverse=True):
+                file_names = {f.file_name for f in rev.files}
+                if "config.json" not in file_names:
+                    continue
+                # Skip repos with custom Python code — their Hub repos can add new .py
+                # files that a stale local snapshot won't have, causing FileNotFoundError
+                if any(f.endswith(".py") for f in file_names):
+                    break
+                if all(os.path.exists(f.file_path) for f in rev.files):
+                    best = rev
+                    break
+            if best is not None:
+                repo_id_to_local_paths[repo.repo_id] = str(best.snapshot_path)
+        return {k: repo_id_to_local_paths.get(v, v) for k, v in model_names.items()}
+    except Exception:
+        return model_names
+
+
+MODEL_NAMES = _resolve_cached_model_paths(HUB_MODEL_NAMES)
+
+EAGLE3_MODELS = {"qwen3_eagle3": ("qwen3_eagle3", "qwen3_eagle3_target")}
+
+DFLASH_MODELS = {
+    "qwen3_dflash": ("qwen3_dflash", "qwen3"),
+    "qwen3_deepspec_dflash": ("qwen3_deepspec_dflash", "qwen3"),
+}
+
+DFLASH_VLM_MODELS = {
+    "qwen3_5_dflash": ("qwen3_5_dflash", "qwen3_5"),
+    "qwen3_5_moe_dflash": ("qwen3_5_moe_dflash", "qwen3_5_moe"),
+    "gemma4_dflash": ("gemma4_dflash", "gemma4"),
+    "muse_glimmer": ("muse_glimmer_assistant", "muse_glimmer"),
+    # GenAI without DSpark support runs this draft as a plain DFlash draft and ignores the Markov head.
+    "minicpmv4_7_dspark": ("minicpmv4_7_dspark", "minicpmv4_7"),
+}
 
 # VLM-based Eagle3 draft models (AngelSlim Eagle3LlamaForCausalLM architecture).
 # These use Qwen3-VL MRoPE and target VLM models for speculative decoding.
-# Only used in the decoder test (not genai, since the VLM target needs image-text-to-text export).
-EAGLE3_VLM_MODELS = {
-    "qwen3_vl_eagle3": (
-        "optimum-intel-internal-testing/tiny-random-qwen3-vl-eagle3",
-        "optimum-intel-internal-testing/tiny-random-qwen3-vl-layer10",
-    ),
+EAGLE3_VLM_MODELS = {}
+# VLM Eagle3 export is only supported up to transformers 4.57.6
+if is_transformers_version("<=", "4.57.6"):
+    EAGLE3_VLM_MODELS["qwen3_vl_eagle3"] = ("qwen3_vl_eagle3", "qwen3_vl_eagle3_target")
+
+# MTP (Multi-Token Prediction) VLM models: the MTP head is exported inside the model itself
+# (openvino_mtp_model.xml), so the draft and target are the same model directory.
+MTP_VLM_MODELS = {
+    "qwen3_5_mtp": ("qwen3_5_mtp", "qwen3_5_mtp"),
+    "qwen3_5_moe_mtp": ("qwen3_5_moe_mtp", "qwen3_5_moe_mtp"),
+    "qwen3_5_moe_mtp_legacy_weights": ("qwen3_5_moe_mtp_legacy_weights", "qwen3_5_moe_mtp_legacy_weights"),
 }
 
 _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "afmoe": {"model": 16},
-    "bert": {"model": 68 if is_transformers_version("<", "5") else 70},
+    "bert": {"model": 68 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 70},
     "roberta": {"model": 68},
     "albert": {"model": 84},
     "vit": {"model": 64},
-    "blenderbot": {"model": 70 if is_transformers_version("<", "5") else 72},
-    "cohere2": {"model": 30},
+    "blenderbot": {"model": 70 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 72},
+    "cohere2": {"model": 32},
     "gpt2": {"model": 44},
-    "granitemoehybrid": {"model": 118},
+    "granitemoehybrid": {"model": 70 if is_transformers_version(">=", "5.13") else 118},
     "wav2vec2": {"model": 34},
     "lasr_ctc": {"model": 384},
     "distilbert": {"model": 66},
     "t5": {
         "encoder": 64,
-        "decoder": 104 if is_transformers_version("<", "5") else 106,
-        "decoder_with_past": 84 if is_transformers_version("<", "5") else 86,
+        "decoder": 104 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 106,
+        "decoder_with_past": 84 if is_transformers_version("<", "5") or is_transformers_version(">=", "5.5") else 86,
     },
     "stable-diffusion": {
         "unet": 242,
@@ -427,6 +524,18 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_encoder": 64,
         "text_encoder_2": 64,
     },
+    "flux.2-klein": {
+        "transformer": 74,
+        "vae_decoder": 60,
+        "vae_encoder": 44,
+        "text_encoder": 394,
+    },
+    "z-image": {
+        "transformer": 116,
+        "vae_decoder": 60,
+        "vae_encoder": 44,
+        "text_encoder": 16,
+    },
     "flux-fill": {
         "transformer": 56,
         "vae_decoder": 28,
@@ -438,6 +547,21 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "lm_model": 30,
         "text_embeddings_model": 1,
         "vision_embeddings_model": 9,
+    },
+    "muse_glimmer": {
+        "lm_model": 66,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 30,
+    },
+    "minicpmv4_7": {
+        "lm_model": 110,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 28,
+    },
+    "minicpm_ocr": {
+        "lm_model": 70,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 22,
     },
     "llava_next": {
         "lm_model": 30,
@@ -462,17 +586,42 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_embeddings_model": 1,
         "vision_embeddings_model": 15,
     },
+    "mistral3": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 16,
+        "multi_modal_projector_model": 3,
+    },
+    "ministral3": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 16,
+        "multi_modal_projector_model": 3,
+    },
     "qwen2_vl": {
         "lm_model": 30,
         "text_embeddings_model": 1,
         "vision_embeddings_model": 1,
         "vision_embeddings_merger_model": 10,
     },
+    "deepseek_ocr2": {
+        "lm_model": 36,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 32,
+        "vision_embeddings_tiles_model": 32,
+    },
     "qwen3_vl": {
         "lm_model": 30,
         "text_embeddings_model": 1,
         "vision_embeddings_model": 1,
         "vision_embeddings_merger_model": 32,
+        "vision_embeddings_pos_model": 1,
+    },
+    "qwen3_vl_embedding": {
+        "lm_model": 28,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 1,
+        "vision_embeddings_merger_model": 104,
         "vision_embeddings_pos_model": 1,
     },
     "videochat_flash_qwen": {
@@ -488,12 +637,48 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vision_embeddings_merger_model": 10,
         "vision_embeddings_pos_model": 1,
     },
+    "qwen3_5_mtp": {
+        "lm_model": 70,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 1,
+        "vision_embeddings_merger_model": 10,
+        "vision_embeddings_pos_model": 1,
+        "mtp_model": 18,
+    },
     "qwen3_5_moe": {
         "lm_model": 110,
         "text_embeddings_model": 1,
         "vision_embeddings_model": 1,
         "vision_embeddings_merger_model": 10,
         "vision_embeddings_pos_model": 1,
+    },
+    "qwen3_5_moe_mtp": {
+        "lm_model": 110,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 1,
+        "vision_embeddings_merger_model": 10,
+        "vision_embeddings_pos_model": 1,
+        "mtp_model": 28,
+    },
+    "qwen3_5_moe_mtp_legacy_weights": {
+        "lm_model": 110,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 1,
+        "vision_embeddings_merger_model": 10,
+        "vision_embeddings_pos_model": 1,
+        "mtp_model": 28,
+    },
+    "qwen3_omni_moe": {
+        "lm_model": 34,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 13,
+        "vision_embeddings_pos_model": 1,
+        "audio_encoder_model": 18,
+        "talker_model": 26,
+        "talker_text_embeddings_model": 1,
+        "talker_projections_model": 4,
+        "code_predictor_model": 16,
+        "code2wav_model": 53,
     },
     "sana": {
         "transformer": 58,
@@ -507,6 +692,40 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vae_encoder": 28,
         "text_encoder": 64,
     },
+    "ltx-video-0.9.5": {
+        "transformer": 34,
+        "vae_decoder": 46,
+        "vae_encoder": 32,
+        "text_encoder": 18,
+    },
+    "ltx2": {
+        "transformer": 108,
+        "vae_decoder": 26,
+        "vae_encoder": 0,
+        "text_encoder": 30,
+        "connectors": 26,
+        "audio_vae_decoder": 20,
+        "vocoder": 74,
+    },
+    "ltx2.3": {
+        "transformer": 124,
+        "vae_decoder": 32,
+        "vae_encoder": 0,
+        "text_encoder": 30,
+        "connectors": 32,
+        "audio_vae_decoder": 20,
+        "vocoder": 440,
+    },
+    "ltx2.5": {
+        "transformer": 192,
+        "vae_decoder": 26,
+        "vae_encoder": 0,
+        "text_encoder": 28,
+        "connectors": 32,
+        "audio_vae_decoder": 20,
+        "vocoder": 440,
+        "duration_head": 16,
+    },
     "sam": {
         "vision_encoder": 150,
         "prompt_encoder_mask_decoder": 98,
@@ -518,6 +737,18 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "vocoder": 80,
     },
     "kokoro": {"model": 352},
+    # Weight compression covers the language-model side only; the codec and the speaker encoder
+    # are deliberately left in floating point (see _QWEN3_TTS_COMPRESSIBLE_OV_IR_NAMES).
+    "qwen3_tts": {
+        "talker_model": 30,
+        "code_predictor_model": 16,
+        "text_embeddings": 2,
+        "talker_embeddings": 2,
+        "code_predictor_embeddings": 2,
+        "speaker_encoder": 0,
+        "codec_encoder": 0,
+        "codec_decoder": 0,
+    },
     "clip": {"model": 130},
     "mamba": {"model": 324 if is_transformers_version("==", "5.0") else 322},
     "falcon_mamba": {"model": 164 if is_transformers_version("==", "5.0") else 162},
@@ -531,27 +762,66 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "exaone4": {"model": 16},
     "lfm2": {"model": 52 if is_transformers_version("<", "5") else 54},
     "lfm2_moe": {"model": 46},
+    "lfm3": {"model": 98},
+    "lfm3_vl": {
+        "lm_model": 72,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 25,
+    },
+    "lfm3_omni": {
+        "lm_model": 98,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 29,
+        "audio_encoder_model": 34,
+        "audio_out_embeddings_model": 1,
+        "depth_decoder_model": 29,
+        "audio_decoder_model": 59,
+    },
     "hunyuan_v1_dense": {"model": 32},
     "qwen3_eagle3": {"model": 20},
+    "qwen3_dflash": {"model": 30},
+    "qwen3_deepspec_dflash": {"model": 30},
+    "minicpmv4_7_dspark": {"model": 30},
+    "muse_glimmer_assistant": {"model": 30},
     "qwen3_vl_eagle3": {"model": 18},
     "qwen3_next": {"model": 100},
+    "gemma3n": {
+        "lm_model": 72,
+        "text_embeddings_model": 3,
+        "vision_embeddings_model": 53,
+        "text_embeddings_per_layer_model": 1,
+    },
     "gemma4": {
         "lm_model": 54,
         "text_embeddings_model": 1,
-        "vision_embeddings_model": 10,
+        "vision_embeddings_model": 10 if is_transformers_version("<", "5.10") else 11,
         "text_embeddings_per_layer_model": 1,
+        "audio_embeddings_model": 17,
     },
     "gemma4_moe": {
         "lm_model": 48,
         "text_embeddings_model": 1,
-        "vision_embeddings_model": 10,
+        "vision_embeddings_model": 10 if is_transformers_version("<", "5.10") else 12,
         "text_embeddings_per_layer_model": 0,
     },
+    "smollm3": {"model": 30},
+    "gemma4_unified": {
+        "lm_model": 56,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 3,
+    },
+    "ouro": {"model": 34},
     "qwen3_asr": {
-        "encoder": 36,
+        "audio_encoder": 36,
+        "text_embeddings": 2,
+        "language_model": 30,
+    },
+    "fun_asr": {
+        "encoder": 46,
         "decoder": 30,
         "decoder_with_past": 30,
     },
+    "sense_voice": {"model": 34},
 }
 
 TEST_IMAGE_URL = "http://images.cocodataset.org/val2017/000000039769.jpg"
@@ -581,11 +851,189 @@ REMOTE_CODE_MODELS = (
     "qwen3_vl_eagle3",
     "qwen3_asr",
     "lasr_ctc",
+    "fun_asr",
     "videochat_flash_qwen",
+    "internvl_chat",
+    "minicpmv",
+    "minicpm_v4_5",
+    "minicpmo",
+    "llava-qwen2",
+    "phi3_v",
+    "maira2",
+    "phi4mm",
+    "gemma3n",
+    # LFM3 / LFM3-VL / LFM3-Omni are available as remote code only
+    "lfm3",
+    "lfm3_vl",
+    "lfm3_omni",
 )
 
 if is_transformers_version("<", "5"):
-    REMOTE_CODE_MODELS += ("afmoe",)
+    REMOTE_CODE_MODELS += ("afmoe", "ouro")
+
+
+ARCH_TO_MODEL_CLASS = {
+    "afmoe": "OVModelForCausalLM",
+    "gpt2": "OVModelForCausalLM",
+    "llama": "OVModelForCausalLM",
+    "mistral": "OVModelForCausalLM",
+    "qwen2": "OVModelForCausalLM",
+    "qwen3": "OVModelForCausalLM",
+    "lfm2": "OVModelForCausalLM",
+    "lfm2_moe": "OVModelForCausalLM",
+    "lfm3": "OVModelForCausalLM",
+    "lfm3_vl": "OVModelForVisualCausalLM",
+    "lfm3_omni": "OVModelForVisualCausalLM",
+    "qwen3_moe": "OVModelForCausalLM",
+    "llama4": "OVModelForCausalLM",
+    "llava": "OVModelForVisualCausalLM",
+    "qwen3_5_moe": "OVModelForVisualCausalLM",
+    "gemma4_moe": "OVModelForVisualCausalLM",
+    "gemma4_unified": "OVModelForVisualCausalLM",
+    "muse_glimmer": "OVModelForVisualCausalLM",
+    "minicpmv4_7": "OVModelForVisualCausalLM",
+    "minicpm_ocr": "OVModelForVisualCausalLM",
+    "qwen3_omni_moe": "OVModelForMultimodalLM",
+    "stable-diffusion": "OVDiffusionPipeline",
+    "whisper": "OVModelForSpeechSeq2Seq",
+    "bert": "OVModelForFeatureExtraction",
+    "electra": "OVModelForFeatureExtraction",
+    "clip": "OVModelForZeroShotImageClassification",
+    "siglip": "OVModelForZeroShotImageClassification",
+    # From test_export.py
+    "albert": "OVModelForSequenceClassification",
+    "blenderbot": "OVModelForFeatureExtraction",
+    "distilbert": "OVModelForQuestionAnswering",
+    "hunyuan_v1_dense": "OVModelForCausalLM",
+    "roberta": "OVModelForTokenClassification",
+    "sam": "OVSamModel",
+    "smollm3": "OVModelForCausalLM",
+    "speecht5": "OVModelForTextToSpeechSeq2Seq",
+    "t5": "OVModelForSeq2SeqLM",
+    "vit": "OVModelForImageClassification",
+    "wav2vec2": "OVModelForAudioClassification",
+    # From test_decoder.py - CausalLM models
+    "arcee": "OVModelForCausalLM",
+    "biogpt": "OVModelForCausalLM",
+    "bloom": "OVModelForCausalLM",
+    "codegen": "OVModelForCausalLM",
+    "cohere": "OVModelForCausalLM",
+    "falcon": "OVModelForCausalLM",
+    "falcon-40b": "OVModelForCausalLM",
+    "glm4": "OVModelForCausalLM",
+    "gpt_bigcode": "OVModelForCausalLM",
+    "gpt_neo": "OVModelForCausalLM",
+    "gpt_neox": "OVModelForCausalLM",
+    "gpt_neox_japanese": "OVModelForCausalLM",
+    "gpt_oss": "OVModelForCausalLM",
+    "gpt_oss_mxfp4": "OVModelForCausalLM",
+    "gptj": "OVModelForCausalLM",
+    "granite": "OVModelForCausalLM",
+    "granitemoe": "OVModelForCausalLM",
+    "granitemoehybrid": "OVModelForCausalLM",
+    "mistral-nemo": "OVModelForCausalLM",
+    "mixtral": "OVModelForCausalLM",
+    "mpt": "OVModelForCausalLM",
+    "opt": "OVModelForCausalLM",
+    "pegasus": "OVModelForCausalLM",
+    "persimmon": "OVModelForCausalLM",
+    "phi": "OVModelForCausalLM",
+    "phi3": "OVModelForCausalLM",
+    "qwen2_moe": "OVModelForCausalLM",
+    "stablelm": "OVModelForCausalLM",
+    "starcoder2": "OVModelForCausalLM",
+    "xglm": "OVModelForCausalLM",
+    # From test_seq2seq.py - Seq2SeqLM models
+    "bigbird_pegasus": "OVModelForSeq2SeqLM",
+    "blenderbot-small": "OVModelForSeq2SeqLM",
+    "longt5": "OVModelForSeq2SeqLM",
+    "m2m_100": "OVModelForSeq2SeqLM",
+    "mbart": "OVModelForSeq2SeqLM",
+    # Vision models - ImageClassification
+    "audio-spectrogram-transformer": "OVModelForAudioClassification",
+    "beit": "OVModelForImageClassification",
+    "convnext": "OVModelForImageClassification",
+    "data2vec-vision": "OVModelForImageClassification",
+    "deit": "OVModelForImageClassification",
+    "levit": "OVModelForImageClassification",
+    "mobilenet_v1": "OVModelForImageClassification",
+    "mobilenet_v2": "OVModelForImageClassification",
+    "mobilevit": "OVModelForImageClassification",
+    "perceiver_vision": "OVModelForImageClassification",
+    "poolformer": "OVModelForImageClassification",
+    "resnet": "OVModelForImageClassification",
+    "swin": "OVModelForImageClassification",
+    "swin-window": "OVModelForImageClassification",
+    "vit-with-attentions": "OVModelForImageClassification",
+    "vit-with-hidden-states": "OVModelForImageClassification",
+    # Vision models - Feature Extraction / Object Detection
+    "donut-swin": "OVModelForFeatureExtraction",
+    "open-clip": "OVModelOpenCLIPForZeroShotImageClassification",
+    "segformer": "OVModelForFeatureExtraction",
+    # Text models - Masked LM / Feature Extraction / Embeddings
+    "bge": "OVModelForFeatureExtraction",
+    "camembert": "OVModelForMaskedLM",
+    "convbert": "OVModelForSequenceClassification",
+    "deberta": "OVModelForMaskedLM",
+    "deberta-v2": "OVModelForMaskedLM",
+    "esm": "OVModelForMaskedLM",
+    "ibert": "OVModelForMaskedLM",
+    "mobilebert": "OVModelForMaskedLM",
+    "mpnet": "OVModelForFeatureExtraction",
+    "perceiver_text": "OVModelForMaskedLM",
+    "rembert": "OVModelForMaskedLM",
+    "roformer": "OVModelForMaskedLM",
+    "sentence-transformers-bert": "OVModelForFeatureExtraction",
+    "squeezebert": "OVModelForMaskedLM",
+    "st-bert": "OVModelForFeatureExtraction",
+    "st-mpnet": "OVModelForFeatureExtraction",
+    "xlm-roberta": "OVModelForMaskedLM",
+    # Audio models
+    "data2vec-audio": "OVModelForAudioClassification",
+    "hubert": "OVModelForAudioClassification",
+    "sew": "OVModelForAudioClassification",
+    "sew-d": "OVModelForAudioClassification",
+    "unispeech": "OVModelForAudioClassification",
+    "unispeech-sat": "OVModelForAudioClassification",
+    "wav2vec2-conformer": "OVModelForAudioClassification",
+    "wav2vec2-hf": "OVModelForAudioClassification",
+    "wavlm": "OVModelForAudioClassification",
+    # Causal LM - Additional models
+    "cohere2": "OVModelForCausalLM",
+    "gemma3": "OVModelForVisualCausalLM",
+    "olmo": "OVModelForCausalLM",
+    "olmo2": "OVModelForCausalLM",
+    "opt125m": "OVModelForCausalLM",
+    "phimoe": "OVModelForCausalLM",
+    # Vision-Language / Multimodal models
+    "gemma3n": "OVModelForVisualCausalLM",
+    "gemma4": "OVModelForVisualCausalLM",
+    "llava_next": "OVModelForVisualCausalLM",
+    "llava_next_mistral": "OVModelForVisualCausalLM",
+    "mistral3": "OVModelForVisualCausalLM",
+    "pix2struct": "OVModelForPix2Struct",
+    "trocr": "OVModelForVision2Seq",
+    "vision-encoder-decoder": "OVModelForVision2Seq",
+    # Diffusion pipelines
+    "flux": "OVFluxPipeline",
+    "flux-fill": "OVFluxFillPipeline",
+    "flux.2-klein": "OVFlux2KleinPipeline",
+    "latent-consistency": "OVLatentConsistencyModelPipeline",
+    "ltx-video": "OVLTXPipeline",
+    "ltx2": "OVLTX2Pipeline",
+    "ltx2.3": "OVLTX2Pipeline",
+    "ltx2.5": "OVLTX2Pipeline",
+    "qwenimage": "OVQwenImagePipeline",
+    "sana": "OVSanaPipeline",
+    "sana-sprint": "OVSanaPipeline",
+    "stable-diffusion-3": "OVStableDiffusion3Pipeline",
+    "stable-diffusion-xl": "OVStableDiffusionXLPipeline",
+    "stable-diffusion-xl-refiner": "OVStableDiffusionXLImg2ImgPipeline",
+    "stable-diffusion-with-custom-variant": "OVStableDiffusionPipeline",
+    "stable-diffusion-with-safety-checker": "OVStableDiffusionPipeline",
+    "stable-diffusion-with-textual-inversion": "OVStableDiffusionPipeline",
+    "z-image": "OVZImagePipeline",
+}
 
 
 SDPA_ARCHS_ONNX_EXPORT_NOT_SUPPORTED = [
@@ -682,6 +1130,7 @@ def check_compression_state_per_model(
     models: Dict[str, ov.Model],
     expected_num_weight_nodes_per_model: Dict[str, Dict[str, int]],
     expected_num_fake_nodes_per_model: Optional[Dict[str, int]] = None,
+    check_kv_cache_precision: bool = True,
 ):
     test_case.assertEqual(len(models), len(expected_num_weight_nodes_per_model))
     actual_num_weights_per_model = {}
@@ -694,7 +1143,10 @@ def check_compression_state_per_model(
         actual_num_weights_per_model[ov_model_name] = num_weight_nodes
         actual_num_fake_nodes_per_model[ov_model_name] = num_fake_nodes
 
-        test_case.assertFalse(ov_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
+        # Weights compressed by NNCF drop the KV cache precision hint, but models that are
+        # already quantized (e.g. compressed-tensors) keep the default f16 KV cache precision.
+        if check_kv_cache_precision:
+            test_case.assertFalse(ov_model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
     # Check weight nodes
     test_case.assertEqual(expected_num_weight_nodes_per_model, actual_num_weights_per_model)
@@ -720,21 +1172,67 @@ TEST_NAME_TO_MODEL_TYPE = {
     "chatglm4": "chatglm",
     "codegen2": "codegen",
     "falcon-40b": "falcon",
+    "gemma4_dflash": "qwen3",
+    "gemma4_moe": "gemma4",
+    "gemma4_unified-it": "gemma4_unified",
     "gpt_oss_mxfp4": "gpt_oss",
     "llama_awq": "llama",
+    "llama_compressed_tensors": "llama",
     "llava_next_mistral": "llava_next",
+    "ltx-video": "ltx-video-transformer",
+    "ltx-video-0.9.5": "ltx-video-transformer",
+    "ltx2": "ltx2-video-transformer",
+    "ltx2.3": "ltx2-video-transformer",
+    "ltx2.5": "ltx2-video-transformer",
     "mistral-nemo": "mistral",
+    "minicpm_v4_5": "minicpmv",
     "mixtral_awq": "mixtral",
     "nanollava_vision_tower": "siglip",
     "opt125m": "opt",
     "opt_gptq": "opt",
     "perceiver_text": "perceiver",
     "perceiver_vision": "perceiver",
+    "qwen3_5_dflash": "qwen3",
+    "qwen3_5_moe_dflash": "qwen3",
+    "qwen3_5_compressed_tensors": "qwen3_5",
+    "qwen3_5_mtp": "qwen3_5",
+    "qwen3_5_seq_cls": "qwen3_5",
+    "qwen3_5_moe_mtp": "qwen3_5_moe",
+    "qwen3_5_moe_mtp_legacy_weights": "qwen3_5_moe",
+    "qwen3_dflash": "qwen3",
+    "qwen3_deepspec_dflash": "qwen3",
+    "minicpmv4_7_dspark": "qwen3",
+    "qwen3_eagle3": "llama",
+    "qwen3_eagle3_target": "qwen3",
+    "qwen3_vl_eagle3": "llama",
+    "qwen3_vl_eagle3_target": "qwen3_vl",
+    "qwen3_vl_embedding": "qwen3_vl",
     "swin-window": "swin",
     "vit-with-attentions": "vit",
     "vit-with-hidden-states": "vit",
     "wav2vec2-hf": "wav2vec2",
+    # The architecture lists are filtered against the exporter's registered model types,
+    # which for diffusers are components ("z-image-transformer") rather than pipeline names
+    # ("z-image"). Map the test name onto its transformer component so the z-image and ltx
+    # entries in test_export.py / test_exporters_cli.py are collected instead of silently
+    # deselected.
+    "z-image": "z-image-transformer",
+    "qwenimage21": "qwenimage21-transformer",
 }
+
+
+def get_transformers_versions(model_type, library_name="transformers", task=None):
+    # the export config of `task`, or of the first registered task: tasks of one model type can support different versions
+    export_configs = TasksManager._LIBRARY_TO_SUPPORTED_MODEL_TYPES[library_name][model_type]["openvino"]
+    export_config = export_configs[task] if task is not None else next(iter(export_configs.values()))
+    min_transformers = getattr(export_config.func, "MIN_TRANSFORMERS_VERSION", None) or "0"
+    max_transformers = getattr(export_config.func, "MAX_TRANSFORMERS_VERSION", None) or "999"
+    return str(min_transformers), str(max_transformers)
+
+
+def is_model_type_transformers_compatible(model_type, library_name="transformers", task=None):
+    min_transformers, max_transformers = get_transformers_versions(model_type, library_name, task)
+    return is_transformers_version(">=", min_transformers) and is_transformers_version("<=", max_transformers)
 
 
 def get_supported_model_for_library(library_name):
@@ -743,12 +1241,7 @@ def get_supported_model_for_library(library_name):
 
     for model_type in supported_model_type:
         if supported_model_type[model_type].get("openvino"):
-            export_config = next(iter(supported_model_type[model_type]["openvino"].values()))
-
-            min_transformers = str(getattr(export_config.func, "MIN_TRANSFORMERS_VERSION", "0"))
-            max_transformers = str(getattr(export_config.func, "MAX_TRANSFORMERS_VERSION", "999"))
-
-            if is_transformers_version(">=", min_transformers) and is_transformers_version("<=", max_transformers):
+            if is_model_type_transformers_compatible(model_type, library_name):
                 valid_model.add(model_type)
 
     return valid_model

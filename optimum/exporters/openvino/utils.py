@@ -19,6 +19,7 @@ from collections import namedtuple
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
+from packaging.version import Version
 from transformers import AutoImageProcessor, PretrainedConfig
 from transformers.utils import is_torch_available
 
@@ -26,15 +27,13 @@ from openvino import Dimension, PartialShape, Symbol
 from openvino.utils.types import get_element_type
 from optimum.exporters.openvino.base import OpenVINOConfig
 from optimum.exporters.tasks import TasksManager
-from optimum.intel.utils.import_utils import is_safetensors_available
-from optimum.utils import is_diffusers_available
+from optimum.intel.utils.import_utils import (
+    _transformers_version,
+    is_diffusers_available,
+    is_safetensors_available,
+    is_transformers_version,
+)
 from optimum.utils.save_utils import maybe_load_preprocessors, maybe_save_preprocessors
-
-
-logger = logging.getLogger(__name__)
-
-
-InputInfo = namedtuple("InputInfo", ["name", "shape", "type", "example"])
 
 
 if is_torch_available():
@@ -46,8 +45,233 @@ if is_diffusers_available():
     from diffusers import ModelMixin
 
 
+logger = logging.getLogger(__name__)
+
+
+InputInfo = namedtuple("InputInfo", ["name", "shape", "type", "example"])
+
+
 OV_XML_FILE_NAME = "openvino_model.xml"
 _MAX_UNCOMPRESSED_SIZE = 1e9
+
+# Parameter names that LTX-2 stores in fp32 in an otherwise bf16 checkpoint: the AdaLN modulation
+# tables, which are the only F32 tensors upstream ships (194 of 3510 in LTX-2.0, 290 of 4186 in
+# LTX-2.3) and the source of ~96% of the exported transformer's error against fp32 PyTorch. Used by
+# `keep_mixed_precision_parameters` to populate `_keep_in_fp32_modules`, which diffusers matches
+# against each dotted component of a parameter name, so these are leaf names rather than prefixes.
+# LTX-2.0 has only the first four; a name that is absent simply never matches.
+LTX2_FP32_PARAMETERS = (
+    "scale_shift_table",
+    "audio_scale_shift_table",
+    "video_a2v_cross_attn_scale_shift_table",
+    "audio_a2v_cross_attn_scale_shift_table",
+    "prompt_scale_shift_table",
+    "audio_prompt_scale_shift_table",
+)
+
+
+def check_transformers_version_compatibility(config: Union["OpenVINOConfig", type]):
+    """
+    Raise `ValueError` if the installed transformers version does not satisfy the
+    `MIN_TRANSFORMERS_VERSION`/`MAX_TRANSFORMERS_VERSION` bounds declared in the models `OpenVINOConfig`
+    """
+    config = getattr(config, "func", config)
+    min_version = getattr(config, "MIN_TRANSFORMERS_VERSION", None)
+    max_version = getattr(config, "MAX_TRANSFORMERS_VERSION", None)
+    if min_version is None and max_version is None:
+        return
+
+    if isinstance(min_version, Version):
+        min_version = min_version.base_version
+    if isinstance(max_version, Version):
+        max_version = max_version.base_version
+
+    min_ok = min_version is None or not is_transformers_version("<", min_version)
+    max_ok = max_version is None or not is_transformers_version(">", max_version)
+    if min_ok and max_ok:
+        return
+
+    max_version = max_version.replace("99", "*") if max_version is not None else None
+    if min_version is not None and max_version is not None:
+        requirement = (
+            f"transformers=={min_version}"
+            if min_version == max_version
+            else f"transformers>={min_version},<={max_version}"
+        )
+    elif min_version is not None:
+        requirement = f"transformers>={min_version}"
+    else:
+        requirement = f"transformers<={max_version}"
+
+    model_type = getattr(config, "model_type", None)
+    model_desc = f"the `{model_type}` model" if model_type else "this model"
+
+    raise ValueError(
+        f"Exporting {model_desc} to OpenVINO requires `{requirement}`, but transformers=={_transformers_version} is "
+        f'currently installed. Please run `pip install "{requirement}"` and try again.'
+    )
+
+
+def is_auto_compression_disabled(model: Any) -> bool:
+    """
+    Whether `model` is excluded from the automatic, size-based int8 weight compression that
+    `main_export` applies when no weight format is requested and nncf is installed.
+
+    LTX-2 is the only such family so far: its transformer and text encoder are both far above
+    `_MAX_UNCOMPRESSED_SIZE`, so they would always be compressed, and int8 weights cost too much
+    video quality for a silent default (measured on LTX-2.0: wwb similarity 0.80 for int8 against the
+    fp32 reference). Compression is still applied when asked for explicitly via `--weight-format` /
+    `--quant-mode`, and to the submodels that have an entry in the int8 config registered for the
+    model in `_DEFAULT_8BIT_WQ_CONFIGS` (e.g. LTX-2.3), which is tuned to keep the quality, if the
+    installed NNCF version supports it.
+
+    Both supported pipelines are listed explicitly: `LTX2ImageToVideoPipeline` does not subclass
+    `LTX2Pipeline`, and they are the only two LTX-2 classes this exporter registers (see
+    `_DIFFUSERS_TASKS_TO_MODEL_MAPPINGS` in `model_configs.py`).
+    """
+    if not is_diffusers_available():
+        return False
+
+    try:
+        from diffusers import LTX2ImageToVideoPipeline, LTX2Pipeline
+    except ImportError:
+        # LTX-2 was added in diffusers 0.38.0.
+        return False
+
+    return isinstance(model, (LTX2Pipeline, LTX2ImageToVideoPipeline))
+
+
+def has_ltx2_extended_guidance_inputs(config: Any) -> bool:
+    """
+    Whether an LTX-2 transformer config takes the extended-guidance inputs (`cross_modality_gate` and
+    `stg_perturbation_mask`), keyed on the two config values LTX-2.3 introduced. Absent means LTX-2.0,
+    via the diffusers defaults.
+
+    True for LTX-2.3 *and* LTX-2.5: 2.5 sets `perturbed_attn: true` and `use_prompt_embeddings: false`,
+    so it satisfies both clauses and reuses the same graph. Named for the feature rather than a version
+    because it is not a version test -- a later checkpoint carrying these flags gets the same treatment
+    without touching this function.
+
+    Used to keep the IRs LTX-2.0 already exports byte-identical, not to gate a capability: every
+    architecture supports modality isolation. STG is the one real capability gate and checks
+    `perturbed_attn` on its own.
+    """
+    return getattr(config, "perturbed_attn", False) or not getattr(config, "use_prompt_embeddings", True)
+
+
+# The LTX-2 transformer takes its rotary embeddings as precomputed (cos, sin) inputs, one pair per
+# rotary module of `LTX2VideoTransformer3DModel`, instead of computing them from `video_coords` and
+# `audio_coords` in the graph. The angles reach ~1.6e4 rad, where fp16 cannot resolve them (its
+# spacing there is 8 rad), so in-graph RoPE breaks under an f16 inference precision (the GPU
+# default). Computed on the host, the angles stay in fp32/fp64 and only cos/sin, bounded by 1, enter
+# the graph.
+LTX2_ROPE_INPUTS = {
+    "rope": ("video_rotary_cos", "video_rotary_sin"),
+    "audio_rope": ("audio_rotary_cos", "audio_rotary_sin"),
+    "cross_attn_rope": ("video_cross_attn_rotary_cos", "video_cross_attn_rotary_sin"),
+    "cross_attn_audio_rope": ("audio_cross_attn_rotary_cos", "audio_cross_attn_rotary_sin"),
+}
+
+
+def build_ltx2_rope_modules(config: Any) -> Dict[str, "nn.Module"]:
+    """
+    Build the weight-free rotary modules of `LTX2VideoTransformer3DModel` from its config, with the
+    same arguments (and defaults) as diffusers, keyed like `LTX2_ROPE_INPUTS`.
+
+    Original (`LTX2VideoTransformer3DModel.__init__`, "4. Rotary Positional Embeddings"):
+    https://github.com/huggingface/diffusers/blob/v0.40.0/src/diffusers/models/transformers/transformer_ltx2.py#L1261-L1323
+    """
+    from diffusers.models.transformers.transformer_ltx2 import (
+        LTX2AudioVideoRotaryPosEmbed,
+        LTX2VideoTransformer3DModel,
+    )
+
+    defaults = {
+        name: param.default
+        for name, param in inspect.signature(LTX2VideoTransformer3DModel.__init__).parameters.items()
+        if param.default is not inspect.Parameter.empty
+    }
+    cfg = {**defaults, **{name: value for name, value in dict(config).items() if name in defaults}}
+
+    common = {
+        "theta": cfg["rope_theta"],
+        "causal_offset": cfg["causal_offset"],
+        "double_precision": cfg["rope_double_precision"],
+        "rope_type": cfg["rope_type"],
+    }
+    cross_attn_pos_embed_max_pos = max(cfg["pos_embed_max_pos"], cfg["audio_pos_embed_max_pos"])
+    return {
+        "rope": LTX2AudioVideoRotaryPosEmbed(
+            dim=cfg["num_attention_heads"] * cfg["attention_head_dim"],
+            patch_size=cfg["patch_size"],
+            patch_size_t=cfg["patch_size_t"],
+            base_num_frames=cfg["pos_embed_max_pos"],
+            base_height=cfg["base_height"],
+            base_width=cfg["base_width"],
+            scale_factors=tuple(cfg["vae_scale_factors"]),
+            modality="video",
+            num_attention_heads=cfg["num_attention_heads"],
+            **common,
+        ),
+        "audio_rope": LTX2AudioVideoRotaryPosEmbed(
+            dim=cfg["audio_num_attention_heads"] * cfg["audio_attention_head_dim"],
+            patch_size=cfg["audio_patch_size"],
+            patch_size_t=cfg["audio_patch_size_t"],
+            base_num_frames=cfg["audio_pos_embed_max_pos"],
+            sampling_rate=cfg["audio_sampling_rate"],
+            hop_length=cfg["audio_hop_length"],
+            scale_factors=[cfg["audio_scale_factor"]],
+            modality="audio",
+            num_attention_heads=cfg["audio_num_attention_heads"],
+            **common,
+        ),
+        "cross_attn_rope": LTX2AudioVideoRotaryPosEmbed(
+            dim=cfg["audio_cross_attention_dim"],
+            patch_size=cfg["patch_size"],
+            patch_size_t=cfg["patch_size_t"],
+            base_num_frames=cross_attn_pos_embed_max_pos,
+            base_height=cfg["base_height"],
+            base_width=cfg["base_width"],
+            modality="video",
+            num_attention_heads=cfg["num_attention_heads"],
+            **common,
+        ),
+        "cross_attn_audio_rope": LTX2AudioVideoRotaryPosEmbed(
+            dim=cfg["audio_cross_attention_dim"],
+            patch_size=cfg["audio_patch_size"],
+            patch_size_t=cfg["audio_patch_size_t"],
+            base_num_frames=cross_attn_pos_embed_max_pos,
+            sampling_rate=cfg["audio_sampling_rate"],
+            hop_length=cfg["audio_hop_length"],
+            modality="audio",
+            num_attention_heads=cfg["audio_num_attention_heads"],
+            **common,
+        ),
+    }
+
+
+def compute_ltx2_rope_inputs(
+    rope_modules: Dict[str, "nn.Module"], video_coords: "torch.Tensor", audio_coords: "torch.Tensor"
+) -> Dict[str, "torch.Tensor"]:
+    """
+    Compute the (cos, sin) transformer inputs named in `LTX2_ROPE_INPUTS` from the RoPE coordinates,
+    exactly as `LTX2VideoTransformer3DModel.forward` does before its transformer blocks.
+
+    Original (`LTX2VideoTransformer3DModel.forward`, "1. Prepare RoPE positional embeddings"):
+    https://github.com/huggingface/diffusers/blob/v0.40.0/src/diffusers/models/transformers/transformer_ltx2.py#L1500-L1506
+    """
+    coords = {
+        "rope": video_coords,
+        "audio_rope": audio_coords,
+        "cross_attn_rope": video_coords[:, 0:1, :],
+        "cross_attn_audio_rope": audio_coords[:, 0:1, :],
+    }
+    inputs = {}
+    for module_name, (cos_name, sin_name) in LTX2_ROPE_INPUTS.items():
+        cos, sin = rope_modules[module_name](coords[module_name].float())
+        inputs[cos_name] = cos.float().contiguous()
+        inputs[sin_name] = sin.float().contiguous()
+    return inputs
 
 
 def is_torch_model(model: Union["PreTrainedModel", "ModelMixin"]):
@@ -312,14 +536,109 @@ def _get_kokoro_submodels_fn_and_export_configs(
     return custom_export_configs, fn_get_submodels
 
 
+def _get_qwen3_tts_submodels_fn_and_export_configs(
+    model,
+    library_name: str = "qwen3_tts",
+    task: Optional[str] = None,
+    preprocessors: List = None,
+    custom_export_configs: Dict[str, "OpenVINOConfig"] = None,
+    fn_get_submodels: Callable = None,
+):
+    # Qwen3-TTS is split into the fewest graphs its call structure allows, so that the export
+    # carries no PyTorch weights at all. The generation orchestration (sampling, m-RoPE index
+    # math, chunking, ICL prompt assembly) stays in PyTorch and drives these graphs:
+    #
+    #   talker_model          28-layer decoder + codec_head, one call per 12.5 Hz frame
+    #   code_predictor_model   5-layer decoder + per-depth lm_head, num_code_groups-1 per frame
+    #   text_embeddings        text token ids -> talker hidden states (projection baked in)
+    #   talker_embeddings      first-codebook ids -> talker hidden states
+    #   code_predictor_embeddings  per-depth residual tables, stacked and picked by step
+    #   speaker_encoder        ECAPA-TDNN, once per reference audio (voice clone)
+    #   codec_encoder          reference waveform -> residual codes (ICL)
+    #   codec_decoder          generated codes -> 24 kHz waveform
+    #
+    # Each output head is folded into the stack it follows, because it is applied to that
+    # stack's hidden states on the same call path. The embedding tables cannot be folded the
+    # same way - they are looked up all over prompt assembly, far from any stack call, and one
+    # OpenVINO graph computes all of its outputs on every call - so each kind of table gets its
+    # own graph, with the code predictor's per-depth tables stacked into one.
+    from optimum.exporters.openvino.model_configs import (
+        Qwen3TTSCodecDecoderOpenVINOConfig,
+        Qwen3TTSCodecEncoderOpenVINOConfig,
+        Qwen3TTSDecoderStackOpenVINOConfig,
+        Qwen3TTSEmbeddingOpenVINOConfig,
+        Qwen3TTSSpeakerEncoderOpenVINOConfig,
+        Qwen3TTSSteppedDecoderStackOpenVINOConfig,
+        Qwen3TTSSteppedEmbeddingOpenVINOConfig,
+        Qwen3TTSTextEmbeddingOpenVINOConfig,
+    )
+
+    talker = model.talker
+    code_predictor = talker.code_predictor
+    codec_model = model.speech_tokenizer.model
+    talker_config = talker.model.config
+    code_predictor_config = code_predictor.model.config
+
+    custom_export_configs = {
+        "talker_model": Qwen3TTSDecoderStackOpenVINOConfig(talker_config, task="feature-extraction"),
+        "code_predictor_model": Qwen3TTSSteppedDecoderStackOpenVINOConfig(
+            code_predictor_config, task="feature-extraction"
+        ),
+        "text_embeddings": Qwen3TTSTextEmbeddingOpenVINOConfig(talker_config, task="feature-extraction"),
+        "talker_embeddings": Qwen3TTSEmbeddingOpenVINOConfig(talker_config, task="feature-extraction"),
+        "code_predictor_embeddings": Qwen3TTSSteppedEmbeddingOpenVINOConfig(
+            code_predictor_config, task="feature-extraction"
+        ),
+        "codec_encoder": Qwen3TTSCodecEncoderOpenVINOConfig(codec_model.config, task="feature-extraction"),
+        "codec_decoder": Qwen3TTSCodecDecoderOpenVINOConfig(
+            codec_model.config.decoder_config, task="feature-extraction"
+        ),
+    }
+
+    def _get_qwen3_tts_submodels(model):
+        # Each graph is traced from the ``qwen_tts`` module that owns it; its patcher replaces the
+        # module's forward for the duration of the export.
+        talker = model.talker
+        codec_model = model.speech_tokenizer.model
+        submodels = {
+            "talker_model": talker,
+            "code_predictor_model": talker.code_predictor,
+            "text_embeddings": talker,
+            "talker_embeddings": talker.model,
+            "code_predictor_embeddings": talker.code_predictor.model,
+            "codec_encoder": codec_model,
+            "codec_decoder": codec_model.decoder,
+        }
+        if model.speaker_encoder is not None:
+            submodels["speaker_encoder"] = model.speaker_encoder
+        return submodels
+
+    # The code predictor is fed embeddings in the talker's width and narrows them itself, so
+    # its graph input is sized by the talker rather than by its own hidden size.
+    custom_export_configs["code_predictor_model"].input_hidden_size = talker_config.hidden_size
+
+    # The speaker encoder only exists on the voice-clone (``base``) variants.
+    if model.speaker_encoder is not None:
+        custom_export_configs["speaker_encoder"] = Qwen3TTSSpeakerEncoderOpenVINOConfig(
+            model.config.speaker_encoder_config, task="feature-extraction"
+        )
+
+    fn_get_submodels = _get_qwen3_tts_submodels
+
+    return custom_export_configs, fn_get_submodels
+
+
 MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "llava",
     "llava_next",
     "llava_next_video",
     "llava-qwen2",
+    "mistral3",
     "internvl_chat",
     "maira2",
     "minicpmv",
+    "minicpmv4_7",
+    "minicpm_ocr",
     "phi3_v",
     "qwen2_vl",
     "qwen2_5_vl",
@@ -328,7 +647,9 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "qwen3_5_moe",
     "got_ocr2",
     "gemma3",
+    "gemma3n",
     "gemma4",
+    "gemma4_unified",
     "idefics3",
     "smolvlm",
     "phi4mm",
@@ -336,7 +657,14 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "llama4",
     "minicpmo",
     "videochat_flash_qwen",
+    "deepseek_ocr2",
+    "qwen3_omni_moe",
+    "qwen3_asr",
+    "muse_glimmer",
+    "lfm3_vl",
+    "lfm3_omni",
 ]
+
 
 SSM_MODELS = [
     "mamba",
@@ -344,11 +672,21 @@ SSM_MODELS = [
     "zamba2",
     "lfm2",
     "lfm2_moe",
+    "lfm3",
     "granitemoehybrid",
     "qwen3_next",
     "qwen3_5_text",
     "qwen3_5_moe_text",
 ]
+
+# GraniteMoeHybrid's `config.layer_types` used "mamba"/"attention" for transformers < 5.13 and later
+# renamed to "linear_attention"/"full_attention" in v5.13 https://github.com/huggingface/transformers/pull/46738
+if is_transformers_version(">=", "5.13"):
+    GRANITEMOEHYBRID_MAMBA_LAYER_TYPE = "linear_attention"
+    GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE = "full_attention"
+else:
+    GRANITEMOEHYBRID_MAMBA_LAYER_TYPE = "mamba"
+    GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE = "attention"
 
 # All transformers, diffusers, timm and sentence transformers models that were supported via optimum-onnx OnnxConfigs for which support is now removed
 ONNX_SUPPORTED_ARCHITECTURES = {
@@ -393,7 +731,6 @@ ONNX_SUPPORTED_ARCHITECTURES = {
     "rt_detr",
     "rt_detr_v2",
     "siglip_vision_model",
-    "smollm3",
     "speech_to_text",
     "splinter",
     "swin2sr",
@@ -419,6 +756,33 @@ def save_config(config, save_dir):
         save_dir.mkdir(exist_ok=True, parents=True)
         output_config_file = Path(save_dir / "config.json")
         config.to_json_file(output_config_file, use_diff=True)
+
+
+def keep_mixed_precision_parameters():
+    """
+    Keep the fp32 parameters of a mixed-precision diffusers checkpoint out of the 16-bit load cast.
+
+    `deduce_diffusers_dtype` reads one dtype off the transformer weights and `from_pretrained`
+    applies it to every floating tensor of every submodel, so the fp32 tensors of a checkpoint that
+    is otherwise 16-bit get rounded. At export time `__make_16bit_traceable` casts everything that
+    is not an `nn.Linear` / `nn.Embedding` / `Conv1D` parameter back to fp32, so those tensors end up
+    as fp32 constants holding needlessly rounded values.
+
+    `_keep_in_fp32_modules` is the diffusers hook for this: it is honoured while the state dict is
+    loaded, before the cast, and by `ModelMixin.to()` afterwards. Setting it leaves the IR layout and
+    size untouched; only the constant values become accurate.
+
+    Only LTX-2 is handled: `LTX2VideoTransformer3DModel` is the transformer of both LTX-2.0 and
+    LTX-2.3, so the class attribute is inert for every other model and no pipeline-level check is
+    needed.
+    """
+    try:
+        from diffusers import LTX2VideoTransformer3DModel
+    except ImportError:
+        return
+
+    if LTX2VideoTransformer3DModel._keep_in_fp32_modules is None:
+        LTX2VideoTransformer3DModel._keep_in_fp32_modules = list(LTX2_FP32_PARAMETERS)
 
 
 def deduce_diffusers_dtype(model_name_or_path, **loading_kwargs):
@@ -484,6 +848,7 @@ def save_preprocessors(
                 processor.save_pretrained(output)
             except Exception as ex:
                 logger.error(f"Saving {type(processor)} failed with {ex}")
+
         # phi4mm does not allow loading chat template in processor, it uses chat_template from tokenizer
         if model_type == "phi4mm" and (Path(output) / "chat_template.json").exists():
             (Path(output) / "chat_template.json").unlink()
@@ -560,6 +925,36 @@ def load_preprocessors(
     preprocessors = maybe_load_preprocessors(
         src_name_or_path, subfolder=subfolder, trust_remote_code=trust_remote_code
     )
+    if model_type == "fun_asr":
+        # FunASR has no root tokenizer; it lives in the bundled Qwen3 LLM subfolder. Load it so that
+        # the OpenVINO tokenizer/detokenizer IR gets exported alongside the model.
+        from transformers import AutoTokenizer, PreTrainedTokenizerBase
+
+        # Drop any spurious tokenizer picked up from the root (e.g. a default empty BertTokenizer),
+        # otherwise maybe_convert_tokenizers would export that broken tokenizer instead of the Qwen3 one.
+        preprocessors = [p for p in preprocessors if not isinstance(p, PreTrainedTokenizerBase)]
+        try:
+            preprocessors.append(
+                AutoTokenizer.from_pretrained(
+                    src_name_or_path, subfolder="Qwen3-0.6B", trust_remote_code=trust_remote_code
+                )
+            )
+        except Exception as e:
+            raise RuntimeError(
+                "Failed to load FunASR Qwen3 tokenizer from subfolder 'Qwen3-0.6B'. "
+                "This tokenizer is required to export OpenVINO tokenizer/detokenizer IR for FunASR."
+            ) from e
+    if model_type == "mistral3" and not preprocessors and not subfolder:
+        # Checkpoints published in Mistral's own format (e.g. Mistral-Small-3.2-24B-Instruct-2506) ship only
+        # tekken.json, which transformers resolves to MistralCommonTokenizer. That class rejects the `subfolder`
+        # argument maybe_load_preprocessors always passes, and the resulting error is swallowed there, so without
+        # this retry the model would be exported without any tokenizer.
+        from transformers import AutoTokenizer
+
+        try:
+            preprocessors.append(AutoTokenizer.from_pretrained(src_name_or_path, trust_remote_code=trust_remote_code))
+        except Exception as ex:
+            logger.warning(f"Tokenizer could not be loaded from {src_name_or_path}, saving failed with {ex}")
     if model_type == "phi4mm":
         # audio feature extractor config overrides image processor config during saving, need to save it explicitly
         try:
@@ -570,7 +965,33 @@ def load_preprocessors(
             )
         except Exception:
             pass
+    if model_type == "minicpmv4_7":
+        # The checkpoint processor configs point at remote code and transformers has no AutoProcessor mapping for
+        # minicpmv4_7, so the processor is not saved otherwise. Assemble it from the native classes (MiniCPM-V 4.7
+        # reuses the 4.6 image and video processors), so the exported model can be loaded with AutoProcessor.
+        try:
+            preprocessors.append(load_minicpmv4_7_processor(src_name_or_path, subfolder=subfolder))
+        except Exception as ex:
+            logger.warning(f"MiniCPM-V 4.7 processor could not be loaded from {src_name_or_path}: {ex}")
     return preprocessors
+
+
+# TODO: remove load_minicpmv4_7_processor once official 4.7 checkpoints are published
+def load_minicpmv4_7_processor(model_name_or_path: Union[str, Path], subfolder: str = ""):
+    from transformers import (
+        AutoTokenizer,
+        MiniCPMV4_6ImageProcessor,
+        MiniCPMV4_6VideoProcessor,
+        MiniCPMV4_7Processor,
+    )
+
+    tokenizer = AutoTokenizer.from_pretrained(model_name_or_path, subfolder=subfolder)
+    return MiniCPMV4_7Processor(
+        image_processor=MiniCPMV4_6ImageProcessor.from_pretrained(model_name_or_path, subfolder=subfolder),
+        video_processor=MiniCPMV4_6VideoProcessor.from_pretrained(model_name_or_path, subfolder=subfolder),
+        tokenizer=tokenizer,
+        chat_template=tokenizer.chat_template,
+    )
 
 
 def patch_qwenvl_configs():

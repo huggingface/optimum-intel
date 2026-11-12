@@ -30,6 +30,8 @@ from transformers.utils.hub import cached_file
 from optimum.exporters.base import ExportConfig
 from optimum.exporters.openvino import export, main_export
 from optimum.intel.openvino.configuration import (
+    _DEFAULT_2BIT_WQ_CONFIG,
+    _DEFAULT_3BIT_WQ_CONFIG,
     _DEFAULT_4BIT_WQ_CONFIG,
     OVConfig,
     OVQuantizationConfigBase,
@@ -617,16 +619,15 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             _maybe_register_remote_code_model(model_id, revision=revision, token=token, cache_dir=cache_dir)
 
         _export = export
+        model_dir = model_id
         try:
-            if local_files_only:
+            if local_files_only and not os.path.isdir(model_id):
                 object_id = model_id.replace("/", "--")
                 cached_model_dir = os.path.join(cache_dir, f"models--{object_id}")
                 refs_file = os.path.join(os.path.join(cached_model_dir, "refs"), revision or "main")
                 with open(refs_file) as f:
                     revision = f.read()
                 model_dir = os.path.join(cached_model_dir, "snapshots", revision)
-            else:
-                model_dir = model_id
 
             ov_files = _find_files_matching_pattern(
                 model_dir,
@@ -654,7 +655,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             )
 
         return super().from_pretrained(
-            model_id,
+            model_dir,
             export=_export,
             force_download=force_download,
             token=token,
@@ -680,8 +681,9 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             quantization_config (`OVQuantizationConfigBase` or `Dict`):
                 The quantization config to resolve.
         """
-        if quantization_config == {"bits": 4} or quantization_config == {"bits": 8}:
-            # If config is given as {"bits": N}, use the default N-bit quantization config
+
+        # # If the config is specified as {"bits": N}, use the default N-bit quantization configuration.
+        if quantization_config in ({"bits": 2}, {"bits": 3}, {"bits": 4}, {"bits": 8}):
             if quantization_config == {"bits": 4} and model_name_or_path in [
                 "openai/gpt-oss-20b",
                 "openai/gpt-oss-120b",
@@ -694,14 +696,22 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
             default_config = get_default_quantization_config(
                 model_name_or_path, weight_format=f"int{quantization_config['bits']}"
             )
-            quantization_config = default_config or (
-                _DEFAULT_4BIT_WQ_CONFIG if quantization_config == {"bits": 4} else quantization_config
-            )
+            if default_config:
+                quantization_config = default_config
+            else:
+                quantization_config = {
+                    2: _DEFAULT_2BIT_WQ_CONFIG,
+                    3: _DEFAULT_3BIT_WQ_CONFIG,
+                    4: _DEFAULT_4BIT_WQ_CONFIG,
+                    8: {"bits": 8},
+                }[quantization_config["bits"]]
         else:
-            # Notify a user if 4 or 8 bit quantization is requested and there is a recommended config for the model
+            # Notify a user if {2, 3, 4, 8} - bit quantization is requested and there is a recommended config for the model
             if isinstance(quantization_config, dict):
                 quantization_config = _quantization_config_from_dict(quantization_config)
             if isinstance(quantization_config, OVWeightQuantizationConfig) and quantization_config.dtype in [
+                "int2",
+                "int3",
                 "int4",
                 "int8",
             ]:
@@ -1020,6 +1030,16 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         """
         return isinstance(self, GenerationMixin)
 
+    def get_experts_implementation(self):
+        # transformers>=5.15 `generate` queries the experts implementation to decide
+        # on a decode-time MoE kernel swap; that swap is a no-op for OpenVINO models,
+        # since any MoE kernel is baked into the exported graph.
+        return {}
+
+    def set_experts_implementation(self, experts_implementation):
+        # No-op: the MoE kernel (if any) is baked into the exported OpenVINO graph.
+        return
+
     def _inference(self, inputs):
         try:
             outputs = self.request(inputs)
@@ -1070,6 +1090,7 @@ class OVModelPart(OVModelHostMixin):
         self._model_name = model_name
         self.config = self.parent_model.config
         self._model_dir = Path(model_dir or parent_model.model_save_dir)
+        self._device_override: Optional[str] = None
 
     def compile(self):
         if self.parent_model._compile_only and isinstance(self.model, CompiledModel):
@@ -1090,6 +1111,11 @@ class OVModelPart(OVModelHostMixin):
 
     @property
     def _device(self) -> str:
+        # Per-part device override takes precedence over the parent model's device. This is used by
+        # multi-component architectures (e.g. Qwen3-Omni) to place audio_encoder on GPU while keeping
+        # talker on CPU, without mutating the parent model's configured device.
+        if self._device_override is not None:
+            return self._device_override
         return self.parent_model._device
 
     @property

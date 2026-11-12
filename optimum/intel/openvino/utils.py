@@ -31,7 +31,7 @@ from huggingface_hub import model_info
 from openvino import Core, Model, properties
 from openvino import Type as OVType
 from packaging.version import Version
-from transformers import AutoTokenizer, CLIPTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast
+from transformers import AutoTokenizer, CLIPTokenizer, PreTrainedTokenizer, PreTrainedTokenizerFast, T5Tokenizer
 
 from optimum.intel.utils.import_utils import is_torch_version
 
@@ -42,6 +42,7 @@ OV_XML_FILE_NAME = "openvino_model.xml"
 OV_ENCODER_NAME = "openvino_encoder_model.xml"
 OV_DECODER_NAME = "openvino_decoder_model.xml"
 OV_DECODER_WITH_PAST_NAME = "openvino_decoder_with_past_model.xml"
+OV_AUDIO_ENCODER_MODEL_NAME = "openvino_audio_encoder_model.xml"
 OV_TEXT_EMBEDDINGS_MODEL_NAME = "openvino_text_embeddings_model.xml"
 OV_LANGUAGE_MODEL_NAME = "openvino_language_model.xml"
 OV_VISION_EMBEDDINGS_MODEL_NAME = "openvino_vision_embeddings_model.xml"
@@ -68,6 +69,9 @@ TEXTUAL_INVERSION_EMBEDDING_KEY = "self.text_model.embeddings.token_embedding.we
 TEXTUAL_INVERSION_EMBEDDING_KEYS = [
     "self.text_model.embeddings.token_embedding.weight",
     "self.model.text_model.embeddings.token_embedding.weight",
+    # `CLIPTextTransformer` was removed since transformers v5.6
+    "self.embeddings.token_embedding.weight",
+    "self.model.embeddings.token_embedding.weight",
 ]
 
 OV_TO_NP_TYPE = {
@@ -138,6 +142,7 @@ _HEAD_TO_AUTOMODELS = {
     "sam": "OVSamModel",
     "sana": "OVSanaPipeline",
     "flux": "OVFluxPipeline",
+    "flux.2-klein": "OVFlux2KleinPipeline",
     "flux-fill": "OVFluxFillPipeline",
     "pix2struct": "OVModelForPix2Struct",
     "latent-consistency": "OVLatentConsistencyModelPipeline",
@@ -147,6 +152,10 @@ _HEAD_TO_AUTOMODELS = {
     "automatic-speech-recognition": "OVModelForSpeechSeq2Seq",
     "automatic-speech-recognition-with-past": "OVModelForSpeechSeq2Seq",
     "ltx-video": "OVLTXPipeline",
+    "ltx2": "OVLTX2Pipeline",
+    "z-image": "OVZImagePipeline",
+    "text-to-video": "OVPipelineForText2Video",
+    "image-to-video": "OVPipelineForImage2Video",
     "text-to-audio": "OVModelForTextToSpeechSeq2Seq",
 }
 
@@ -189,12 +198,25 @@ PREDEFINED_TEXT_IMAGE_ENCODER_DATASETS = {
 }
 
 PREDEFINED_VISUAL_LM_DATASETS = {
+    "gsm8k": {
+        "id": "openai/gsm8k",
+        "name": "main",
+        "split": "train",
+        "prompt_template": "Question: {question}\nAnswer: {answer}",
+    },
+    # "contextual" deprecated: images now unreachable, "textvqa" should be used instead
     "contextual": {
         "id": "ucla-contextual/contextual_test",
         "split": "test",
         "inputs": {"image_url": "image_url", "instruction": "instruction"},
         "streaming": True,
-    }
+    },
+    "textvqa": {
+        "id": "lmms-lab/textvqa",
+        "split": "validation",
+        "inputs": {"image": "image", "instruction": "question"},
+        "streaming": True,
+    },
 }
 
 PREDEFINED_SPEECH_TO_TEXT_DATASETS = {
@@ -216,7 +238,7 @@ PREDEFINED_SAM_DATASETS = {
 }
 
 
-NEED_CONVERT_TO_FAST_TOKENIZER: Tuple[Type[PreTrainedTokenizer]] = (CLIPTokenizer,)
+NEED_CONVERT_TO_FAST_TOKENIZER: Tuple[Type[PreTrainedTokenizer]] = (CLIPTokenizer, T5Tokenizer)
 
 
 class classproperty(property):

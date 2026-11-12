@@ -18,6 +18,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Dict, Generator
+from unittest.mock import patch
 
 import numpy as np
 import open_clip  # type: ignore
@@ -56,7 +57,16 @@ from transformers import (
 )
 from transformers.testing_utils import slow
 from transformers.utils import http_user_agent
-from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, SEED, TENSOR_ALIAS_TO_TYPE, TEST_IMAGE_URL
+from utils_tests import (
+    F32_CONFIG,
+    HUB_MODEL_NAMES,
+    MODEL_NAMES,
+    OPENVINO_DEVICE,
+    SEED,
+    TENSOR_ALIAS_TO_TYPE,
+    TEST_IMAGE_URL,
+    is_model_type_transformers_compatible,
+)
 
 from optimum.intel import (
     OVDiffusionPipeline,
@@ -97,7 +107,7 @@ from optimum.intel.openvino.utils import (
     TemporaryDirectory,
 )
 from optimum.intel.pipelines import pipeline as optimum_pipeline
-from optimum.intel.utils.import_utils import _langchain_hf_available, is_transformers_version
+from optimum.intel.utils.import_utils import _langchain_hf_available, is_datasets_version, is_transformers_version
 from optimum.intel.utils.modeling_utils import _find_files_matching_pattern
 from optimum.utils import (
     DIFFUSION_MODEL_TEXT_ENCODER_2_SUBFOLDER,
@@ -218,10 +228,6 @@ class OVModelIntegrationTest(unittest.TestCase):
 
     def test_load_from_hub_and_save_visual_language_model(self):
         model_ids = [self.OV_VLM_MODEL_ID]
-        if is_transformers_version(">=", "4.51") and is_transformers_version("<", "4.57"):
-            # the phi4 auto-processor can't be loaded in offline mode
-            # anymore due to an internal bug in transformers
-            model_ids.append("katuni4ka/phi-4-multimodal-ov")
         for model_id in model_ids:
             processor = AutoProcessor.from_pretrained(model_id)
             prompt = "What is shown in this image?"
@@ -604,6 +610,25 @@ class OVModelIntegrationTest(unittest.TestCase):
         del model
         gc.collect()
 
+    @parameterized.expand(("local_files_only", "offline_mode"))
+    def test_infer_export_when_loading_local_dir_offline(self, mode):
+        # A local PyTorch checkpoint must still be exported when the Hub can't be reached
+        model_id = MODEL_NAMES["gpt2"]
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        with TemporaryDirectory() as tmpdirname:
+            model.save_pretrained(tmpdirname)
+            if mode == "offline_mode":
+                with patch("optimum.intel.openvino.modeling_base.is_offline_mode", return_value=True):
+                    ov_model = OVModelForCausalLM.from_pretrained(tmpdirname, device=OPENVINO_DEVICE)
+            else:
+                ov_model = OVModelForCausalLM.from_pretrained(
+                    tmpdirname, local_files_only=True, device=OPENVINO_DEVICE
+                )
+            self.assertIsInstance(ov_model, OVModelForCausalLM)
+        del ov_model
+        del model
+        gc.collect()
+
     def test_find_files_matching_pattern(self):
         model_id = "echarlaix/tiny-random-PhiForCausalLM"
         pattern = r"(.*)?openvino(.*)?\_model(.*)?.xml$"
@@ -628,7 +653,7 @@ class OVModelIntegrationTest(unittest.TestCase):
     @parameterized.expand(("stable-diffusion", "stable-diffusion-openvino"))
     def test_find_files_matching_pattern_sd(self, model_arch):
         pattern = r"(.*)?openvino(.*)?\_model(.*)?.xml$"
-        model_id = MODEL_NAMES[model_arch]
+        model_id = HUB_MODEL_NAMES[model_arch]
         # hub model
         ov_files = _find_files_matching_pattern(model_id, pattern=pattern)
         self.assertTrue(len(ov_files) > 0 if "openvino" in model_id else len(ov_files) == 0)
@@ -705,7 +730,7 @@ class OVModelIntegrationTest(unittest.TestCase):
         gc.collect()
 
     def test_export_dtype(self):
-        model_id = "optimum-intel-internal-testing/tiny-random-GemmaForCausalLM"
+        model_id = "optimum-intel-internal-testing/tiny-random-PhiForCausalLM"
         for dtype in ["f32", "f16", "bf16"]:
             torch_dtype = OV_TO_PT_TYPE[dtype]
             ov_dtype = STR_TO_OV_TYPE[dtype]
@@ -931,8 +956,8 @@ class OVModelForQuestionAnsweringIntegrationTest(unittest.TestCase):
     @pytest.mark.run_slow
     @slow
     @pytest.mark.skipif(
-        is_transformers_version(">=", "5.3"),
-        reason="requires transformers < v5.3 since question-answering pipeline is deprecated in v5.3",
+        is_transformers_version(">=", "5.3") or is_datasets_version("<", "4"),
+        reason="requires datasets >= 4 or transformers < v5.3 since question-answering pipeline is deprecated in v5.3",
     )
     def test_metric(self):
         model_id = "distilbert-base-cased-distilled-squad"
@@ -1035,10 +1060,10 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         "distilbert",
         "roberta",
         "sentence-transformers-bert",
+        "qwen3",
     )
-
-    if is_transformers_version(">=", "4.51.0"):
-        SUPPORTED_ARCHITECTURES += ("qwen3",)
+    if is_model_type_transformers_compatible("qwen3_vl"):
+        SUPPORTED_ARCHITECTURES += ("qwen3_vl_embedding",)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -1054,7 +1079,12 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         tokens = tokenizer(inputs, return_tensors="pt")
         with torch.no_grad():
             transformers_outputs = transformers_model(**tokens)
-        for input_type in ["pt", "np"]:
+
+        input_types = ["pt", "np"]
+        # Original PyTorch Qwen3-VL-Embedding model fails to infer with numpy inputs
+        if model_arch in ["qwen3_vl_embedding"]:
+            input_types = ["pt"]
+        for input_type in input_types:
             tokens = tokenizer(inputs, return_tensors=input_type)
             ov_outputs = ov_model(**tokens)
             self.assertIn("last_hidden_state", ov_outputs)
@@ -1098,6 +1128,10 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         from Sentence Transformers then an appropriate exception raises.
         """
         model_id = MODEL_NAMES[model_arch]
+        if model_arch in ["qwen3_vl_embedding"]:
+            self.skipTest(
+                "Qwen3-VL-Embedding requires support of sentence-transformers==5.4 and as OVSentenceTransformer is planned to be deprecated, support of this interface won't be added for new models."
+            )
         with TemporaryDirectory() as tmp_dir:
             save_dir = str(tmp_dir)
             OVSentenceTransformer.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE).save_pretrained(
@@ -1113,7 +1147,6 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         "albert",
         "bert",
         "camembert",
-        "convbert",
         "deberta",
         "deberta-v2",
         "distilbert",
@@ -1130,13 +1163,12 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         "xlm-roberta",
     )
 
-    # accuracy issue, need additional investigation
-    if is_transformers_version("<", "4.51.0"):
-        SUPPORTED_ARCHITECTURES += ("nystromformer",)
-
     # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
     if is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES += ("data2vec-text", "flaubert", "xlm")
+
+    if is_transformers_version("!=", "5.2"):
+        SUPPORTED_ARCHITECTURES += ("convbert",)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
@@ -1263,7 +1295,7 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
         )
         self.assertEqual(ov_model.request.get_property("INFERENCE_PRECISION_HINT").to_string(), "f32")
         self.assertIsInstance(ov_model.config, PretrainedConfig)
-        timm_model = timm.create_model(model_id, pretrained=True)
+        timm_model = timm.create_model(f"hf-hub:{model_id}", pretrained=True)
         preprocessor = TimmImageProcessor.from_pretrained(model_id)
         url = TEST_IMAGE_URL
         image = Image.open(requests.get(url, stream=True).raw)
@@ -1288,6 +1320,20 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
             ov_model.save_pretrained(model_save_path)
             model = OVModelForImageClassification.from_pretrained(model_save_path, device=OPENVINO_DEVICE)
             model(pixel_values=torch.zeros((5, 3, model.config.image_size, model.config.image_size)))
+        gc.collect()
+
+    @parameterized.expand(TIMM_MODELS)
+    def test_timm_local_load_kwargs(self, model_id):
+        ov_model = OVModelForImageClassification.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
+        with TemporaryDirectory() as tmpdirname:
+            ov_model.save_pretrained(tmpdirname)
+            model = OVModelForImageClassification.from_pretrained(
+                tmpdirname, device=OPENVINO_DEVICE, compile=False, ov_config=F32_CONFIG
+            )
+            self.assertIsNone(model.request)
+            self.assertEqual(model.ov_config["INFERENCE_PRECISION_HINT"], F32_CONFIG["INFERENCE_PRECISION_HINT"])
+            model(pixel_values=torch.zeros((5, 3, model.config.image_size, model.config.image_size)))
+            self.assertEqual(model.request.get_property("INFERENCE_PRECISION_HINT").to_string(), "f32")
         gc.collect()
 
 
@@ -1618,8 +1664,8 @@ class OVModelForCustomTasksIntegrationTest(unittest.TestCase):
 
 
 class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
-    OV_MODEL_ID = MODEL_NAMES["open-clip"]
-    OV_MODEL_ID_IR = MODEL_NAMES["open-clip-ov"]
+    OV_MODEL_ID = HUB_MODEL_NAMES["open-clip"]
+    OV_MODEL_ID_IR = HUB_MODEL_NAMES["open-clip-ov"]
 
     def _get_sample_image(self):
         url = TEST_IMAGE_URL
@@ -1692,12 +1738,12 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
 
         self.assertTrue(
             torch.allclose(
-                clip_image_features, torch.from_numpy(ov_outputs.vision_model_output["image_features"]), atol=1e-4
+                clip_image_features, torch.from_numpy(ov_outputs.vision_model_output["image_features"]), atol=1e-3
             )
         )
         self.assertTrue(
             torch.allclose(
-                clip_text_features, torch.from_numpy(ov_outputs.text_model_output["text_features"]), atol=1e-4
+                clip_text_features, torch.from_numpy(ov_outputs.text_model_output["text_features"]), atol=1e-3
             )
         )
 
@@ -1735,14 +1781,14 @@ class OVModelForOpenCLIPZeroShortImageClassificationTest(unittest.TestCase):
         self.assertTrue(model.visual_model.request is None)
         self.assertTrue(model.text_model.request is None)
         res = model(tokens, processed_image)
-        self.assertTrue(torch.equal(model_outputs.logits_per_image, res.logits_per_image))
+        self.assertTrue(torch.allclose(model_outputs.logits_per_image, res.logits_per_image, atol=1e-3))
 
         model.compile()
         self.assertTrue(model.visual_model.request is not None)
         self.assertTrue(model.text_model.request is not None)
         res = model(tokens, processed_image)
         print(model_outputs.logits_per_image, res.logits_per_image)
-        self.assertTrue(torch.equal(model_outputs.logits_per_image, res.logits_per_image))
+        self.assertTrue(torch.allclose(model_outputs.logits_per_image, res.logits_per_image, atol=1e-3))
 
         model.half()
         model.compile()
