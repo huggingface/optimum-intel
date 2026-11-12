@@ -604,6 +604,36 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "dataset": "gsm8k",
         "scale_estimation": True,
     },
+    "openbmb/MiniCPM5-15B-A2.5B": {
+        "quantization_configs": {
+            "model": {
+                "config_class": "minicpm_ocr",
+                # int8: all but routed experts, embeddings, router and rotary
+                "first_stage": {
+                    "bits": 8,
+                    "sym": False,
+                    "weight_only": True,
+                    "ignored_scope": {
+                        "patterns": [
+                            ".*\\.mlp\\.experts/.*",
+                            ".*embed_tokens.*",
+                            ".*\\.mlp\\.gate/.*",
+                            ".*rotary_emb.*",
+                        ]
+                    },
+                },
+                # int4: routed experts, embeddings; router and rotary stay uncompressed
+                "second_stage": {
+                    "bits": 4,
+                    "sym": False,
+                    "group_size": 128,
+                    "ratio": 1.0,
+                    "all_layers": True,
+                    "ignored_scope": {"patterns": [".*\\.mlp\\.gate/.*", ".*rotary_emb.*"]},
+                },
+            },
+        },
+    },
     "BAAI/bge-reranker-v2-m3": {
         "bits": 4,
         "sym": False,
