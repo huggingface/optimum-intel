@@ -219,11 +219,11 @@ class OVAssistantForCausalLM(OVBaseModel):
     model.generate(**inputs, max_new_tokens=64, assistant_model=assistant)
     ```
 
-    The exported IR takes the diffusion window's embeddings (`inputs_embeds`) and the
-    target's concatenated hidden states (`hidden_states`) and returns `last_hidden_state`
-    for the drafted positions. `forward` follows the call signature of transformers'
-    `DFlashTokenCandidateGenerator`. Its KV cache holds only the target context, so - unlike the
-    target's - it never needs to be rolled back after a rejected block.
+    Each step of the exported IR runs the new rows [context; block]: `token_type_ids` marks context
+    rows (0), which read the target's concatenated hidden states (`hidden_states`), and block rows (1),
+    which read the diffusion window's embeddings (`inputs_embeds`). `last_hidden_state` covers every
+    row. `forward` follows the call signature of transformers' `DFlashTokenCandidateGenerator`. The KV
+    cache stores the block rows too, so `OVDFlashCache` crops them before the next step.
     """
 
     export_feature = "text-generation-with-past"
@@ -237,6 +237,11 @@ class OVAssistantForCausalLM(OVBaseModel):
                 "`optimum-cli export openvino --task text-generation-with-past`, from a "
                 "checkpoint whose architecture optimum-intel exports as a drafter."
             )
+        if not self._compile_only and "token_type_ids" not in self.input_names:
+            raise ValueError(
+                f"The DFlash draft model in {self.model_save_dir} has no `token_type_ids` input. "
+                "It was exported by an older optimum-intel; re-export it with the current one."
+            )
         if (
             not getattr(config, "block_size", None)
             or getattr(config, "mask_token_id", None) is None
@@ -247,6 +252,7 @@ class OVAssistantForCausalLM(OVBaseModel):
                 "(block_size, mask_token_id, target_layer_ids)."
             )
         self.request = None if not self._compile_only else self.model.create_infer_request()
+        self._past_length = 0
 
     def can_generate(self) -> bool:
         # A drafter emits hidden states, not logits; it is never driven by `generate()`
@@ -254,10 +260,7 @@ class OVAssistantForCausalLM(OVBaseModel):
         return False
 
     def _reshape(self, model: ov.Model, batch_size: int, sequence_length: int, height=None, width=None):
-        # Every axis of the drafter is dynamic by construction, and the context, the
-        # diffusion window and the attention mask all have different lengths, so there is
-        # no single `sequence_length` to pin. Only the batch axis is set here; `beam_idx`
-        # is rank-1 and has no sequence axis at all.
+        # Every axis is dynamic; only the batch axis is pinned.
         shapes = {}
         for model_input in model.inputs:
             shape = model_input.get_partial_shape()
@@ -278,6 +281,7 @@ class OVAssistantForCausalLM(OVBaseModel):
     def reset_state(self):
         if self.request is not None:
             self.request.reset_state()
+        self._past_length = 0
 
     def forward(
         self,
@@ -291,20 +295,42 @@ class OVAssistantForCausalLM(OVBaseModel):
         # `past_key_values` is accepted for transformers' call signature only: the drafter's
         # KV cache lives in the IR's variable states.
         self.compile()
+        batch_size, context_len = context_hidden_states.shape[:2]
+        block_len = noise_embeds.shape[1]
+        # Each row reads one of the two inputs; the other is zero there.
+        inputs_embeds = torch.cat(
+            [noise_embeds.new_zeros(batch_size, context_len, noise_embeds.shape[-1]), noise_embeds], 1
+        )
+        hidden_states = torch.cat(
+            [
+                context_hidden_states,
+                context_hidden_states.new_zeros(batch_size, block_len, context_hidden_states.shape[-1]),
+            ],
+            1,
+        )
+        token_type_ids = torch.cat(
+            [
+                torch.zeros(batch_size, context_len, dtype=torch.long),
+                torch.ones(batch_size, block_len, dtype=torch.long),
+            ],
+            1,
+        )
         inputs = {
-            "inputs_embeds": np.ascontiguousarray(noise_embeds.numpy()),
-            "hidden_states": np.ascontiguousarray(context_hidden_states.numpy()),
+            "inputs_embeds": np.ascontiguousarray(inputs_embeds.numpy()),
+            "hidden_states": np.ascontiguousarray(hidden_states.numpy()),
             "position_ids": np.ascontiguousarray(position_ids.numpy()),
             "attention_mask": np.ascontiguousarray(attention_mask.numpy()),
+            "token_type_ids": token_type_ids.numpy(),
         }
         if "beam_idx" in self.input_names:
-            inputs["beam_idx"] = np.arange(noise_embeds.shape[0], dtype=np.int32)
+            inputs["beam_idx"] = np.arange(batch_size, dtype=np.int32)
         self.request.start_async(inputs, share_inputs=True)
         self.request.wait()
-        last_hidden_state = torch.from_numpy(self.request.get_tensor("last_hidden_state").data).clone()
-        # The IR drops the anchor position, while transformers' `DFlashTokenCandidateGenerator`
-        # slices it off itself (`last_hidden_state[:, 1:]`), so put a placeholder row back.
-        last_hidden_state = torch.cat([torch.zeros_like(last_hidden_state[:, :1]), last_hidden_state], dim=1)
+        self._past_length += context_len + block_len
+        # The candidate generator expects the block rows only.
+        last_hidden_state = torch.from_numpy(
+            self.request.get_tensor("last_hidden_state").data[:, context_len:]
+        ).clone()
         return BaseModelOutputWithPast(last_hidden_state=last_hidden_state)
 
 
@@ -346,17 +372,14 @@ class OVDFlashTargetLayer:
         return torch.from_numpy(self._run(np.ascontiguousarray(inputs.numpy()))).clone()
 
 
-class OVDFlashCache:
-    """Replaces transformers' `DFlashCache`, which the OpenVINO drafter does not use.
+class OVDFlashCache(OVStatefulCacheProxy):
+    """Replaces transformers' `DFlashCache` with the drafter's variable states.
 
-    The drafter IR keeps the target context in its variable states and never stores the
-    diffusion window, so there is nothing to crop between steps.
+    The candidate generator crops the previous block rows (`crop(-block_size)`) before each step.
     """
 
     def set_previous_accepted_tokens(self, number_of_accepted_tokens: int) -> None:
-        return
-
-    def crop(self, tokens_to_remove: int) -> None:
+        # transformers needs this to size its masks; the OpenVINO drafter takes the full mask as input
         return
 
 
@@ -387,7 +410,7 @@ class OVDFlashCandidateGenerator(DFlashTokenCandidateGenerator):
             generation_config=generation_config,
             logits_processor=logits_processor,
         )
-        self.cache = OVDFlashCache()
+        self.cache = OVDFlashCache(assistant_model)
         assistant_model.reset_state()
 
 

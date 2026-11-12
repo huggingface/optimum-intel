@@ -334,6 +334,9 @@ HUB_MODEL_NAMES = {
     "levit": "optimum-intel-internal-testing/tiny-random-LevitModel",
     "lfm2": "optimum-intel-internal-testing/tiny-random-lfm2",
     "lfm2_moe": "optimum-intel-internal-testing/tiny-random-lfm2-moe",
+    "lfm3": "optimum-intel-internal-testing/tiny-random-lfm3",
+    "lfm3_vl": "optimum-intel-internal-testing/tiny-random-lfm3-vl",
+    "lfm3_omni": "optimum-intel-internal-testing/tiny-random-lfm3-omni",
     "longt5": "optimum-intel-internal-testing/tiny-random-longt5",
     "llama": "optimum-intel-internal-testing/tiny-random-LlamaForCausalLM",
     "llama_awq": "optimum-intel-internal-testing/tiny-random-LlamaForCausalLM",
@@ -361,6 +364,7 @@ HUB_MODEL_NAMES = {
         else "optimum-intel-internal-testing/tiny-random-minicpmv4_6"
     ),
     "minicpmv4_7": "optimum-intel-internal-testing/tiny-random-minicpmv47",
+    "minicpmv4_7_dspark": "optimum-intel-internal-testing/tiny-random-minicpmv47-dspark",
     "minicpm_ocr": "optimum-intel-internal-testing/tiny-random-minicpm-ocr",
     "minicpmo": "optimum-intel-internal-testing/tiny-random-MiniCPM-o-2_6",
     "minicpm_v4_5": "optimum-intel-internal-testing/tiny-random-minicpm-v-4_5",
@@ -536,6 +540,8 @@ DFLASH_VLM_MODELS = {
     "qwen3_5_moe_dflash": ("qwen3_5_moe_dflash", "qwen3_5_moe"),
     "gemma4_dflash": ("gemma4_dflash", "gemma4"),
     "muse_glimmer": ("muse_glimmer_assistant", "muse_glimmer"),
+    # GenAI without DSpark support runs this draft as a plain DFlash draft and ignores the Markov head.
+    "minicpmv4_7_dspark": ("minicpmv4_7_dspark", "minicpmv4_7"),
 }
 
 # VLM-based Eagle3 draft models (AngelSlim Eagle3LlamaForCausalLM architecture).
@@ -851,10 +857,26 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "exaone4": {"model": 16},
     "lfm2": {"model": 52 if is_transformers_version("<", "5") else 54},
     "lfm2_moe": {"model": 46},
+    "lfm3": {"model": 98},
+    "lfm3_vl": {
+        "lm_model": 72,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 25,
+    },
+    "lfm3_omni": {
+        "lm_model": 98,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 29,
+        "audio_encoder_model": 34,
+        "audio_out_embeddings_model": 1,
+        "depth_decoder_model": 29,
+        "audio_decoder_model": 59,
+    },
     "hunyuan_v1_dense": {"model": 32},
     "qwen3_eagle3": {"model": 20},
     "qwen3_dflash": {"model": 30},
     "qwen3_deepspec_dflash": {"model": 30},
+    "minicpmv4_7_dspark": {"model": 30},
     "muse_glimmer_assistant": {"model": 30},
     "qwen3_vl_eagle3": {"model": 18},
     "qwen3_next": {"model": 100},
@@ -934,6 +956,10 @@ REMOTE_CODE_MODELS = (
     "maira2",
     "phi4mm",
     "gemma3n",
+    # LFM3 / LFM3-VL / LFM3-Omni are available as remote code only
+    "lfm3",
+    "lfm3_vl",
+    "lfm3_omni",
 )
 
 if is_transformers_version("<", "5"):
@@ -949,6 +975,9 @@ ARCH_TO_MODEL_CLASS = {
     "qwen3": "OVModelForCausalLM",
     "lfm2": "OVModelForCausalLM",
     "lfm2_moe": "OVModelForCausalLM",
+    "lfm3": "OVModelForCausalLM",
+    "lfm3_vl": "OVModelForVisualCausalLM",
+    "lfm3_omni": "OVModelForVisualCausalLM",
     "qwen3_moe": "OVModelForCausalLM",
     "llama4": "OVModelForCausalLM",
     "llava": "OVModelForVisualCausalLM",
@@ -1267,6 +1296,7 @@ TEST_NAME_TO_MODEL_TYPE = {
     "qwen3_5_moe_mtp_legacy_weights": "qwen3_5_moe",
     "qwen3_dflash": "qwen3",
     "qwen3_deepspec_dflash": "qwen3",
+    "minicpmv4_7_dspark": "qwen3",
     "qwen3_eagle3": "llama",
     "qwen3_eagle3_target": "qwen3",
     "qwen3_vl_eagle3": "llama",

@@ -32,6 +32,7 @@ import torch
 from PIL import Image
 from parameterized import parameterized
 import nncf
+import openvino as ov
 from transformers import (
     AutoTokenizer,
     AutoProcessor,
@@ -1206,6 +1207,9 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForVisualCausalLM, "ministral3", False),
         (OVModelForVisualCausalLM, "minicpmv4_7", False),
         (OVModelForVisualCausalLM, "minicpm_ocr", False),
+        (OVModelForCausalLM, "lfm3", True),
+        (OVModelForVisualCausalLM, "lfm3_vl", True),
+        (OVModelForVisualCausalLM, "lfm3_omni", True),
     ]
 
     # gemma3n openvino>=2026.2.0 because it needs erfinv operation,
@@ -1759,6 +1763,19 @@ class OVWeightCompressionTest(unittest.TestCase):
 
             openvino_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
             self.assertEqual(openvino_config.quantization_config.to_dict(), ref_quantization_config.to_dict())
+
+    @unittest.skipIf(is_nncf_version("<", "3.5.0.dev0"), "NNCF version does not support scoped configs")
+    def test_ovmodel_4bit_compression_with_scoped_configs(self):
+        quantization_config = OVWeightQuantizationConfig(
+            bits=4,
+            sym=False,
+            group_size=32,
+            scoped_configs=[{"patterns": [".*mlp.*"], "bits": 8, "sym": False, "group_size": -1}],
+        )
+        model = OVModelForCausalLM.from_pretrained(
+            MODEL_NAMES["gpt2"], export=True, quantization_config=quantization_config
+        )
+        check_compression_state_per_model(self, model.ov_models, {"model": {"int8": 24, "int4": 20}})
 
     @parameterized.expand(((OVModelForCausalLM, "gpt2"),))
     def test_ovmodel_stateful_load_with_compressed_weights(self, model_cls, model_type):
@@ -2631,6 +2648,18 @@ class OVQuantizationConfigTest(unittest.TestCase):
             loaded_ov_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
             self.compare_objects(ov_config.quantization_config, loaded_ov_config.quantization_config)
 
+    @unittest.skipIf(is_nncf_version("<", "3.5.0.dev0"), "NNCF version does not support scoped configs")
+    def test_config_serialization_with_scoped_configs(self):
+        quantization_config = OVWeightQuantizationConfig(
+            bits=4,
+            scoped_configs=[{"patterns": [".*self_attn.*"], "bits": 8, "sym": False, "group_size": -1}],
+        )
+        ov_config = OVConfig(quantization_config=quantization_config)
+        with TemporaryDirectory() as tmp_dir:
+            ov_config.save_pretrained(tmp_dir)
+            loaded_ov_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
+            self.compare_objects(ov_config.quantization_config, loaded_ov_config.quantization_config)
+
     @parameterized.expand(QUANTIZATION_CONFIG_DICTS)
     def test_config_from_dict(self, quantization_config: dict, config_type: type, warning_log: Union[str, None]):
         from optimum.intel.openvino.configuration import logger as configuration_logger
@@ -2721,6 +2750,21 @@ class OVQuantizationConfigTest(unittest.TestCase):
             expected_kwargs = {"param1": "value1", "param2": "new_value2", "param3": "value3", dataset_key: None}
 
             mock_method.assert_called_once_with(mock_model, **expected_kwargs)
+
+    @parameterized.expand(
+        [
+            ("not_a_list", {"patterns": [".*self_attn.*"]}),
+            ("not_a_dict", [["patterns", [".*self_attn.*"]]]),
+            ("unknown_key", [{"patterns": [".*self_attn.*"], "mode": "int8_asym"}]),
+            ("invalid_bits", [{"patterns": [".*self_attn.*"], "bits": 5}]),
+            ("invalid_sym", [{"patterns": [".*self_attn.*"], "bits": 2, "sym": False}]),
+            ("invalid_group_size", [{"patterns": [".*self_attn.*"], "group_size": 0}]),
+        ]
+    )
+    @unittest.skipIf(is_nncf_version("<", "3.5.0.dev0"), "NNCF version does not support scoped configs")
+    def test_invalid_scoped_configs(self, _, scoped_configs):
+        with self.assertRaises(ValueError):
+            OVWeightQuantizationConfig(bits=4, scoped_configs=scoped_configs)
 
     def compare_config_dict_to_config_object(self, config_dict: dict, config_obj: OVQuantizationConfigBase):
         if "quantization_configs" in config_dict:
