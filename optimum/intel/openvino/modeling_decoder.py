@@ -855,6 +855,23 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         # The forward pass runs through an OpenVINO InferRequest and cannot be compiled with torch.compile.
         return False
 
+    def _get_initial_cache_position(self, *args, **kwargs):
+        model_kwargs = kwargs.get("model_kwargs", args[-1] if args else None)
+        past_key_values = model_kwargs.get("past_key_values")
+        if self.stateful and isinstance(past_key_values, (tuple, list)):
+            if model_kwargs.get("cache_position") is None:
+                # The stateful cache is a marker; its length is tracked by the OpenVINO model.
+                cache_kwargs = {**model_kwargs, "past_key_values": None}
+                cache_args = args if "model_kwargs" in kwargs else args[:-1]
+                cache_kwargs = super()._get_initial_cache_position(
+                    *cache_args, **{**kwargs, "model_kwargs": cache_kwargs}
+                )
+                model_kwargs["cache_position"] = cache_kwargs["cache_position"][
+                    self._get_past_length(past_key_values) :
+                ]
+            return model_kwargs
+        return super()._get_initial_cache_position(*args, **kwargs)
+
     def _prefill(self, input_ids, generation_config, model_kwargs, **kwargs):
         if (
             isinstance(model_kwargs.get("past_key_values"), (tuple, list))
