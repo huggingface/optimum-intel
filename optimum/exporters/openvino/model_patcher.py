@@ -9192,6 +9192,7 @@ class GptOssModelPatcher(OVDecoderModelPatcher):
 # conversion. It runs a single unified code path for both prefill and decoding stages.
 # It is also used for `NemotronHMamba2Mixer`, which has the same projections and parameters.
 # `time_step_limit` overrides the `(min, max)` range used to clamp `dt`, `self.time_step_limit` by default.
+# With `clamp_single_token=False`, calls with a single token in all (batch x sequence) keep `dt` unclamped.
 def granite_moe_hybrid_mamba_mixer_forward(
     self,
     hidden_states: torch.Tensor,
@@ -9200,6 +9201,7 @@ def granite_moe_hybrid_mamba_mixer_forward(
     recurrent_state: Optional[torch.Tensor] = None,
     attention_mask: Optional[torch.Tensor] = None,
     time_step_limit: Optional[Tuple[float, float]] = None,
+    clamp_single_token: bool = True,
 ):
     batch_size, seq_len, _ = hidden_states.shape
 
@@ -9237,7 +9239,13 @@ def granite_moe_hybrid_mamba_mixer_forward(
     A = -torch.exp(self.A_log.float())  # (num_heads,)
     dt = torch.nn.functional.softplus(dt + self.dt_bias)  # (B, T, num_heads)
     time_step_limit = self.time_step_limit if time_step_limit is None else time_step_limit
-    dt = torch.clamp(dt, time_step_limit[0], time_step_limit[1]).float()
+    clamped_dt = torch.clamp(dt, time_step_limit[0], time_step_limit[1])
+    if not clamp_single_token:
+        # true when the call has more than one token in all: the paged attention layout is [tokens, 1], so a decode
+        # step of one sequence has a single token there too. As a tensor, the condition stays dynamic in the graph
+        is_multi_token = torch.ones_like(dt[:, :, :1]).sum() > 1
+        clamped_dt = torch.where(is_multi_token, clamped_dt, dt)
+    dt = clamped_dt.float()
 
     x = hidden_states_ssm.reshape(batch_size, seq_len, self.num_heads, self.head_dim).float()
     B = B.reshape(batch_size, seq_len, self.n_groups, self.ssm_state_size).float()
@@ -9273,6 +9281,8 @@ def granite_moe_hybrid_mamba_mixer_forward(
 class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
     # `(min, max)` range used to clamp `dt` in the Mamba2 mixers, `None` keeps each mixer's `time_step_limit`
     _mamba_time_step_limit = None
+    # whether calls with a single token also clamp `dt`
+    _mamba_clamp_single_token = True
     # 2D attention mask of the traced forward, used by the Mamba2 mixers to zero the padding tokens
     _mamba_attention_mask = None
 
@@ -9453,6 +9463,7 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
                     recurrent_state,
                     raw_attention_mask,
                     time_step_limit=self._mamba_time_step_limit,
+                    clamp_single_token=self._mamba_clamp_single_token,
                 )
                 if cache_params is not None:
                     mamba_idx = cache_params.mamba_mapping[mamba_layer.layer_idx]
@@ -9503,10 +9514,12 @@ class NemotronHModelPatcher(GraniteMoeHybridModelPatcher):
     """
     NemotronH shares the cache layout and the Mamba2 mixer of GraniteMoeHybrid. Differences:
     - each layer has a single mixer, so the Mamba2 mixers are selected by block type;
-    - `dt` is clamped at `config.time_step_min`, as in the PyTorch path of transformers (prefill and decode up to
-      5.14, prefill only since 5.15). NVIDIA's implementation, mamba_ssm and vLLM use `config.time_step_limit`
-      instead, (0, inf) for the released models, and https://github.com/huggingface/transformers/pull/48989 would
-      switch transformers to it. Update this clamp if it is merged;
+    - `dt` is clamped at `config.time_step_min` as in the PyTorch path of transformers: in every call up to 5.14, and
+      since 5.15 only in calls with more than one token, as its single-token update does not clamp. Several sequences
+      in one call, as a batch or with continuous batching, count as several tokens. NVIDIA's implementation,
+      mamba_ssm and vLLM use `config.time_step_limit` instead, (0, inf) for the released models, and
+      https://github.com/huggingface/transformers/pull/48989 would switch transformers to it. Update this clamp if it
+      is merged;
     - the experts are also patched before transformers 5.13, with `ov_batched_mm`.
     """
 
@@ -9518,6 +9531,7 @@ class NemotronHModelPatcher(GraniteMoeHybridModelPatcher):
     ):
         super().__init__(config, model, model_kwargs)
         self._mamba_time_step_limit = (self._model.config.time_step_min, float("inf"))
+        self._mamba_clamp_single_token = is_transformers_version("<", "5.15")
 
     def _get_mamba_layers(self):
         return [
