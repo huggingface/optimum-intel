@@ -625,6 +625,9 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
     # projections of the experts would keep their original precision
     "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16": {"bits": 4, "sym": False, "group_size": 64},
     "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16": {"bits": 4, "sym": False, "group_size": 64},
+    # The hidden size, 3136, is not a multiple of 128: with the default group size, about half of the weights would
+    # keep their original precision
+    "nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16": {"bits": 4, "sym": False, "group_size": 64},
 }
 
 _DEFAULT_8BIT_WQ_CONFIGS = {
