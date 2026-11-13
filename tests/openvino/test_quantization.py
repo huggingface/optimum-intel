@@ -2688,9 +2688,9 @@ class OVQuantizationConfigTest(unittest.TestCase):
     @parameterized.expand(
         [
             # (installed NNCF version, quantization config, the NNCF version expected to be missing)
-            # Group-wise int8 weight compression needs the NNCF 3.5.0 release: a development build may predate it
+            # Group-wise int8 weight compression needs NNCF 3.5.0, development builds of it are accepted too
             ("3.4.0", {"bits": 8, "group_size": 32}, "3.5.0"),
-            ("3.5.0.dev0+74dc78a2f", {"bits": 8, "group_size": 32}, "3.5.0"),
+            ("3.5.0.dev0+74dc78a2f", {"bits": 8, "group_size": 32}, None),
             ("3.5.0", {"bits": 8, "group_size": 32}, None),
             # Per-channel int8 and group-wise int4 weight compression do not need it
             ("3.4.0", {"bits": 8, "group_size": -1}, None),
