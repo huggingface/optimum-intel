@@ -5055,9 +5055,11 @@ class Qwen3OmniMoeAudioEncoderPatcher(ModelPatcher):
             cu_seqlens: torch.Tensor = None,
         ) -> torch.Tensor:
             # `n_window_infer`-based windowed attention.
-            # Post-convolution tokens of every conv chunk are flattened into one sequence,
-            # which lets each window described by `cu_seqlens` attend bidirectionally
-            # across the chunks it contains, while blocking attention between windows.
+            # Windows are moved into the batch dimension, `_prepare_inputs` should pad every
+            # audio's chunk count up to a multiple of R = n_window_infer // (n_window * 2),
+            # so a window is exactly R consecutive conv chunks and never spans two audios.
+            # Each window then is processed independently with a per-window padding mask.
+            R = self.n_window_infer // (self.n_window * 2)
             padded_feature = padded_feature.unsqueeze(1)
             padded_embed = torch.nn.functional.gelu(self.conv2d1(padded_feature))
             padded_embed = torch.nn.functional.gelu(self.conv2d2(padded_embed))
@@ -5072,38 +5074,18 @@ class Qwen3OmniMoeAudioEncoderPatcher(ModelPatcher):
             )
             padded_embed = padded_embed + positional_embedding
 
-            # Merge the padded (batch, time) chunk layout into a single attention sequence and
-            # build the block-diagonal mask from `cu_seqlens`. This reproduces the reference's
-            # flattened windowed attention without the data-dependent boolean gather that breaks
-            # OpenVINO tracing.
             batch, aftercnn_time, embed_dim = padded_embed.shape
-            seq_len = batch * aftercnn_time
+            num_windows = batch // R
+            window_len = R * aftercnn_time
 
-            padded_mask_bool = padded_mask_after_cnn.bool()
-            # Compacted index of every (chunk, position) tile, matching the flattened layout the
-            # reference builds its `cu_seqlens` windows over: valid tokens are left-aligned per
-            # chunk, so a tile's compact index is the number of valid tokens in earlier chunks
-            # plus its in-chunk position.
-            valid_counts = padded_mask_bool.sum(dim=1)
-            chunk_offsets = torch.cumsum(valid_counts, dim=0) - valid_counts
-            positions = torch.arange(aftercnn_time, device=padded_embed.device)
-            compact_index = chunk_offsets.unsqueeze(1) + positions.unsqueeze(0)
-            window_bounds = cu_seqlens[1:].to(compact_index.dtype)
-            window_id = (compact_index.unsqueeze(-1) >= window_bounds.view(1, 1, -1)).sum(dim=-1).reshape(seq_len)
-            valid_flat = padded_mask_bool.reshape(seq_len)
+            hidden_states = padded_embed.reshape(num_windows, window_len, embed_dim)
 
-            # Keys are masked by validity and shared window; queries are not masked so padded rows
-            # keep at least their identity entry (added below) and never produce all `-inf` softmax
-            # rows. Padded query outputs are zeroed out after the projection anyway.
-            same_window = window_id.unsqueeze(0) == window_id.unsqueeze(1)
-            allowed = (same_window & valid_flat.unsqueeze(0)) | torch.eye(
-                seq_len, dtype=torch.bool, device=padded_embed.device
+            window_valid = padded_mask_after_cnn.bool().reshape(num_windows, window_len)
+            attention_mask = torch.zeros(
+                (num_windows, window_len), dtype=padded_embed.dtype, device=padded_embed.device
             )
-            attention_mask = torch.zeros((seq_len, seq_len), dtype=padded_embed.dtype, device=padded_embed.device)
-            attention_mask = attention_mask.masked_fill(~allowed, torch.finfo(padded_embed.dtype).min)
-            attention_mask = attention_mask.view(1, 1, seq_len, seq_len)
-
-            hidden_states = padded_embed.reshape(1, seq_len, embed_dim)
+            attention_mask = attention_mask.masked_fill(~window_valid, torch.finfo(padded_embed.dtype).min)
+            attention_mask = attention_mask.view(num_windows, 1, 1, window_len)
 
             for encoder_layer in self.layers:
                 layer_outputs = encoder_layer(hidden_states, attention_mask=attention_mask)

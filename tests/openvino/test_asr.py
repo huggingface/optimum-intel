@@ -42,6 +42,24 @@ class OVASRTest(unittest.TestCase):
         audio_data = (0.5 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
         return audio_data, sample_rate
 
+    def _generate_varying_audio_data(self):
+        """Speech-like signal whose spectral content varies across attention windows.
+
+        Generates a 120-second linear signal with an instantaneous frequency
+        sweeping from 200 Hz to 3000 Hz at a 16 kHz sample rate. This provides
+        varying spectral content across attention windows.
+        """
+        np.random.seed(SEED)
+        sample_rate = 16000
+        duration = 120
+        t = np.linspace(0, duration, sample_rate * duration, endpoint=False)
+        f0, f1 = 200.0, 3000.0
+        sweep_rate = (f1 - f0) / duration
+        instantaneous_phase = 2 * np.pi * (f0 * t + 0.5 * sweep_rate * t**2)
+        envelope = 0.5 * (1.0 + 0.5 * np.sin(2 * np.pi * 0.5 * t))
+        audio_data = (envelope * np.sin(instantaneous_phase)).astype(np.float32)
+        return audio_data, sample_rate
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @pytest.mark.skipif(
         is_transformers_version("<", "4.57") or is_transformers_version(">=", "4.58"),
@@ -244,13 +262,16 @@ class OVASRTest(unittest.TestCase):
         attention genuinely crosses conv chunks inside a window while staying isolated across
         windows.
         """
-        from qwen_asr.core.transformers_backend.modeling_qwen3_asr import Qwen3ASRForConditionalGeneration
+        from qwen_asr.core.transformers_backend.modeling_qwen3_asr import (
+            Qwen3ASRAudioAttention,
+            Qwen3ASRForConditionalGeneration,
+        )
 
         model_id = MODEL_NAMES["qwen3_asr"]
         set_seed(SEED)
 
         processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
-        audio_data, sample_rate = self._generate_audio_data()
+        audio_data, sample_rate = self._generate_varying_audio_data()
         text_prompt = processor.apply_chat_template(
             [
                 {"role": "system", "content": ""},
@@ -263,12 +284,40 @@ class OVASRTest(unittest.TestCase):
         input_features = inputs["input_features"]
         feature_attention_mask = inputs["feature_attention_mask"]
 
-        # Reference audio features: the qwen_asr encoder applies windowed cross-chunk attention.
         pt_model = Qwen3ASRForConditionalGeneration.from_pretrained(model_id, trust_remote_code=True).eval()
-        with torch.no_grad():
-            ref_features = pt_model.thinker.get_audio_features(
-                input_features, feature_attention_mask=feature_attention_mask
+        orig_attn_forward = Qwen3ASRAudioAttention.forward
+
+        # Qwen3ASRAudioAttention.forward is patched to enable windowed path, as
+        # original `_attn_implementation="flash_attention_2"` which uses windowed path
+        # requires CUDA. The patched block-diagonal mask produces identical windowing.
+        def windowed_attn_forward(self, hidden_states, cu_seqlens=None, attention_mask=None, **kwargs):
+            if attention_mask is None and cu_seqlens is not None:
+                seq_length = hidden_states.shape[0]
+                attention_mask = torch.full(
+                    (1, 1, seq_length, seq_length),
+                    torch.finfo(hidden_states.dtype).min,
+                    dtype=hidden_states.dtype,
+                    device=hidden_states.device,
+                )
+                for i in range(1, len(cu_seqlens)):
+                    start, end = int(cu_seqlens[i - 1]), int(cu_seqlens[i])
+                    attention_mask[..., start:end, start:end] = 0
+            return orig_attn_forward(
+                self, hidden_states, cu_seqlens=cu_seqlens, attention_mask=attention_mask, **kwargs
             )
+
+        audio_tower = pt_model.thinker.audio_tower
+        audio_tower.config._attn_implementation = "eager"
+        for layer in audio_tower.layers:
+            layer.self_attn.config._attn_implementation = "eager"
+        Qwen3ASRAudioAttention.forward = windowed_attn_forward
+        try:
+            with torch.no_grad():
+                ref_features = pt_model.thinker.get_audio_features(
+                    input_features, feature_attention_mask=feature_attention_mask
+                )
+        finally:
+            Qwen3ASRAudioAttention.forward = orig_attn_forward
 
         ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
             model_id, export=True, trust_remote_code=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
@@ -303,12 +352,12 @@ class OVASRTest(unittest.TestCase):
 
         # Perturb a chunk inside the SAME window as chunk 0 -> chunk 0 output must change.
         same_window = enc_inputs["padded_feature"].clone()
-        same_window[1] = torch.randn_like(same_window[1]) + 2.0
+        same_window[1] = 10.0 * torch.randn_like(same_window[1]) + 20.0
         same_change = float((base[0, :len0] - run_raw(same_window)[0, :len0]).abs().max())
 
         # Perturb a chunk in a DIFFERENT window -> chunk 0 output must stay unchanged.
         other_window = enc_inputs["padded_feature"].clone()
-        other_window[chunks_per_window] = torch.randn_like(other_window[chunks_per_window]) + 2.0
+        other_window[chunks_per_window] = 10.0 * torch.randn_like(other_window[chunks_per_window]) + 20.0
         other_change = float((base[0, :len0] - run_raw(other_window)[0, :len0]).abs().max())
 
         self.assertLess(other_change, 1e-6, "attention leaked across windows")
