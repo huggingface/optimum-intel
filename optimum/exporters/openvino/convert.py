@@ -155,6 +155,12 @@ def _set_runtime_options(
             and getattr(getattr(sub_export_config, "_config", None), "export_model_type", None) == "fun_asr"
         ):
             sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "4.0"
+        # SenseVoiceSmall overflows fp16 on GPU (NaN logits); avoid the 8.0 exporter default, as for Fun-ASR-Nano.
+        if (
+            library_name == "funasr"
+            and getattr(getattr(sub_export_config, "_config", None), "export_model_type", None) == "sense_voice"
+        ):
+            sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "4.0"
 
 
 def _save_model(
