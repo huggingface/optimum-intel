@@ -94,6 +94,17 @@ jobs:
           uv pip install "transformers>=5.21"
           pytest tests/openvino/test_quantization.py tests/openvino/test_cb_compatible.py -k "minicpm_ocr" --durations=0
 
+      - name: BAGEL Validation
+        run: |
+          uv pip install "transformers>=5.23"
+          pytest tests/openvino/${{ matrix.test-pattern }} -k "bagel" --durations=0
+
+      - name: BAGEL Quantization Validation
+        if: ${{ matrix.test-pattern == '*export*' }}
+        run: |
+          uv pip install "transformers>=5.23"
+          pytest tests/openvino/test_quantization.py -k "bagel" --durations=0
+
       - name: Scoped Config Validation with NNCF develop
         run: |
           uv pip install "nncf @ git+https://github.com/openvinotoolkit/nncf.git@develop"

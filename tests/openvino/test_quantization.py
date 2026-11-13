@@ -1209,6 +1209,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForCausalLM, "lfm3", True),
         (OVModelForVisualCausalLM, "lfm3_vl", True),
         (OVModelForVisualCausalLM, "lfm3_omni", True),
+        (OVModelForVisualCausalLM, "bagel", False),
     ]
 
     # gemma3n openvino>=2026.2.0 because it needs erfinv operation,
@@ -1565,9 +1566,14 @@ class OVWeightCompressionTest(unittest.TestCase):
                 model.visual_model._openvino_config.quantization_config.default_config.to_dict(), ref_config
             )
         else:
-            actual_config = model._openvino_config.quantization_config.default_config.to_dict()
-            actual_config["tokenizer"] = actual_config["processor"] = None
-            self.assertEqual(actual_config, ref_config)
+            default_config = model._openvino_config.quantization_config.default_config
+            if model_type == "bagel":
+                # BAGEL compresses its language model only
+                self.assertIsNone(default_config)
+            else:
+                actual_config = default_config.to_dict()
+                actual_config["tokenizer"] = actual_config["processor"] = None
+                self.assertEqual(actual_config, ref_config)
 
         if model_type != "open-clip":  # ticket 161043
             check_optimization_not_applicable_to_optimized_model(model, quantization_config={"bits": 8})
