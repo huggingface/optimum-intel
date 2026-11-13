@@ -180,6 +180,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("image-text-to-text", "ministral3"),
         ("text-to-image", "z-image"),
         ("image-text-to-text", "muse_glimmer"),
+        ("image-text-to-text", "minicpmv4_6"),
         ("image-text-to-text", "minicpmv4_7"),
         ("image-text-to-text", "minicpm_ocr"),
     ]
@@ -263,6 +264,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "qwen3_vl_eagle3": 0,
         "qwen3_vl_embedding": 2,
         "muse_glimmer": 2,
+        "minicpmv4_6": 2,
         "minicpmv4_7": 2,
         "minicpm_ocr": 2,
     }

@@ -3138,6 +3138,10 @@ def maira_vision_embed_forward(self, pixel_values):
 
 
 class LlavaImageEmbeddingModelPatcher(ModelPatcher):
+    # Traced forward used to export the image-embedding submodel. Subclasses
+    # only override this to reuse the identical save/restore logic below.
+    _patched_forward = staticmethod(llava_vision_embed_forward)
+
     def __init__(
         self,
         config: "OpenVINOConfig",
@@ -3145,7 +3149,7 @@ class LlavaImageEmbeddingModelPatcher(ModelPatcher):
         model_kwargs: Dict[str, Any],
     ):
         model.__orig_forward = model.forward
-        model.forward = types.MethodType(llava_vision_embed_forward, model)
+        model.forward = types.MethodType(type(self)._patched_forward, model)
         super().__init__(config, model, model_kwargs)
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -4082,6 +4086,94 @@ class MiniCPMVImageEmbeddingsModelPatcher(ModelPatcher):
         if is_torch_version(">=", "2.0.0"):
             for layer in self._model.encoder.layers:
                 layer.self_attn.forward = layer.self_attn._orig_forward
+
+
+def _minicpmv4_6_vision_embeddings_forward(self, pixel_values, position_ids, window_index, merge_index):
+    """Traceable forward for the MiniCPM-V-4.6 vision tower + merger.
+
+    Runs the whole ``get_image_features`` pipeline (patch embeddings, encoder,
+    intermediate window-attention merger, remaining encoder, post layernorm and
+    the final downsample merger) for a single NaViT-packed image.
+
+    The data-dependent index tensors (``position_ids`` for the interpolated
+    position embeddings, ``window_index`` for the window-attention merger and
+    ``merge_index`` for the final merger) are precomputed on the runtime side
+    and passed as inputs, so the traced graph stays dynamic w.r.t. the number
+    of visual patches. All spatial ``reshape``/``permute`` groupings of the
+    original implementation are expressed as ``index_select`` + ``reshape`` so
+    the graph is valid for any image resolution.
+
+    Original implementations:
+    https://github.com/huggingface/transformers/blob/v5.22.1/src/transformers/models/minicpmv4_6/modeling_minicpmv4_6.py#L80-L93
+    https://github.com/huggingface/transformers/blob/v5.22.1/src/transformers/models/minicpmv4_6/modeling_minicpmv4_6.py#L170-L234
+    https://github.com/huggingface/transformers/blob/v5.22.1/src/transformers/models/minicpmv4_6/modeling_minicpmv4_6.py#L247-L268
+    https://github.com/huggingface/transformers/blob/v5.22.1/src/transformers/models/minicpmv4_6/modeling_minicpmv4_6.py#L355-L393
+    https://github.com/huggingface/transformers/blob/v5.22.1/src/transformers/models/minicpmv4_6/modeling_minicpmv4_6.py#L445-L491
+    https://github.com/huggingface/transformers/blob/v5.22.1/src/transformers/models/minicpmv4_6/modeling_minicpmv4_6.py#L505-L570
+    https://github.com/huggingface/transformers/blob/v5.22.1/src/transformers/models/minicpmv4_6/modeling_minicpmv4_6.py#L604-L661
+    """
+    vision_tower = self.model.vision_tower
+    merger = self.model.merger
+    window_h, window_w = vision_tower.vit_merger.window_kernel_size
+    window_size = window_h * window_w
+    merge_h, merge_w = merger.merge_kernel_size
+
+    # patch embeddings + interpolated position embeddings
+    patch_embeds = vision_tower.embeddings.patch_embedding(pixel_values)
+    hidden_states = patch_embeds.flatten(2).transpose(1, 2)
+    hidden_states = hidden_states + vision_tower.embeddings.position_embedding(position_ids)
+
+    insert_layer_id = vision_tower.config.insert_layer_id
+    for layer_index, encoder_layer in enumerate(vision_tower.encoder.layers):
+        residual = hidden_states
+        hidden_states = encoder_layer.layer_norm1(hidden_states)
+        hidden_states, _ = _minicpmv4_7_vision_attention_forward(encoder_layer.self_attn, hidden_states)
+        hidden_states = residual + hidden_states
+        residual = hidden_states
+        hidden_states = encoder_layer.layer_norm2(hidden_states)
+        hidden_states = encoder_layer.mlp(hidden_states)
+        hidden_states = residual + hidden_states
+
+        if layer_index == insert_layer_id:
+            vit_merger = vision_tower.vit_merger
+            residual = hidden_states
+            merged = vit_merger.layer_norm1(hidden_states)
+            merged = merged.index_select(1, window_index)
+            batch, seq_len, embed_dim = merged.shape
+            merged = merged.reshape(-1, window_size, embed_dim)
+            merged, _ = _minicpmv4_7_vision_attention_forward(vit_merger.self_attn, merged)
+            merged = merged.reshape(batch, seq_len, embed_dim)
+            merged = merged.index_select(1, torch.argsort(window_index))
+            hidden_states = residual + merged
+            # channel-wise 2x2 window merge expressed as index_select + reshape
+            regrouped = hidden_states[0].index_select(0, window_index)
+            embed_dim = regrouped.shape[-1]
+            merged_tokens = regrouped.reshape(-1, window_size * embed_dim)
+            merge_residual = regrouped.reshape(-1, window_size, embed_dim).mean(dim=1)
+            merged_tokens = vit_merger.pre_norm(merged_tokens)
+            merged_tokens = vit_merger.linear_1(merged_tokens)
+            merged_tokens = vit_merger.act(merged_tokens)
+            merged_tokens = vit_merger.linear_2(merged_tokens)
+            hidden_states = (merged_tokens + merge_residual).unsqueeze(0)
+
+    hidden_states = vision_tower.post_layernorm(hidden_states)
+
+    # final downsample merger (16x mode) expressed as index_select + reshape
+    downsample_mlp = merger.mlp[0]
+    regrouped = hidden_states[0].index_select(0, merge_index)
+    embed_dim = regrouped.shape[-1]
+    merged_tokens = regrouped.reshape(-1, merge_h * merge_w * embed_dim)
+    merged_tokens = downsample_mlp.pre_norm(merged_tokens).view(-1, downsample_mlp.linear_1.in_features)
+    merged_tokens = downsample_mlp.linear_1(merged_tokens)
+    merged_tokens = downsample_mlp.act(merged_tokens)
+    merged_tokens = downsample_mlp.linear_2(merged_tokens)
+    return merged_tokens
+
+
+class MiniCPMV4_6VisionEmbeddingsModelPatcher(LlavaImageEmbeddingModelPatcher):
+    # Reuses the image-embedding save/restore logic from
+    # LlavaImageEmbeddingModelPatcher; only the traced forward differs.
+    _patched_forward = staticmethod(_minicpmv4_6_vision_embeddings_forward)
 
 
 class LlavaQwen2ImageEmbeddingsModelPatcher(ModelPatcher):
@@ -11574,6 +11666,12 @@ def qwen3_5_gated_delta_net_forward(
     attention_mask: Optional[torch.Tensor] = None,
     **kwargs,
 ):
+    """Replace recurrent attention and convolution with OpenVINO tracing operations.
+
+    Original Qwen3_5GatedDeltaNet.forward:
+    https://github.com/huggingface/transformers/blob/v5.22.1/src/transformers/models/qwen3_5/modeling_qwen3_5.py#L536
+    """
+
     def apply_mask_to_padding_states(hidden_states, attention_mask):
         """
         Tunes out the hidden states for padding tokens, see https://github.com/state-spaces/mamba/issues/66
@@ -11591,19 +11689,11 @@ def qwen3_5_gated_delta_net_forward(
     batch_size, seq_len, _ = hidden_states.shape
 
     # getting projected states from cache if it exists
-    layer_idx = None
     recurrent_state = None
     if cache_params is not None:
-        if hasattr(cache_params, "linear_attn_mapping"):
-            # Qwen3_5DynamicCache: states of all linear-attention layers in flat lists
-            layer_idx = cache_params.linear_attn_mapping[self.layer_idx]
-            state_holder = cache_params
-        else:
-            # transformers `DynamicCache` (Qwen3_5DynamicCache was removed): per-layer LinearAttentionLayer
-            layer_idx = 0
-            state_holder = cache_params.layers[self.layer_idx]
-        conv_state = state_holder.conv_states[layer_idx]
-        recurrent_state = state_holder.recurrent_states[layer_idx]
+        state_holder = cache_params.layers[self.layer_idx]
+        conv_state = state_holder.conv_states[0]
+        recurrent_state = state_holder.recurrent_states[0]
 
     mixed_qkv = self.in_proj_qkv(hidden_states)
     mixed_qkv = mixed_qkv.transpose(1, 2)
@@ -11617,7 +11707,7 @@ def qwen3_5_gated_delta_net_forward(
     if cache_params is not None:
         new_mixed_qkv, new_conv_state = ov_causal_conv1d(conv_state, mixed_qkv, self.conv1d.weight, self.conv1d.bias)
         mixed_qkv = F.silu(new_mixed_qkv)
-        state_holder.conv_states[layer_idx] = new_conv_state
+        state_holder.conv_states[0] = new_conv_state
     else:
         mixed_qkv = F.silu(self.conv1d(mixed_qkv)[:, :, :seq_len])
 
@@ -11656,7 +11746,7 @@ def qwen3_5_gated_delta_net_forward(
 
     # Update cache
     if cache_params is not None:
-        state_holder.recurrent_states[layer_idx] = last_recurrent_state
+        state_holder.recurrent_states[0] = last_recurrent_state
 
     # reshape input data into 2D tensor
     core_attn_out = core_attn_out.reshape(-1, self.head_v_dim)
@@ -11669,6 +11759,13 @@ def qwen3_5_gated_delta_net_forward(
 
 
 class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
+    """Expose grouped cache tensors around the original language-model forwards.
+
+    Original Qwen3_5TextModel.forward and Qwen3_5ForCausalLM.forward:
+    https://github.com/huggingface/transformers/blob/v5.22.1/src/transformers/models/qwen3_5/modeling_qwen3_5.py#L1227
+    https://github.com/huggingface/transformers/blob/v5.22.1/src/transformers/models/qwen3_5/modeling_qwen3_5.py#L1681
+    """
+
     def __init__(
         self,
         config: "OpenVINOConfig",
