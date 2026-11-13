@@ -11444,7 +11444,7 @@ def minicpm5_moe_router_forward(self, hidden_states: torch.Tensor) -> tuple[torc
     hidden_states = hidden_states.view(-1, self.config.hidden_size)
     router_logits = F.linear(hidden_states.type(torch.float32), self.weight.type(torch.float32))
     scores = router_logits.sigmoid()
-    # The selection depends only on the differences of the bias values. Their common offset (around 255) is removed,
+    # The selection depends only on the differences of the bias values. Their common offset (170 to 280) is removed,
     # because adding the [0, 1] scores to it loses them in f16, the default inference precision on GPU
     bias = self.e_score_correction_bias - self.e_score_correction_bias.max()
     topk_indices = torch.topk(scores + bias, k=self.top_k, dim=-1, sorted=False)[1]

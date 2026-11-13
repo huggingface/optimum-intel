@@ -171,6 +171,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "lfm3"),
         ("image-text-to-text", "lfm3_vl"),
         ("image-text-to-text", "lfm3_omni"),
+        ("text-generation", "minicpm5_moe"),
+        ("text-generation-with-past", "minicpm5_moe"),
         ("text-generation-with-past", "mamba"),
         ("text-generation-with-past", "falcon_mamba"),
         ("text-to-image", "flux.2-klein"),
@@ -262,6 +264,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "muse_glimmer": 2,
         "minicpmv4_7": 2,
         "minicpm_ocr": 2,
+        "minicpm5_moe": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {

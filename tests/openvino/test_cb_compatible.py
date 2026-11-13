@@ -55,6 +55,11 @@ ARCH_TO_CB_COMPATIBLE_SUBMODELS = {
         "task": "image-text-to-text",
         "submodels": ("language_model",),
     },
+    # full attention MoE with gated attention, remote code only
+    "minicpm5_moe": {
+        "task": "text-generation-with-past",
+        "submodels": ("model",),
+    },
     # hybrid short conv + full / sliding window attention: besides SDPA -> PagedAttention (with the sliding window
     # extracted from the attention mask), the conv layers become PagedCausalConv1D
     "lfm3": {

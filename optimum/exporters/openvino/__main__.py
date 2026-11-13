@@ -569,8 +569,9 @@ def main_export(
                 patch_16bit = True
             loading_kwargs["torch_dtype"] = dtype
             if getattr(config, "model_type", "") == "minicpm5_moe" and trust_remote_code:
-                # The f32 `e_score_correction_bias` of the router has values like 255.35: bf16 rounds them all to 255,
-                # which changes the experts selected for a token
+                # The f32 `e_score_correction_bias` of the router has a large per-layer offset (about 170 to 280) and
+                # differs within a layer by less than 0.5: bf16 rounds it to one or a few values, which changes the
+                # experts selected for a token
                 model_class = get_class_from_dynamic_module(
                     config.auto_map["AutoModelForCausalLM"], model_name_or_path
                 )
