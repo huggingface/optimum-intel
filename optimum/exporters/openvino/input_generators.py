@@ -675,6 +675,15 @@ class DummyLLavaMultiModalProjectorInputGenerator(DummyInputGenerator):
         return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
 
 
+class DummyMistral3VisionInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("pixel_values", "image_sizes")
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "image_sizes":
+            return torch.tensor([[self.height, self.width]] * self.batch_size, dtype=DTYPE_MAPPER.pt(int_dtype))
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
 class DummyMistral3MultiModalProjectorInputGenerator(DummyLLavaMultiModalProjectorInputGenerator):
     def __init__(
         self,

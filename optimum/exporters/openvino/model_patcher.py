@@ -3191,14 +3191,33 @@ class LlavaNextVideoImageEmbeddingModelPatcher(ModelPatcher):
 # Adopted from https://github.com/huggingface/transformers/blob/v5.2.0/src/transformers/models/mistral3/modeling_mistral3.py#L223-L248
 # Mistral3Model.get_image_features() with only projector.norm() applied instead of full projector forward,
 # as the patch_merger cycle block (unfold loop) cannot be traced to OpenVINO IR.
-def mistral3_vision_embed_forward(self, pixel_values):
+def mistral3_vision_embed_forward(self, pixel_values, image_sizes):
     vision_tower = _get_model_attribute(self, "vision_tower")
     multi_modal_projector = _get_model_attribute(self, "multi_modal_projector")
 
     if pixel_values.is_floating_point():
         pixel_values = pixel_values.to(next(vision_tower.parameters()).dtype)
 
-    image_features = vision_tower(pixel_values, output_hidden_states=True)
+    transformer_forward = vision_tower.transformer.forward
+
+    def batched_transformer_forward(inputs_embeds, attention_mask=None, **kwargs):
+        patch_embeds = vision_tower.patch_conv(pixel_values)
+        _, _, height, width = patch_embeds.shape
+        patch_embeds = vision_tower.ln_pre(patch_embeds.flatten(2).transpose(1, 2))
+        patch_sizes = image_sizes // vision_tower.patch_size
+        valid_rows = torch.arange(height) < patch_sizes[:, :1]
+        valid_cols = torch.arange(width) < patch_sizes[:, 1:]
+        valid_patches = (valid_rows[:, :, None] & valid_cols[:, None, :]).flatten(1)
+        attention_mask = torch.zeros(valid_patches.shape, dtype=patch_embeds.dtype)
+        attention_mask = attention_mask.masked_fill(~valid_patches, torch.finfo(patch_embeds.dtype).min)
+        attention_mask = attention_mask[:, None, None, :]
+        return transformer_forward(patch_embeds, attention_mask=attention_mask, **kwargs)
+
+    vision_tower.transformer.forward = batched_transformer_forward
+    try:
+        image_features = vision_tower(pixel_values[:1], output_hidden_states=True)
+    finally:
+        vision_tower.transformer.forward = transformer_forward
 
     vision_feature_layer = self.config.vision_feature_layer
     if isinstance(vision_feature_layer, int):
@@ -3210,7 +3229,7 @@ def mistral3_vision_embed_forward(self, pixel_values):
     if selected_image_feature.is_floating_point():
         selected_image_feature = selected_image_feature.to(multi_modal_projector.norm.weight.dtype)
 
-    image_features = multi_modal_projector.norm(selected_image_feature.squeeze(0))
+    image_features = multi_modal_projector.norm(selected_image_feature)
     return image_features
 
 
