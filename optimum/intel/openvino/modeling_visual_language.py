@@ -496,15 +496,35 @@ class OVQwen3AudioEncoder(OVAudioEncoder):
         chunk_lengths[tail_chunk_index] = feature_lens % (n_window * 2)
         chunk_lengths[chunk_lengths == 0] = n_window * 2
 
-        chunk_list = audio_flat.T.split(chunk_lengths.tolist(), dim=0)
-        padded_feature = torch.nn.utils.rnn.pad_sequence(chunk_list, batch_first=True).transpose(1, 2)
-        chunk_output_lens = _get_feat_extract_output_lengths(chunk_lengths)
+        R = n_window_infer // (n_window * 2)
+        chunk_list = list(audio_flat.T.split(chunk_lengths.tolist(), dim=0))
+        real_output_lens = _get_feat_extract_output_lengths(chunk_lengths).tolist()
+        full_chunk_frames = n_window * 2
+        num_mels = audio_flat.shape[0]
+
+        # Pad every audio's chunk count up to a multiple of R = n_window_infer // (n_window * 2),
+        # by appending empty (fully masked) conv chunks. The appended chunks carry no valid tokens
+        # and are dropped again by `_compact_features`, so they do not change the output.
+        padded_chunk_list = []
+        padded_chunk_output_lens = []
+        cursor = 0
+        for audio_chunk_count in chunk_num.tolist():
+            for _ in range(audio_chunk_count):
+                padded_chunk_list.append(chunk_list[cursor])
+                padded_chunk_output_lens.append(real_output_lens[cursor])
+                cursor += 1
+            for _ in range((-audio_chunk_count) % R):
+                padded_chunk_list.append(audio_flat.new_zeros(full_chunk_frames, num_mels))
+                padded_chunk_output_lens.append(0)
+
+        padded_feature = torch.nn.utils.rnn.pad_sequence(padded_chunk_list, batch_first=True).transpose(1, 2)
+        chunk_output_lens = torch.tensor(padded_chunk_output_lens, dtype=torch.long)
         padded_mask_after_cnn = torch.nn.utils.rnn.pad_sequence(
-            [torch.ones(length, dtype=torch.bool) for length in chunk_output_lens],
+            [torch.ones(length, dtype=torch.bool) for length in padded_chunk_output_lens],
             batch_first=True,
         )
 
-        window_aftercnn = padded_mask_after_cnn.shape[-1] * (n_window_infer // (n_window * 2))
+        window_aftercnn = padded_mask_after_cnn.shape[-1] * R
         cu_chunk_lens = [0]
         for cnn_len in aftercnn_lens:
             cnn_len_val = cnn_len.item()

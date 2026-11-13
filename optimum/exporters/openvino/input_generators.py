@@ -2593,35 +2593,32 @@ class DummyQwen3OmniMoeAudioInputGenerator(DummyInputGenerator):
         batch_size: int = 3,
         **kwargs,
     ):
-        self.batch_size = batch_size
         audio_config = normalized_config.config
         self.num_mels = getattr(audio_config, "num_mel_bins", 128)
         self.time_in = 200  # Mel spectrogram frames (~12.5s audio)
         self.aftercnn_time = self.time_in // 8  # After 3 stride-2 conv layers
         n_window = audio_config.n_window
         n_window_infer = audio_config.n_window_infer
-        window_aftercnn = self.aftercnn_time * (n_window_infer // (n_window * 2))
-        num_full = self.aftercnn_time // window_aftercnn
-        single_batch_chunks = [window_aftercnn] * num_full
-        remainder = self.aftercnn_time % window_aftercnn
-        if remainder != 0:
-            single_batch_chunks.append(remainder)
-        cu_chunk_lens = single_batch_chunks * self.batch_size
+        self.chunks_per_window = n_window_infer // (n_window * 2)
+        self.num_windows = 2
+        self.num_chunks = self.num_windows * self.chunks_per_window
+        window_aftercnn = self.aftercnn_time * self.chunks_per_window
         cumsum = [0]
-        for length in cu_chunk_lens:
-            cumsum.append(cumsum[-1] + length)
+        for _ in range(self.num_windows):
+            cumsum.append(cumsum[-1] + window_aftercnn)
         self._cu_seqlens = cumsum
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name == "padded_feature":
-            return self.random_float_tensor([self.batch_size, self.num_mels, self.time_in], framework=framework)
+            return self.random_float_tensor([self.num_chunks, self.num_mels, self.time_in], framework=framework)
         if input_name == "padded_mask_after_cnn":
             return self.constant_tensor(
-                [self.batch_size, self.aftercnn_time], framework=framework, value=1, dtype=DTYPE_MAPPER.pt("bool")
+                [self.num_chunks, self.aftercnn_time], framework=framework, value=1, dtype=DTYPE_MAPPER.pt("bool")
             )
         if input_name == "aftercnn_lens":
+            # A single audio spanning all dummy windows (aftercnn_lens is per-audio, not per-chunk).
             return self.constant_tensor(
-                [self.batch_size], framework=framework, value=self.aftercnn_time, dtype=DTYPE_MAPPER.pt(int_dtype)
+                [1], framework=framework, value=self.num_chunks * self.aftercnn_time, dtype=DTYPE_MAPPER.pt(int_dtype)
             )
         if input_name == "cu_seqlens":
             import torch
