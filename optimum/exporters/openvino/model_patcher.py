@@ -12379,6 +12379,11 @@ class Qwen3ASRLanguageModelPatcher(OVDecoderModelPatcher):
         del self._model.__orig_forward
 
 
+def _sensevoice_sanm_layers(encoder):
+    """Return all SANM encoder layers of a funasr SenseVoice encoder (`encoders0`, `encoders`, `tp_encoders`)."""
+    return list(encoder.encoders0) + list(encoder.encoders) + list(encoder.tp_encoders)
+
+
 class FunASRModelPatcher(OVSeq2SeqModelPatcher):
     """
     Model patcher for FunASR (e.g. Fun-ASR-Nano) encoder-decoder export.
@@ -12408,7 +12413,7 @@ class FunASRModelPatcher(OVSeq2SeqModelPatcher):
         # Patch SANM encoder self-attention layers to skip masking during trace.
         # The native mask computation uses `lengths.tolist()` which bakes trace-time values as constants,
         # making the graph incompatible with different sequence lengths at inference time.
-        self._sanm_layers = list(sense_voice.encoders0) + list(sense_voice.encoders) + list(sense_voice.tp_encoders)
+        self._sanm_layers = _sensevoice_sanm_layers(sense_voice)
         self._adaptor_blocks = getattr(adaptor, "blocks", None)
 
         def _sanm_forward_no_mask(self, x, mask=None, mask_shfit_chunk=None, mask_att_chunk_encoder=None):
@@ -12541,6 +12546,64 @@ class FunASRModelPatcher(OVSeq2SeqModelPatcher):
                 if hasattr(attn, "_orig_forward"):
                     attn.forward = attn._orig_forward
                     del attn._orig_forward
+
+
+def _sensevoice_sanm_sdpa_forward(self, x, mask, mask_shfit_chunk=None, mask_att_chunk_encoder=None):
+    """SDPA version of funasr `MultiHeadedAttentionSANM.forward` used by SenseVoiceSmall.
+
+    The original attention is `matmul -> masked_fill(-inf) -> softmax -> masked_fill(0) -> matmul`. OpenVINO
+    cannot fuse it into ScaledDotProductAttention because the mask is applied with Select ops. Here the padding
+    mask is turned into an additive float mask and passed to `F.scaled_dot_product_attention`. The post-softmax
+    `masked_fill(mask, 0.0)` is dropped: the mask only covers the key axis, so the masked probabilities are
+    already zero after softmax whenever a sample has at least one valid frame.
+    The FSMN memory branch is unchanged and still uses the original mask.
+    """
+    q_h, k_h, v_h, v = self.forward_qkv(x)
+    fsmn_memory = self.forward_fsmn(v, mask, mask_shfit_chunk)
+
+    attn_mask = None
+    if mask is not None:
+        if mask_att_chunk_encoder is not None:
+            mask = mask * mask_att_chunk_encoder
+        # (batch, 1, time2) with 1 for valid frames -> additive (batch, 1, 1, time2)
+        attn_mask = torch.zeros_like(mask, dtype=q_h.dtype).masked_fill(mask.eq(0), torch.finfo(q_h.dtype).min)
+        attn_mask = attn_mask.unsqueeze(1)
+
+    # The default SDPA scale is d_k ** -0.5, the same scaling the original forward applies to q_h.
+    dropout_p = self.dropout.p if self.training else 0.0
+    attn_output = F.scaled_dot_product_attention(q_h, k_h, v_h, attn_mask=attn_mask, dropout_p=dropout_p)
+    batch_size = attn_output.shape[0]
+    attn_output = attn_output.transpose(1, 2).reshape(batch_size, -1, self.h * self.d_k)
+    return self.linear_out(attn_output) + fsmn_memory
+
+
+class SenseVoiceModelPatcher(ModelPatcher):
+    """
+    Model patcher for SenseVoiceSmall (funasr) CTC export.
+
+    Rewrites the attention of every SANM encoder layer (`encoders0`, `encoders`, `tp_encoders`) to use
+    `F.scaled_dot_product_attention` with an additive padding mask, so the exported IR contains
+    ScaledDotProductAttention ops instead of MatMul + Select + Softmax + Select + MatMul. The `speech_lengths`
+    padding mask is kept, so padded and batched inputs still decode correctly.
+    """
+
+    def __enter__(self):
+        super().__enter__()
+        # Keep any instance-level forward override so __exit__ can restore exactly what was there.
+        self._sanm_attn_overrides = [
+            (layer.self_attn, layer.self_attn.__dict__.get("forward"))
+            for layer in _sensevoice_sanm_layers(self._model.encoder)
+        ]
+        for attn, _ in self._sanm_attn_overrides:
+            attn.forward = types.MethodType(_sensevoice_sanm_sdpa_forward, attn)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for attn, orig_forward in self._sanm_attn_overrides:
+            if orig_forward is None:
+                del attn.forward  # fall back to the class method
+            else:
+                attn.forward = orig_forward
 
 
 class KokoroModelPatcher(ModelPatcher):
