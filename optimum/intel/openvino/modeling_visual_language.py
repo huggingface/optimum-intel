@@ -9151,13 +9151,19 @@ class OVBagelModelPart(OVModelPart):
 
     _infer_request = None
 
-    def forward(self, inputs: Dict[str, np.ndarray]) -> Dict[str, np.ndarray]:
+    def compile(self):
+        if self.request is None and "NPU" in self._device:
+            # NPUW_BAGEL compiles static-shape variants of the dynamic models (openvinotoolkit/openvino#39661)
+            self.ov_config = {"NPU_USE_NPUW": "YES", "NPUW_BAGEL": "YES", **self.ov_config}
+        super().compile()
+
+    def forward(self, inputs: Dict[str, np.ndarray], outputs: Optional[List[str]] = None) -> Dict[str, np.ndarray]:
         self.compile()
         if self._infer_request is None:
             self._infer_request = self.request.create_infer_request()
         self._infer_request.infer(inputs)
         # copies: the request reuses its output buffers, while KV caches outlive the call
-        return {name: self._infer_request.get_tensor(name).data.copy() for name in self.output_names}
+        return {name: self._infer_request.get_tensor(name).data.copy() for name in outputs or self.output_names}
 
     def clear_requests(self):
         super().clear_requests()
@@ -9299,7 +9305,9 @@ class _OVBagelForCausalLM(OVModelForVisualCausalLM):
                 "attention_mask": mask[None, None].astype(np.float32),
                 "position_ids": np.asarray(position_ids, np.int64),
                 **context.past,
-            }
+            },
+            # denoising steps discard the KV cache, so it is not read
+            None if keep else ["v_t"],
         )
         if keep:
             context.past = {
@@ -9478,7 +9486,10 @@ class _OVBagelForCausalLM(OVModelForVisualCausalLM):
                 processors.append(TopPLogitsWarper(generation_config.top_p))
 
         context = self._new_context()
-        logits = self._add_prompt(context, sequence, pixel_values, image_position_ids, image_num_patches)
+        # the last prompt token runs as a decode step: NPUW_BAGEL only computes logits for decode-sized calls
+        if sequence.shape[1] > 1:
+            self._add_prompt(context, sequence[:, :-1], pixel_values, image_position_ids, image_num_patches)
+        logits = self._add_text(context, sequence[:, -1:])["logits"]
         for step in range(max_new_tokens):
             scores = torch.from_numpy(logits[-1:]).float()
             if step < min_new_tokens and eos:
