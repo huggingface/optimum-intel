@@ -619,6 +619,52 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         image = pipeline(**inputs).images[0]
         self.assertTupleEqual(image.size, (32, 32))
 
+    @require_diffusers
+    @unittest.skipIf(is_diffusers_version("<", "0.41.0.dev0"), reason="Qwen-Image-2.1 requires diffusers>=0.41.0")
+    def test_qwenimage21_prefix_kv_cache(self):
+        pipeline = self.OVMODEL_CLASS.from_pretrained(
+            MODEL_NAMES["qwenimage21"], ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+        transformer = pipeline.transformer
+        self.assertTrue(transformer.has_prefix_cache)
+        # one state variable per block and per key/value, which the graph fills with the prefix keys/values itself
+        num_layers = transformer.config.num_layers
+        self.assertEqual(len(transformer.model.get_variables()), 2 * num_layers)
+        self.assertEqual(len(transformer.model.get_sinks()), 2 * num_layers)
+        output_names = [name for output in transformer.model.outputs for name in output.names]
+        self.assertEqual(output_names, ["out_hidden_states"])
+
+        processed_tokens = []
+        transformer_forward = transformer.forward
+
+        def forward(*args, **kwargs):
+            outputs = transformer_forward(*args, **kwargs)
+            processed_tokens.append((kwargs["kv_cache_mode"], outputs[0].shape[1]))
+            return outputs
+
+        transformer.forward = forward
+        inputs = self.generate_inputs(height=64, width=64, batch_size=2, model_type="qwenimage21")
+        inputs.update(num_inference_steps=3, true_cfg_scale=4.0, negative_prompt=["blurry"] * 2, output_type="latent")
+        cached = pipeline(**inputs, generator=get_generator("pt", SEED)).images
+        # the first step runs the full joint sequence for both CFG passes, the later steps only the target tokens
+        num_target = cached.shape[1]
+        self.assertEqual([mode for mode, _ in processed_tokens], ["extract"] * 2 + ["cached"] * 4)
+        self.assertTrue(all(tokens > num_target for _, tokens in processed_tokens[:2]))
+        self.assertTrue(all(tokens == num_target for _, tokens in processed_tokens[2:]))
+
+        # the next generation reuses the per-pass infer requests and refills their cache
+        requests = dict(transformer._cache_requests)
+        self.assertEqual(set(requests), {"cond", "uncond"})
+        cached_again = pipeline(**inputs, generator=get_generator("pt", SEED)).images
+        self.assertTrue(all(transformer._cache_requests[name] is request for name, request in requests.items()))
+        np.testing.assert_array_equal(cached, cached_again)
+
+        uncached = pipeline(**inputs, use_kv_cache=False, generator=get_generator("pt", SEED)).images
+        np.testing.assert_allclose(cached, uncached, atol=1e-5)
+
+        transformer.release_prefix_cache()
+        self.assertEqual(transformer._cache_requests, {})
+
 
 class OVPipelineForImage2ImageTest(unittest.TestCase):
     SUPPORTED_ARCHITECTURES = [

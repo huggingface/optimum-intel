@@ -1603,8 +1603,14 @@ class OVModelQwenImage21Transformer(OVPipelinePart):
     and passed in as graph inputs. This wrapper reproduces that host precompute from the pipeline's
     `img_shapes`/`img_mask`/`encoder_hidden_states_mask`, then feeds the eight graph inputs.
 
-    KV caching is not used by the exported graph: every denoising step runs a full single pass (numerically
-    identical to the cached path), so the `kv_cache`/`kv_cache_mode` arguments are accepted and ignored.
+    The text and condition-image (prefix) keys/values do not change across denoising steps, so the graph keeps them in
+    OpenVINO state, one variable per block and per key/value, that it appends its prefix rows to. Following the
+    diffusers `kv_cache_mode`, the first step ("extract") resets the state and runs the full joint sequence, which
+    writes the prefix keys/values to the state on the device; the later steps ("cached") process only the target
+    image's tokens and leave the state as is. Each `cache_context` (the conditional and the unconditional pass) has its
+    own infer request, so its own cache. The requests are kept across generations, since every generation starts with
+    an "extract" step; `release_prefix_cache()` frees them. Without a cache mode, the compiled model's own request is
+    used with its state reset, so the cache is empty and every call runs the full joint sequence.
     """
 
     _IMG_TOKENS_PER_SLOT = 4
@@ -1622,13 +1628,66 @@ class OVModelQwenImage21Transformer(OVPipelinePart):
         # Caches the step-invariant host inputs (cos/sin/gather_idx/attn_mask/modulation_mask) keyed on the
         # generation-fixed geometry so the O(seq^2) mask is built once, not per denoising step.
         self._host_inputs_cache = {}
-        # The exported graph is cache-free; expose a block list only so the diffusers pipeline can query
-        # `len(self.transformer.transformer_blocks)` and a no-op `cache_context`.
+        # The diffusers pipeline sizes its cache container with `len(self.transformer.transformer_blocks)`.
         self.transformer_blocks = [None] * int(getattr(self.config, "num_layers", 0))
+        # Models exported before the prefix KV cache have no state.
+        self.has_prefix_cache = self._has_prefix_state()
+        self._cache_context_name = None
+        self._cache_requests = {}
+        self._cache_requests_owner = None
 
     @contextmanager
-    def cache_context(self, *args, **kwargs):
-        yield
+    def cache_context(self, name: str, *args, **kwargs):
+        previous, self._cache_context_name = self._cache_context_name, name
+        try:
+            yield
+        finally:
+            self._cache_context_name = previous
+
+    def _has_prefix_state(self):
+        output_names = {name for output in self.model.outputs for name in output.get_names()}
+        if any(name.startswith("prefix_key_values.") for name in output_names):
+            # The graph returned the prefix keys/values for the host to copy into a read-only state.
+            raise ValueError(
+                f"The Qwen-Image-2.1 transformer at {self.model_save_dir} was exported with a prefix KV cache that the "
+                "graph does not fill itself, which is no longer supported. Please re-export the model with "
+                "`optimum-cli export openvino`."
+            )
+        if isinstance(self.model, openvino.Model):
+            state_names = [variable.get_info().variable_id for variable in self.model.get_variables()]
+        else:  # compile_only: a CompiledModel exposes its state through an infer request
+            state_names = [state.name for state in self.model.create_infer_request().query_state()]
+        return any(name.startswith("past_key_values.") for name in state_names)
+
+    def _get_cache_request(self):
+        if self._cache_requests_owner is not self.request:
+            self._cache_requests = {}
+            self._cache_requests_owner = self.request
+        if self._cache_context_name not in self._cache_requests:
+            self._cache_requests[self._cache_context_name] = self.request.create_infer_request()
+        return self._cache_requests[self._cache_context_name]
+
+    def release_prefix_cache(self):
+        # Drops the per-pass infer requests and the prefix keys/values they hold. They are otherwise reused by the next
+        # generation, which avoids re-allocating their device memory every time.
+        self._cache_requests = {}
+        self._cache_requests_owner = None
+
+    @staticmethod
+    def _cached_host_inputs(cos, sin, gather_idx, attn_mask, modulation_mask):
+        # The target image is the last block of the joint sequence, so the prefix is a leading slice. The cached calls
+        # process only the target rows; their keys are the cached prefix followed by the target, i.e. every column of
+        # the full mask, so the target rows of the full inputs are exactly the cached-call inputs.
+        num_prefix = int((~modulation_mask).sum())
+        if not bool(modulation_mask[num_prefix:].all()):
+            raise ValueError("The Qwen-Image-2.1 prefix KV cache requires the target image to be the last block.")
+        return (
+            cos[:, num_prefix:].contiguous(),
+            sin[:, num_prefix:].contiguous(),
+            gather_idx[num_prefix:].contiguous(),
+            attn_mask[:, :, num_prefix:].contiguous(),
+            modulation_mask[num_prefix:].contiguous(),
+        )
 
     @staticmethod
     def _build_token_metadata(image_pad_mask, img_shapes):
@@ -1723,7 +1782,8 @@ class OVModelQwenImage21Transformer(OVPipelinePart):
         )
         cached = self._host_inputs_cache.get(key)
         if cached is None:
-            cached = self._build_host_inputs(hidden_states, encoder_hidden_states, img_shapes, img_mask, ehs_mask)
+            full = self._build_host_inputs(hidden_states, encoder_hidden_states, img_shapes, img_mask, ehs_mask)
+            cached = (full, self._cached_host_inputs(*full) if self.has_prefix_cache else None)
             if len(self._host_inputs_cache) >= self._HOST_CACHE_MAX:
                 self._host_inputs_cache.pop(next(iter(self._host_inputs_cache)))
             self._host_inputs_cache[key] = cached
@@ -1751,28 +1811,38 @@ class OVModelQwenImage21Transformer(OVPipelinePart):
         encoder_hidden_states = torch.as_tensor(encoder_hidden_states).to(torch.float32)
         timestep = torch.as_tensor(timestep).to(torch.float32)
 
-        cos, sin, gather_idx, attn_mask, modulation_mask = self._get_host_inputs(
+        full_inputs, cached_inputs = self._get_host_inputs(
             hidden_states, encoder_hidden_states, img_shapes, img_mask, encoder_hidden_states_mask
         )
+        # Calibration wraps the request to record the calls and replays every recorded call on its own, so a cached
+        # call, whose prefix lives in the state, would not replay correctly: record full calls only.
+        use_prefix_cache = (
+            self.has_prefix_cache
+            and kv_cache_mode in ("extract", "cached")
+            and isinstance(self.request, openvino.CompiledModel)
+        )
+        host_inputs = cached_inputs if use_prefix_cache and kv_cache_mode == "cached" else full_inputs
+        model_inputs = dict(
+            zip(("cos", "sin", "gather_idx", "attn_mask", "modulation_mask"), host_inputs),
+            hidden_states=hidden_states,
+            encoder_hidden_states=encoder_hidden_states,
+            timestep=timestep,
+        )
 
-        model_inputs = {
-            "hidden_states": hidden_states,
-            "encoder_hidden_states": encoder_hidden_states,
-            "timestep": timestep,
-            "cos": cos,
-            "sin": sin,
-            "gather_idx": gather_idx,
-            "attn_mask": attn_mask,
-            "modulation_mask": modulation_mask,
-        }
+        if use_prefix_cache:
+            request = self._get_cache_request()
+            if kv_cache_mode == "extract":
+                # Start from an empty cache: the graph appends the prefix keys/values of this call to the state.
+                request.reset_state()
+            ov_outputs = request.infer(model_inputs, share_inputs=True)
+        else:
+            if self.has_prefix_cache:
+                # The graph appends the prefix keys/values of each call to the state, so reset it for every full call
+                # to start from an empty cache (at this call's batch size).
+                self.request.reset_state()
+            ov_outputs = self.request(model_inputs, share_inputs=True)
 
-        ov_outputs = self.request(model_inputs, share_inputs=True).to_dict()
-
-        model_outputs = {}
-        for key, value in ov_outputs.items():
-            model_outputs[next(iter(key.names))] = torch.from_numpy(value)
-
-        sample = next(iter(model_outputs.values()))
+        sample = torch.from_numpy(ov_outputs["out_hidden_states"])
         if return_dict:
             return {"sample": sample}
         return (sample,)
@@ -3210,11 +3280,12 @@ class OVQwenImage21Pipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, 
         return position_ids
 
     def __call__(self, *args, **kwargs):
-        # The exported transformer graph is a cache-free single pass, so force KV caching off. The wrapper
-        # recomputes the full joint sequence every step (numerically identical to the cached path).
-        kwargs["use_kv_cache"] = False
+        if not self.transformer.has_prefix_cache:
+            # Exported before the prefix KV cache: every step recomputes the full joint sequence (numerically identical).
+            kwargs["use_kv_cache"] = False
         # Go through OVDiffusionPipeline.__call__ like the other pipelines: it converts numpy generators and
         # applies a statically reshaped pipeline's height/width before calling QwenImage21Pipeline.__call__.
+        # The transformer keeps its prefix cache requests for the next call (see `release_prefix_cache()`).
         return OVDiffusionPipeline.__call__(self, *args, **kwargs)
 
 

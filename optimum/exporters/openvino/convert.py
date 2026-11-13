@@ -431,6 +431,10 @@ def export_pytorch(
         if stateful:
             patch_stateful(model.config, ov_model)
 
+        post_process_ov_model = getattr(config, "post_process_ov_model", None)
+        if post_process_ov_model is not None:
+            post_process_ov_model(ov_model)
+
         library_name = _infer_library_from_model_or_model_class(model=model, library_name=library_name)
 
         _save_model(
