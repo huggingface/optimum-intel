@@ -306,6 +306,7 @@ class OVCalibrationDatasetBuilder:
                     dataset_config_name=dataset_metadata.get("name"),
                     num_samples=config.num_samples,
                     dataset_split=dataset_metadata["split"],
+                    streaming=dataset_metadata.get("streaming", False),
                 )
             elif isinstance(self.model, _OVModelForWhisper):
                 dataset_metadata = PREDEFINED_SPEECH_TO_TEXT_DATASETS[config.dataset]
