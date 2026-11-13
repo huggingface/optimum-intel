@@ -35,7 +35,8 @@ jobs:
           [
             "*export*",
             "*seq2seq*",
-            "*transformation*",
+            "*dflash*",
+            "*cb_compatible*",
           ]
 
     runs-on: ubuntu-22.04
@@ -63,6 +64,17 @@ jobs:
         run: |
           uv pip install --pre -U openvino openvino-tokenizers openvino-genai --extra-index-url https://storage.openvinotoolkit.org/simple/wheels/nightly
 
+      - name: DFlash Validation
+        if: ${{ matrix.test-pattern == '*dflash*' }}
+        run: |
+          pytest tests/openvino/${{ matrix.test-pattern }} --durations=0
+
+      # qwen3_asr and qwen3_tts need qwen-asr / qwen-tts (pinned transformers), so they run in the remote code workflow
+      - name: Continuous Batching Compatibility Validation
+        if: ${{ matrix.test-pattern == '*cb_compatible*' }}
+        run: |
+          pytest tests/openvino/${{ matrix.test-pattern }} -k "not (qwen3_asr or qwen3_tts)" --durations=0
+
       - name: Qwen3.5 Compressed-Tensors Validation
         if: ${{ matrix.test-pattern == '*export*' || matrix.test-pattern == '*seq2seq*' }}
         run: |
@@ -70,31 +82,8 @@ jobs:
           pytest tests/openvino/${{ matrix.test-pattern }} -k qwen3_5_compressed_tensors --durations=0
           uv pip uninstall compressed-tensors
 
-      - name: MiniCPM-V-4.7 Validation
-        run: |
-          uv pip install "transformers>=5.18"
-          pytest tests/openvino/${{ matrix.test-pattern }} -k "minicpmv4_7" --durations=0
-
-      # test_quantization, test_cb_compatible and test_dflash are not matched by the matrix test-pattern glob, so run
-      # them explicitly and only once (the export job).
-      - name: MiniCPM-V-4.7 Quantization, Continuous Batching and DFlash Validation
-        if: ${{ matrix.test-pattern == '*export*' }}
-        run: |
-          uv pip install "transformers>=5.18"
-          pytest tests/openvino/test_quantization.py tests/openvino/test_cb_compatible.py tests/openvino/test_dflash.py -k "minicpmv4_7" --durations=0
-
-      - name: MiniCPM-OCR Validation
-        run: |
-          uv pip install "transformers>=5.21"
-          pytest tests/openvino/${{ matrix.test-pattern }} -k "minicpm_ocr" --durations=0
-
-      - name: MiniCPM-OCR Quantization and Continuous Batching Validation
-        if: ${{ matrix.test-pattern == '*export*' }}
-        run: |
-          uv pip install "transformers>=5.21"
-          pytest tests/openvino/test_quantization.py tests/openvino/test_cb_compatible.py -k "minicpm_ocr" --durations=0
-
       - name: Scoped Config Validation with NNCF develop
+        if: ${{ matrix.test-pattern != '*dflash*' && matrix.test-pattern != '*cb_compatible*' }}
         run: |
           uv pip install "nncf @ git+https://github.com/openvinotoolkit/nncf.git@develop"
           pytest tests/openvino/test_quantization.py -k "scoped_config" --durations=0
@@ -105,5 +94,4 @@ jobs:
       - name: DSpark Export and GenAI Speculative Decoding Validation
         if: ${{ matrix.test-pattern == '*export*' }}
         run: |
-          uv pip install "transformers>=5.18"
           pytest tests/openvino/test_exporters_cli.py tests/openvino/test_dflash.py tests/openvino/test_genai.py -k dspark --durations=0

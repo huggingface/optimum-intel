@@ -273,6 +273,8 @@ from optimum.exporters.openvino.utils import (
     GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE,
     GRANITEMOEHYBRID_MAMBA_LAYER_TYPE,
     LTX2_ROPE_INPUTS,
+    get_qwen3_omni_thinker_encoders_owner,
+    get_qwen3_omni_thinker_text_model,
     has_ltx2_extended_guidance_inputs,
 )
 from optimum.exporters.tasks import TasksManager
@@ -2609,9 +2611,6 @@ class MuseGlimmerOpenVINOConfig(BaseVLMOpenVINOConfig):
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyMuseGlimmerVisionInputGenerator,)
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     MIN_TRANSFORMERS_VERSION = "5.15.0"
-    # TODO: transformers 5.16+ changed the MuseGlimmer vision RoPE and attention shapes that the vision-embeddings
-    # patcher replicates; port the patcher, then drop this cap
-    MAX_TRANSFORMERS_VERSION = "5.15.1"
 
     def __init__(
         self,
@@ -4866,25 +4865,25 @@ class Qwen3OmniMoeOpenVINOConfig(BaseVLMOpenVINOConfig):
             return model
 
         if behavior == Qwen3OmniMoeConfigBehavior.TEXT_EMBEDDINGS:
-            text_embedding = model.thinker.model.get_input_embeddings()
+            text_embedding = get_qwen3_omni_thinker_text_model(model.thinker).get_input_embeddings()
             text_embedding.config = model.config
             return text_embedding
 
         if behavior == Qwen3OmniMoeConfigBehavior.VISION_EMBEDDINGS:
             thinker_config = getattr(model.config, "thinker_config", model.config)
-            vision_model = model.thinker.visual
+            vision_model = get_qwen3_omni_thinker_encoders_owner(model.thinker).visual
             vision_model.config = getattr(thinker_config, "vision_config", thinker_config)
             return vision_model
 
         if behavior == Qwen3OmniMoeConfigBehavior.VISION_EMBEDDINGS_POS:
             thinker_config = getattr(model.config, "thinker_config", model.config)
-            vision_pos = model.thinker.visual.pos_embed
+            vision_pos = get_qwen3_omni_thinker_encoders_owner(model.thinker).visual.pos_embed
             vision_pos.config = getattr(thinker_config, "vision_config", thinker_config)
             return vision_pos
 
         if behavior == Qwen3OmniMoeConfigBehavior.AUDIO_ENCODER:
             thinker_config = getattr(model.config, "thinker_config", model.config)
-            audio_encoder = model.thinker.audio_tower
+            audio_encoder = get_qwen3_omni_thinker_encoders_owner(model.thinker).audio_tower
             audio_encoder.config = getattr(thinker_config, "audio_config", thinker_config)
             return audio_encoder
 
