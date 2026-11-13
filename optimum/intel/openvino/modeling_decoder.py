@@ -855,6 +855,36 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         """
         return
 
+    def _valid_auto_compile_criteria(self, model_kwargs, generation_config):
+        # The forward pass runs through an OpenVINO InferRequest and cannot be compiled with torch.compile.
+        return False
+
+    def _get_initial_cache_position(self, *args, model_kwargs=None, **kwargs):
+        if model_kwargs is None:
+            *args, model_kwargs = args
+        past_key_values = model_kwargs.get("past_key_values")
+        if self.stateful and isinstance(past_key_values, (tuple, list)):
+            if model_kwargs.get("cache_position") is None:
+                # The stateful cache is a marker; its length is tracked by the OpenVINO model.
+                cache_kwargs = super()._get_initial_cache_position(
+                    *args, model_kwargs={**model_kwargs, "past_key_values": None}, **kwargs
+                )
+                model_kwargs["cache_position"] = cache_kwargs["cache_position"][
+                    self._get_past_length(past_key_values) :
+                ]
+            return model_kwargs
+        return super()._get_initial_cache_position(*args, model_kwargs=model_kwargs, **kwargs)
+
+    def _prefill(self, input_ids, generation_config, model_kwargs, **kwargs):
+        if (
+            isinstance(model_kwargs.get("past_key_values"), (tuple, list))
+            and generation_config.prefill_chunk_size is None
+        ):
+            # OV input preparation already slices the input according to its legacy cache representation.
+            model_inputs = self.prepare_inputs_for_generation(input_ids, **model_kwargs, **kwargs)
+            return self(**model_inputs, return_dict=True)
+        return super()._prefill(input_ids, generation_config, model_kwargs, **kwargs)
+
     @classmethod
     def _from_pretrained(
         cls,
