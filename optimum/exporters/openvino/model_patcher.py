@@ -722,6 +722,13 @@ class MixtralModelPatcher(OVDecoderModelPatcher):
         else:
             from transformers.models.mixtral.modeling_mixtral import MixtralExperts
 
+            self._prepared_experts = [
+                module
+                for module in self._model.modules()
+                if isinstance(module, MixtralExperts) and module.gate_up_proj.dtype in (torch.float16, torch.bfloat16)
+            ]
+            for experts in self._prepared_experts:
+                prepare_minicpmv4_7_moe_weights(experts)
             self.original_moe_forward = MixtralExperts.forward
             MixtralExperts.forward = lfm2_moe_experts_forward
 
@@ -735,6 +742,9 @@ class MixtralModelPatcher(OVDecoderModelPatcher):
             from transformers.models.mixtral.modeling_mixtral import MixtralExperts
 
             MixtralExperts.forward = self.original_moe_forward
+            for experts in self._prepared_experts:
+                restore_minicpmv4_7_moe_weights(experts)
+                experts.__dict__.pop("forward", None)
 
 
 class ArcticModelPatcher(MixtralModelPatcher):
@@ -1787,6 +1797,13 @@ class PhiMoEModelPatcher(Phi3ModelPatcher):
         else:
             from transformers.models.phimoe.modeling_phimoe import PhimoeExperts
 
+            self._prepared_experts = [
+                module
+                for module in self._model.modules()
+                if isinstance(module, PhimoeExperts) and module.gate_up_proj.dtype in (torch.float16, torch.bfloat16)
+            ]
+            for experts in self._prepared_experts:
+                prepare_minicpmv4_7_moe_weights(experts)
             self.original_moe_forward = PhimoeExperts.forward
             PhimoeExperts.forward = lfm2_moe_experts_forward
 
@@ -1809,6 +1826,9 @@ class PhiMoEModelPatcher(Phi3ModelPatcher):
             from transformers.models.phimoe.modeling_phimoe import PhimoeExperts
 
             PhimoeExperts.forward = self.original_moe_forward
+            for experts in self._prepared_experts:
+                restore_minicpmv4_7_moe_weights(experts)
+                experts.__dict__.pop("forward", None)
 
 
 def _aquila_self_attn_sdpa_forward(
@@ -6281,6 +6301,8 @@ class Gemma4LMModelPatcher(Gemma3LMModelPatcher):
             decoder_layer.self_attn.forward = types.MethodType(gemma4_text_attention_forward, decoder_layer.self_attn)
             if hasattr(decoder_layer, "experts"):
                 decoder_layer.experts._orig_forward = decoder_layer.experts.forward
+                if decoder_layer.experts.gate_up_proj.dtype in (torch.float16, torch.bfloat16):
+                    prepare_minicpmv4_7_moe_weights(decoder_layer.experts)
                 decoder_layer.experts.forward = types.MethodType(lfm2_moe_experts_forward, decoder_layer.experts)
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -6290,6 +6312,7 @@ class Gemma4LMModelPatcher(Gemma3LMModelPatcher):
             decoder_layer.self_attn.forward = decoder_layer.self_attn.orig_forward
             if hasattr(decoder_layer, "experts") and hasattr(decoder_layer.experts, "_orig_forward"):
                 decoder_layer.experts.forward = decoder_layer.experts._orig_forward
+                restore_minicpmv4_7_moe_weights(decoder_layer.experts)
 
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
         setattr(self._model.model, "forward", self.model_orig_language_model_forward)
@@ -6572,6 +6595,13 @@ class Qwen2MoEPatcher(OVDecoderModelPatcher):
         else:
             from transformers.models.qwen2_moe.modeling_qwen2_moe import Qwen2MoeExperts
 
+            self._prepared_experts = [
+                module
+                for module in self._model.modules()
+                if isinstance(module, Qwen2MoeExperts) and module.gate_up_proj.dtype in (torch.float16, torch.bfloat16)
+            ]
+            for experts in self._prepared_experts:
+                prepare_minicpmv4_7_moe_weights(experts)
             self.original_moe_forward = Qwen2MoeExperts.forward
             Qwen2MoeExperts.forward = lfm2_moe_experts_forward
 
@@ -6585,6 +6615,9 @@ class Qwen2MoEPatcher(OVDecoderModelPatcher):
             from transformers.models.qwen2_moe.modeling_qwen2_moe import Qwen2MoeExperts
 
             Qwen2MoeExperts.forward = self.original_moe_forward
+            for experts in self._prepared_experts:
+                restore_minicpmv4_7_moe_weights(experts)
+                experts.__dict__.pop("forward", None)
 
 
 # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/speecht5/modeling_speecht5.py#L698
@@ -7681,6 +7714,13 @@ class Qwen3MoeModelPatcher(OVDecoderModelPatcher):
         else:
             from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeExperts
 
+            self._prepared_experts = [
+                module
+                for module in self._model.modules()
+                if isinstance(module, Qwen3MoeExperts) and module.gate_up_proj.dtype in (torch.float16, torch.bfloat16)
+            ]
+            for experts in self._prepared_experts:
+                prepare_minicpmv4_7_moe_weights(experts)
             self.original_moe_forward = Qwen3MoeExperts.forward
             Qwen3MoeExperts.forward = lfm2_moe_experts_forward
 
@@ -7693,6 +7733,9 @@ class Qwen3MoeModelPatcher(OVDecoderModelPatcher):
             from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeExperts
 
             Qwen3MoeExperts.forward = self.original_moe_forward
+            for experts in self._prepared_experts:
+                restore_minicpmv4_7_moe_weights(experts)
+                experts.__dict__.pop("forward", None)
 
 
 # The original implementation of this forward method can be found at:
@@ -11533,6 +11576,8 @@ class Lfm2MoeModelPatcher(Lfm2ModelPatcher):
                 if isinstance(sparse_moe_block.experts, Lfm2MoeExperts):
                     lfm2_moe_experts = sparse_moe_block.experts
                     lfm2_moe_experts._orig_forward = lfm2_moe_experts.forward
+                    if lfm2_moe_experts.gate_up_proj.dtype in (torch.float16, torch.bfloat16):
+                        prepare_minicpmv4_7_moe_weights(lfm2_moe_experts)
                     lfm2_moe_experts.forward = types.MethodType(lfm2_moe_experts_forward, lfm2_moe_experts)
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -11556,6 +11601,7 @@ class Lfm2MoeModelPatcher(Lfm2ModelPatcher):
                 if isinstance(sparse_moe_block.experts, Lfm2MoeExperts):
                     lfm2_moe_experts = sparse_moe_block.experts
                     lfm2_moe_experts.forward = lfm2_moe_experts._orig_forward
+                    restore_minicpmv4_7_moe_weights(lfm2_moe_experts)
 
 
 # The CausalConv1D block is overridden with a generic patch provided by `ov_causal_conv1d()`.
