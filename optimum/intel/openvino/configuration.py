@@ -933,9 +933,9 @@ def _get_missing_nncf_version(quantization_config: Optional[Dict[str, Any]]) -> 
     for config in configs:
         # The data type of the weights is given either by `dtype` or by `bits`, which is 8 by default
         is_int8 = (config.get("dtype") or f"int{config.get('bits', 8)}") == "int8"
-        # Only the release counts: a development build of NNCF 3.5.0 (3.5.0.dev0+<commit>) supports group-wise int8
-        # weight compression only if it includes the commit that added it, which its version does not tell
-        if is_int8 and config.get("group_size") not in (None, -1) and not is_nncf_version(">=", "3.5.0"):
+        # Development builds of NNCF 3.5.0 (3.5.0.dev0+<commit>) are accepted too, so make sure the installed build
+        # includes the commit that added group-wise int8 weight compression, which its version does not tell
+        if is_int8 and config.get("group_size") not in (None, -1) and not is_nncf_version(">=", "3.5.0.dev0"):
             return "3.5.0"
     return None
 
