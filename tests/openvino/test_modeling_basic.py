@@ -11,7 +11,9 @@ test_modeling.py.
 # ruff: noqa
 
 import gc
+import tempfile
 import unittest
+from pathlib import Path
 
 from parameterized import parameterized
 from transformers import AutoTokenizer, pipeline
@@ -23,6 +25,7 @@ from optimum.intel import (
     OVModelForSeq2SeqLM,
     OVModelForSequenceClassification,
 )
+from optimum.intel.openvino.modeling_base import OVBaseModel
 from optimum.intel.utils.import_utils import is_transformers_version
 
 # Make sure that common architectures are used in combination with common tasks
@@ -101,3 +104,18 @@ class OVModelBasicIntegrationTest(unittest.TestCase):
         )
         pipe("hello world")
         gc.collect()
+
+    def test_load_truncated_ir_error(self):
+        """
+        A truncated IR (e.g. from a full disk) reports file sizes instead of only OpenVINO's raw error
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            xml_path = Path(tmp_dir) / "openvino_model.xml"
+            xml_path.write_text("")
+            (Path(tmp_dir) / "openvino_model.bin").write_bytes(b"\0" * 100)
+            with self.assertRaises(RuntimeError) as cm:
+                OVBaseModel.load_model(xml_path)
+        message = str(cm.exception)
+        self.assertIn("openvino_model.xml (0 bytes)", message)
+        self.assertIn("openvino_model.bin (100 bytes)", message)
+        self.assertIsInstance(cm.exception.__cause__, RuntimeError)
