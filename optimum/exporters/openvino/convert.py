@@ -1638,7 +1638,7 @@ def get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     vae_decoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
     models_for_export["vae_decoder"] = (vae_decoder, vae_decoder_export_config)
 
-    # VAE Encoder (needed for image-to-video conditioning; harmless for text-to-video, which won't load it)
+    # VAE Encoder (needed for image-to-video and video-to-video conditioning; harmless for text-to-video, which won't load it)
     vae_encoder = copy.deepcopy(pipeline.vae)
     vae_encoder.forward = lambda sample: {"latent_parameters": vae_encoder.encode(x=sample)["latent_dist"].parameters}
     vae_encoder_config_constructor = TasksManager.get_exporter_config_constructor(

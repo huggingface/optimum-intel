@@ -95,10 +95,11 @@ else:
     LTXImageToVideoPipeline = object
 
 if is_diffusers_version(">=", "0.38.0"):
-    from diffusers import LTX2ImageToVideoPipeline, LTX2Pipeline
+    from diffusers import LTX2ConditionPipeline, LTX2ImageToVideoPipeline, LTX2Pipeline
 else:
     LTX2Pipeline = object
     LTX2ImageToVideoPipeline = object
+    LTX2ConditionPipeline = object
 
 if is_diffusers_version(">=", "0.40.0"):
     # LTX-2.5 onwards. Imported for `predict_num_frames`, which `OVModelDurationHead` reuses verbatim.
@@ -1793,8 +1794,9 @@ def _check_ltx2_rope_inputs(part: OVPipelinePart, required_inputs):
 
 
 class OVModelTransformerLTX2(OVPipelinePart):
-    # Class-level, so the unsupported-feature notice below is emitted once per process.
+    # Class-level, so the unsupported-feature notices below are emitted once per process.
     _warned_no_cross_modality_gate = False
+    _warned_no_cross_timestep_false = False
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1828,6 +1830,7 @@ class OVModelTransformerLTX2(OVPipelinePart):
         isolate_modalities: bool = False,
         spatio_temporal_guidance_blocks: Optional[List[int]] = None,
         perturbation_mask: Optional[torch.Tensor] = None,
+        use_cross_timestep: bool = True,
         attention_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = True,
         **kwargs,
@@ -1846,9 +1849,23 @@ class OVModelTransformerLTX2(OVPipelinePart):
             if value is not None and not torch.equal(torch.as_tensor(value), torch.as_tensor(audio_timestep)):
                 raise ValueError(
                     f"`{name}` differs from the scalar timestep, which the exported LTX-2 transformer "
-                    "cannot represent (the graph was traced with them tied together). This happens "
-                    "with `use_cross_timestep=True`, which the OpenVINO export does not support."
+                    "cannot represent (the graph was traced with them tied together)."
                 )
+
+        # The export traces `use_cross_timestep=True`, the diffusers pipelines' default. False only changes the
+        # result when the video timestep varies across tokens, and the IR cannot follow it there.
+        if (
+            not use_cross_timestep
+            and timestep is not None
+            and timestep.ndim == 2
+            and not torch.equal(timestep, timestep[:, :1].expand_as(timestep))
+            and not self._warned_no_cross_timestep_false
+        ):
+            logger.warning(
+                "`use_cross_timestep=False` is not supported by the exported LTX-2 transformer, which was traced "
+                "with `use_cross_timestep=True`, so the cross-modality noise level is used instead."
+            )
+            OVModelTransformerLTX2._warned_no_cross_timestep_false = True
 
         # T2V passes a scalar timestep [B]. The IR takes a per-token [B, S] timestep, which I2V needs (its
         # conditioning frames are already denoised), but a [B, 1] one broadcasts over the tokens. Feeding that
@@ -2586,6 +2603,8 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
     # Shared base rather than i2v subclassing t2v: LTX2ImageToVideoPipeline does not subclass
     # LTX2Pipeline, so subclassing would resolve `prepare_latents` to the text-to-video version.
     _is_ltx_pipeline = True
+    # Class-level, so the distilled-transformer notice below is emitted once per process.
+    _warned_ltx2_5_distilled_defaults = False
 
     @classproperty
     def _all_ov_model_paths(cls) -> Dict[str, str]:
@@ -2800,6 +2819,26 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
     def maybe_free_model_hooks(self):
         pass
 
+    def __call__(self, *args, **kwargs):
+        # Lightricks/LTX-2.5-Diffusers ships a distilled transformer in `transformer/` (the full one is in
+        # `transformer_full/`). Nothing in its config tells them apart, but the export keeps the folder it was loaded
+        # from, so a call without `sigmas` -- the pipeline defaults, tuned for full models -- can be pointed out.
+        source = str(getattr(self.transformer, "config", {}).get("_name_or_path", "")).replace("\\", "/").rstrip("/")
+        if (
+            "sigmas" not in kwargs
+            and "LTX-2.5-Diffusers" in source
+            and source.endswith("/transformer")
+            and not _OVLTX2Base._warned_ltx2_5_distilled_defaults
+        ):
+            logger.warning(
+                "This LTX-2.5 export uses the distilled transformer, which is meant to run with "
+                "`sigmas=DISTILLED_SIGMA_VALUES` and guidance off (`guidance_scale=1.0`, `audio_guidance_scale=1.0`, "
+                "`stg_scale=0.0`, `audio_stg_scale=0.0`, `modality_scale=1.0`, `audio_modality_scale=1.0`). The current "
+                "call uses the pipeline defaults, which are tuned for full models."
+            )
+            _OVLTX2Base._warned_ltx2_5_distilled_defaults = True
+        return super().__call__(*args, **kwargs)
+
     @property
     def components(self) -> Dict[str, Any]:
         """Return dict mapping component names to OV model wrappers for quantization."""
@@ -2979,6 +3018,29 @@ class OVLTX2ImageToVideoPipeline(_OVLTX2Base, LTX2ImageToVideoPipeline):
         models_paths = _OVLTX2Base._all_ov_model_paths
         models_paths["vae_encoder"] = os.path.join(DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER, OV_XML_FILE_NAME)
         return models_paths
+
+
+class OVLTX2ConditionPipeline(_OVLTX2Base, LTX2ConditionPipeline):
+    """
+    LTX-2 generation conditioned on images or videos placed at given frames (`LTX2VideoCondition`): video-to-video
+    with the input video at frame 0 and a `strength` below 1, keyframes, or first-last-frame interpolation. Exported
+    as `video-to-video`, with the same submodels as text-to-video and image-to-video, so their exports load into it.
+    """
+
+    main_input_name = "prompt"
+    export_feature = "video-to-video"
+    auto_model_class = LTX2ConditionPipeline
+
+    @classproperty
+    def _all_ov_model_paths(cls) -> Dict[str, str]:
+        models_paths = _OVLTX2Base._all_ov_model_paths
+        models_paths["vae_encoder"] = os.path.join(DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER, OV_XML_FILE_NAME)
+        return models_paths
+
+    def _reshape_vae_encoder(self, model, batch_size=-1, height=-1, width=-1, num_frames=-1):
+        # Every condition is encoded on its own, with its own frame count -- one for an image, its length for a
+        # video -- so the frame axis stays dynamic.
+        return super()._reshape_vae_encoder(model, batch_size, height, width, num_frames=-1)
 
 
 class OVQwenImagePipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, QwenImagePipeline):
@@ -3526,6 +3588,7 @@ if is_diffusers_version(">=", "0.38.0"):
     OV_IMAGE2VIDEO_PIPELINES_MAPPING["ltx2"] = OVLTX2ImageToVideoPipeline
     SUPPORTED_OV_PIPELINES.append(OVLTX2Pipeline)
     SUPPORTED_OV_PIPELINES.append(OVLTX2ImageToVideoPipeline)
+    SUPPORTED_OV_PIPELINES.append(OVLTX2ConditionPipeline)
 
 if is_diffusers_version(">=", "0.29.0"):
     SUPPORTED_OV_PIPELINES.extend(
