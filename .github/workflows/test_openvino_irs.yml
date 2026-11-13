@@ -44,7 +44,7 @@ jobs:
 
       - name: Install OpenVINO nightly
         run: |
-          pip install --pre -U "openvino>=2026.5.dev0,<2026.5a0" --extra-index-url=https://storage.openvinotoolkit.org/simple/wheels/nightly
+          pip install --pre -U "openvino>=2026.5.1.dev0,<2026.5.1a0" --extra-index-url=https://storage.openvinotoolkit.org/simple/wheels/nightly
 
       - name: Report installed versions
         run: |
