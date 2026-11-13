@@ -1662,7 +1662,9 @@ class OVQuantizer(OptimumQuantizer):
                     # instead of the int8 default used for small vision/projection parts.
                     if "mtp_model" in self.model._ov_model_names:
                         quantization_configs["mtp_model"] = quantization_config
-                    default_config = OVWeightQuantizationConfig(bits=8, sym=True)
+                    # BAGEL compresses its language model only, the other parts stay in FP16
+                    if self.model.config.model_type != "bagel":
+                        default_config = OVWeightQuantizationConfig(bits=8, sym=True)
                 else:
                     default_config = quantization_config
             elif not isinstance(quantization_config, OVPipelineQuantizationConfig):

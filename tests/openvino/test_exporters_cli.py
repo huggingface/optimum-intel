@@ -173,6 +173,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "lfm3"),
         ("image-text-to-text", "lfm3_vl"),
         ("image-text-to-text", "lfm3_omni"),
+        ("image-text-to-text", "bagel"),
         ("text-generation-with-past", "mamba"),
         ("text-generation-with-past", "falcon_mamba"),
         ("text-to-image", "flux.2-klein"),
@@ -235,6 +236,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "lfm3": 2,
         "lfm3_vl": 2,
         "lfm3_omni": 2,
+        "bagel": 2,
         "llava": 2,
         "mistral3": 2,
         "ministral3": 2,
@@ -938,6 +940,19 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "lm_model": {"int8": 28, "int4": 42},
                 "text_embeddings_model": {"int8": 1},
                 "vision_embeddings_model": {"int8": 22},
+            },
+        ),
+        # the recipe of the ByteDance-Seed/BAGEL-7B-MoT default int4 config
+        (
+            "image-text-to-text",
+            "bagel",
+            "int4 --sym --group-size 128 --ratio 1.0 --backup-precision int8_sym --group-size-fallback adjust",
+            {
+                "lm_model": {"int8": 11, "int4": 51},
+                "text_embeddings_model": {},
+                "vision_embeddings_model": {},
+                "vae_encoder_model": {},
+                "vae_decoder_model": {},
             },
         ),
     ]

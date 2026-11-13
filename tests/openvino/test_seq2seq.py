@@ -13,12 +13,14 @@
 #  limitations under the License.
 
 import copy
+import functools
 import gc
 import os
 import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import numpy as np
 import openvino
@@ -614,6 +616,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "minicpm_ocr",
         "lfm3_vl",
         "lfm3_omni",
+        "bagel",
     ]
     if is_openvino_version(">=", "2026.3") and is_compressed_tensors_available():
         SUPPORTED_ARCHITECTURES.append("qwen3_5_compressed_tensors")
@@ -694,6 +697,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "minicpm_ocr",
             "lfm3_vl",
             "lfm3_omni",
+            "bagel",
         ]:
             from transformers import AutoModelForImageTextToText
 
@@ -758,6 +762,10 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         if model_arch == "lfm3_omni":
             # the remote generate() is a text / speech state machine that refuses min_new_tokens
             self.skipTest("lfm3_omni comparison tested in test_lfm3_omni_compare_to_transformers")
+        if model_arch == "bagel":
+            # the language model is stateless (its KV cache is shared with image generation), as the export layout of
+            # OpenVINO GenAI's BagelPipeline
+            self.skipTest("bagel comparison tested in test_bagel_compare_to_transformers")
 
         if model_arch == "gemma4" and is_openvino_version("<", "2026.5"):
             self.skipTest("gemma4 is causing segfault CVS-193103")
@@ -1229,6 +1237,64 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             torch.allclose(ov_audio, transformers_audio, atol=1e-4),
             f"Max abs diff {(ov_audio - transformers_audio).abs().max()}",
         )
+        del transformers_model
+        del ov_model
+        gc.collect()
+
+    def test_bagel_compare_to_transformers(self):
+        model_arch = "bagel"
+        if model_arch not in self.SUPPORTED_ARCHITECTURES:
+            self.skipTest("bagel is not supported by the installed transformers version")
+        model_id = MODEL_NAMES[model_arch]
+        transformers_model = AutoModelForImageTextToText.from_pretrained(model_id).eval()
+        ov_model = self.OVMODEL_CLASS.from_pretrained(
+            model_id, export=True, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
+        )
+        self.assertIsInstance(ov_model, MODEL_TYPE_TO_CLS_MAPPING["bagel"])
+        self.assertFalse(model_has_state(ov_model.language_model.model))
+        preprocessors = self.get_preprocessors(model_arch)
+        processor = preprocessors["processor"]
+        image = self.IMAGE.resize((600, 600))
+
+        # understanding: prompt logits and greedy generation, with and without an image
+        gen_config = GenerationConfig(max_new_tokens=10, min_new_tokens=10, do_sample=False, eos_token_id=None)
+        for media in ({"image": image}, {}):
+            inputs = ov_model.preprocess_inputs(**preprocessors, text="What is shown in this image?", **media)
+            ov_logits = ov_model(**inputs).logits
+            with torch.no_grad():
+                transformers_logits = transformers_model(**copy.deepcopy(inputs)).logits
+            self.assertTrue(
+                torch.allclose(ov_logits, transformers_logits, atol=4e-3),
+                f"Max abs diff {(ov_logits - transformers_logits).abs().max()}",
+            )
+            ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
+            with torch.no_grad():
+                transformers_outputs = transformers_model.generate(
+                    **copy.deepcopy(inputs), generation_config=gen_config
+                )
+            self.assertTrue(torch.equal(ov_outputs, transformers_outputs), f"{ov_outputs} vs {transformers_outputs}")
+
+        # generation: text-to-image and editing from the same initial noise
+        image_kwargs = {"generation_mode": "image", "num_inference_steps": 4, "cfg_interval": (0.0, 1.0)}
+        t2i_inputs = processor(text="A red bicycle", generation_mode="image", return_tensors="pt")
+        edit_inputs = processor(text="Make it green", images=image, generation_mode="image", return_tensors="pt")
+        num_latent_tokens = (32 // ov_model.latent_downsample) ** 2
+        for inputs, size in ((t2i_inputs, {"height": 32, "width": 32}), (edit_inputs, {})):
+            latents = torch.randn(
+                num_latent_tokens, ov_model._patch_dim, generator=torch.Generator().manual_seed(SEED)
+            )
+            ov_image = ov_model.generate(**inputs, **image_kwargs, **size, latents=latents)
+            # the exported VAE encoder returns the posterior mean
+            vae = transformers_model.model.vae
+            with patch.object(vae, "encode", functools.partial(vae.encode, sample=False)), torch.no_grad():
+                transformers_image = transformers_model.generate(
+                    **copy.deepcopy(inputs), **image_kwargs, **size, latents=latents
+                )
+            self.assertEqual(ov_image.shape, (1, 3, 32, 32))
+            self.assertTrue(
+                torch.allclose(ov_image, transformers_image, atol=1e-3),
+                f"Max abs diff {(ov_image - transformers_image).abs().max()}",
+            )
         del transformers_model
         del ov_model
         gc.collect()

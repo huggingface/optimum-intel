@@ -137,6 +137,12 @@ from optimum.exporters.openvino.model_patcher import (
     AfmoeModelPatcher,
     AquilaModelPatcher,
     ArcticModelPatcher,
+    BagelLanguageModelForExport,
+    BagelLanguageModelPatcher,
+    BagelTextEmbeddingsForExport,
+    BagelVAEDecoderForExport,
+    BagelVAEEncoderForExport,
+    BagelVisionEmbeddingsForExport,
     BaichuanModelPatcher,
     BigBirdPegasusModelPatcher,
     BloomModelPatcher,
@@ -8966,3 +8972,152 @@ class Qwen3TTSCodecDecoderOpenVINOConfig(Qwen3TTSComponentOpenVINOConfig):
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
         return {"waveform": {0: "batch_size", 2: "audio_length"}}
+
+
+class BagelConfigBehavior(str, enum.Enum):
+    LANGUAGE = "language"
+    TEXT_EMBEDDINGS = "text_embeddings"
+    VISION_EMBEDDINGS = "vision_embeddings"
+    VAE_ENCODER = "vae_encoder"
+    VAE_DECODER = "vae_decoder"
+
+
+@register_in_tasks_manager("bagel", *["image-text-to-text"], library_name="transformers")
+class BagelOpenVINOConfig(OpenVINOConfig):
+    """
+    BAGEL in the layout of OpenVINO GenAI's `BagelPipeline`. One stateless language model with the KV cache as ports
+    serves text generation and image denoising. Text/vision embeddings and the VAE encoder/decoder are separate models.
+    All models run on a single sample, so they have no batch dimension (VAE inputs keep a batch of 1).
+    """
+
+    SUPPORTED_BEHAVIORS = [behavior.value for behavior in BagelConfigBehavior]
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig
+    MIN_TRANSFORMERS_VERSION = "5.23.0.dev0"
+    # the parts left uncompressed by `--weight-format int4/int8` (all but the language model) are kept in FP16
+    SAVE_FP16_BEFORE_WEIGHT_COMPRESSION = True
+    # dummy sizes: a cached prefix followed by one image block (start, latent tokens, end), so both experts, the
+    # bidirectional block and the past/present concatenation are traced; all axes are dynamic in the exported model
+    DUMMY_PAST_LENGTH = 3
+    DUMMY_NUM_LATENT_TOKENS = 4
+    DUMMY_NUM_PATCHES = 16
+    DUMMY_LATENT_SIZE = 4
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "image-text-to-text",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: BagelConfigBehavior = BagelConfigBehavior.LANGUAGE,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config, task=task, int_dtype=int_dtype, float_dtype=float_dtype, preprocessors=preprocessors
+        )
+        self._orig_config = config
+        self._behavior = BagelConfigBehavior(behavior)
+
+    def with_behavior(self, behavior: Union[str, BagelConfigBehavior]):
+        return self.__class__(
+            self._orig_config,
+            task=self.task,
+            int_dtype=self.int_dtype,
+            float_dtype=self.float_dtype,
+            behavior=behavior,
+            preprocessors=self._preprocessors,
+        )
+
+    def get_model_for_behavior(self, model, behavior: Union[str, BagelConfigBehavior]):
+        module = {
+            BagelConfigBehavior.LANGUAGE: BagelLanguageModelForExport,
+            BagelConfigBehavior.TEXT_EMBEDDINGS: BagelTextEmbeddingsForExport,
+            BagelConfigBehavior.VISION_EMBEDDINGS: BagelVisionEmbeddingsForExport,
+            BagelConfigBehavior.VAE_ENCODER: BagelVAEEncoderForExport,
+            BagelConfigBehavior.VAE_DECODER: BagelVAEDecoderForExport,
+        }[BagelConfigBehavior(behavior)]
+        return module(model).eval()
+
+    @property
+    def _num_layers(self) -> int:
+        return self._orig_config.text_config.num_hidden_layers
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == BagelConfigBehavior.LANGUAGE:
+            inputs = {
+                "inputs_embeds": {0: "sequence_length"},
+                "und_index": {0: "und_length"},
+                "gen_index": {0: "gen_length"},
+                "x_t": {0: "gen_length"},
+                "timestep": {},
+                "vae_position_ids": {0: "gen_length"},
+                "attention_mask": {2: "sequence_length", 3: "total_length"},
+                "position_ids": {0: "sequence_length"},
+            }
+            for i in range(self._num_layers):
+                inputs[f"past_key_values.{i}.key"] = {2: "past_length"}
+                inputs[f"past_key_values.{i}.value"] = {2: "past_length"}
+            return inputs
+        if self._behavior == BagelConfigBehavior.TEXT_EMBEDDINGS:
+            return {"input_ids": {0: "sequence_length"}}
+        if self._behavior == BagelConfigBehavior.VISION_EMBEDDINGS:
+            return {"pixel_values": {0: "num_patches"}, "position_ids": {0: "num_patches"}}
+        if self._behavior == BagelConfigBehavior.VAE_ENCODER:
+            return {"pixel_values": {2: "height", 3: "width"}}
+        return {"latents": {2: "latent_height", 3: "latent_width"}}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == BagelConfigBehavior.LANGUAGE:
+            outputs = {"logits": {0: "und_length"}, "v_t": {0: "gen_length"}}
+            for i in range(self._num_layers):
+                outputs[f"present.{i}.key"] = {2: "total_length"}
+                outputs[f"present.{i}.value"] = {2: "total_length"}
+            return outputs
+        if self._behavior == BagelConfigBehavior.TEXT_EMBEDDINGS:
+            return {"inputs_embeds": {0: "sequence_length"}}
+        if self._behavior == BagelConfigBehavior.VISION_EMBEDDINGS:
+            return {"image_embeds": {0: "num_patches"}}
+        if self._behavior == BagelConfigBehavior.VAE_ENCODER:
+            return {"latent": {2: "latent_height", 3: "latent_width"}}
+        return {"image": {2: "height", 3: "width"}}
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        config = self._orig_config
+        text = config.text_config
+        if self._behavior == BagelConfigBehavior.LANGUAGE:
+            num_latents, past_len = self.DUMMY_NUM_LATENT_TOKENS, self.DUMMY_PAST_LENGTH
+            seq_len = num_latents + 2
+            head_dim = getattr(text, "head_dim", None) or text.hidden_size // text.num_attention_heads
+            patch_dim = config.latent_patch_size**2 * config.vae_config.latent_channels
+            past = torch.zeros(1, text.num_key_value_heads, past_len, head_dim)
+            return {
+                "inputs_embeds": torch.randn(seq_len, text.hidden_size),
+                "und_index": torch.tensor([0, seq_len - 1]),
+                "gen_index": torch.arange(1, seq_len - 1),
+                "x_t": torch.randn(num_latents, patch_dim),
+                "timestep": torch.tensor([0.5]),
+                "vae_position_ids": torch.arange(num_latents),
+                "attention_mask": torch.zeros(1, 1, seq_len, past_len + seq_len),
+                "position_ids": torch.full((seq_len,), past_len),
+                "past_key_values": [(past.clone(), past.clone()) for _ in range(self._num_layers)],
+            }
+        if self._behavior == BagelConfigBehavior.TEXT_EMBEDDINGS:
+            return {"input_ids": torch.arange(self.DUMMY_NUM_LATENT_TOKENS + 2)}
+        if self._behavior == BagelConfigBehavior.VISION_EMBEDDINGS:
+            vision = config.vision_config
+            return {
+                "pixel_values": torch.randn(self.DUMMY_NUM_PATCHES, vision.num_channels * vision.patch_size**2),
+                "position_ids": torch.arange(self.DUMMY_NUM_PATCHES),
+            }
+        latent_size = self.DUMMY_LATENT_SIZE
+        if self._behavior == BagelConfigBehavior.VAE_ENCODER:
+            image_size = latent_size * 2 ** (len(config.vae_config.channel_multiplier) - 1)
+            return {"pixel_values": torch.rand(1, config.vae_config.in_channels, image_size, image_size) * 2 - 1}
+        return {"latents": torch.randn(1, config.vae_config.latent_channels, latent_size, latent_size)}
+
+    def patch_model_for_export(self, model, model_kwargs: Optional[Dict[str, Any]] = None):
+        if self._behavior == BagelConfigBehavior.LANGUAGE:
+            return BagelLanguageModelPatcher(self, model, model_kwargs=model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)

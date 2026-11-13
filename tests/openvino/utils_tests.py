@@ -144,6 +144,72 @@ def _create_tiny_kokoro_model():
     return str(output_dir)
 
 
+def _create_tiny_bagel_model():
+    """Generate a tiny random BAGEL model with its processor and return its local path.
+
+    The text model has 4 layers so that the f16 rescaling of the export (from layer 3 on) is exercised. Images are
+    resized to 4x4 ViT patches and to 32x32 pixels (8x8 latent tokens) for the VAE. Result is cached on disk under the
+    system temp dir, so subsequent calls are cheap.
+    """
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_bagel"
+    if (output_dir / "model.safetensors").exists() and (output_dir / "processor_config.json").exists():
+        return str(output_dir)
+    if is_transformers_version("<", "5.23.0.dev0"):
+        # BAGEL is not available in this transformers version, its tests are skipped
+        return str(output_dir)
+
+    from transformers import (
+        AutoTokenizer,
+        BagelConfig,
+        BagelForConditionalGeneration,
+        BagelImageProcessor,
+        BagelProcessor,
+    )
+    from transformers.models.bagel.convert_bagel_weights_to_hf import CHAT_TEMPLATE
+
+    tokenizer = AutoTokenizer.from_pretrained("optimum-intel-internal-testing/tiny-random-qwen2vl")
+    tokenizer.chat_template = CHAT_TEMPLATE
+    image_processor = BagelImageProcessor(
+        size={"longest_edge": 56, "shortest_edge": 28},
+        max_num_patches_per_side=4,
+        max_pixels=56 * 56,
+        vae_max_size=32,
+        vae_min_size=16,
+    )
+    processor = BagelProcessor(image_processor=image_processor, tokenizer=tokenizer, chat_template=CHAT_TEMPLATE)
+    config = BagelConfig(
+        text_config={
+            "vocab_size": len(tokenizer),
+            "hidden_size": 32,
+            "intermediate_size": 37,
+            "num_hidden_layers": 4,
+            "num_attention_heads": 4,
+            "num_key_value_heads": 2,
+            "max_position_embeddings": 512,
+            "eos_token_id": tokenizer.convert_tokens_to_ids("<|im_end|>"),
+        },
+        vision_config={
+            "hidden_size": 16,
+            "intermediate_size": 32,
+            "num_hidden_layers": 2,
+            "num_attention_heads": 2,
+            "patch_size": 14,
+            "image_size": 56,
+            "max_num_patches_per_side": 4,
+        },
+        vae_config={"base_channels": 32, "channel_multiplier": [1, 2], "num_res_blocks": 1, "latent_channels": 4},
+        max_latent_size=8,
+        start_of_image_token_id=tokenizer.convert_tokens_to_ids("<|vision_start|>"),
+        end_of_image_token_id=tokenizer.convert_tokens_to_ids("<|vision_end|>"),
+        image_token_id=tokenizer.convert_tokens_to_ids("<|image_pad|>"),
+    )
+    torch.manual_seed(0)
+    model = BagelForConditionalGeneration(config).eval()
+    model.save_pretrained(output_dir)
+    processor.save_pretrained(output_dir)
+    return str(output_dir)
+
+
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -160,6 +226,7 @@ HUB_MODEL_NAMES = {
     "arcee": "optimum-intel-internal-testing/tiny-random-ArceeForCausalLM",
     "arctic": "optimum-intel-internal-testing/tiny-random-snowflake",
     "audio-spectrogram-transformer": "optimum-intel-internal-testing/tiny-random-ast",
+    "bagel": _create_tiny_bagel_model(),
     "bge": "optimum-intel-internal-testing/bge-small-en-v1.5",
     "beit": "optimum-intel-internal-testing/tiny-random-BeitForImageClassification",
     "bert": "optimum-intel-internal-testing/tiny-random-bert",
@@ -775,6 +842,14 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "depth_decoder_model": 29,
         "audio_decoder_model": 59,
     },
+    # only the language model is compressed, the other parts stay in FP16
+    "bagel": {
+        "lm_model": 124,
+        "text_embeddings_model": 0,
+        "vision_embeddings_model": 0,
+        "vae_encoder_model": 0,
+        "vae_decoder_model": 0,
+    },
     "hunyuan_v1_dense": {"model": 32},
     "qwen3_eagle3": {"model": 20},
     "qwen3_dflash": {"model": 30},
@@ -880,6 +955,7 @@ ARCH_TO_MODEL_CLASS = {
     "lfm2_moe": "OVModelForCausalLM",
     "lfm3": "OVModelForCausalLM",
     "lfm3_vl": "OVModelForVisualCausalLM",
+    "bagel": "OVModelForVisualCausalLM",
     "lfm3_omni": "OVModelForVisualCausalLM",
     "qwen3_moe": "OVModelForCausalLM",
     "llama4": "OVModelForCausalLM",

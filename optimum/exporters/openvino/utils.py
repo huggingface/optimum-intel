@@ -629,6 +629,7 @@ def _get_qwen3_tts_submodels_fn_and_export_configs(
 
 
 MULTI_MODAL_TEXT_GENERATION_MODELS = [
+    "bagel",
     "llava",
     "llava_next",
     "llava_next_video",
