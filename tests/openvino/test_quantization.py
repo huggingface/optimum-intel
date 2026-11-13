@@ -14,6 +14,7 @@
 import contextlib
 import dataclasses
 import inspect
+import os
 
 # ruff: noqa
 
@@ -49,6 +50,7 @@ from optimum.intel import (
     OVLatentConsistencyModelPipeline,
     OVModelForAudioClassification,
     OVModelForCausalLM,
+    OVModelForCTC,
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
     OVModelForMaskedLM,
@@ -1223,6 +1225,9 @@ class OVWeightCompressionTest(unittest.TestCase):
         if TEST_NAME_TO_MODEL_TYPE.get(config[1], config[1])
         in get_supported_model_for_library("transformers") | get_supported_model_for_library("funasr")
     ]
+
+    if os.environ.get("RUN_SLOW_EXPORT_TESTS") == "1" and is_transformers_version(">=", "5.0"):
+        SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForCTC, "lasr_ctc", True))
 
     SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = [
         (OVStableDiffusionPipeline, "stable-diffusion", 72, 195),
