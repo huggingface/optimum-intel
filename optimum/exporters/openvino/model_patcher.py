@@ -12076,6 +12076,8 @@ def _load_mtp_weights(mtp_module, model):
             "would contain random weights, yielding a 0% speculative acceptance rate. Ensure the "
             "checkpoint contains the MTP weights and is reachable as a local directory or hub repo."
         )
+    if hasattr(model, "dtype"):
+        mtp_module = mtp_module.to(model.dtype)
     return mtp_module
 
 
