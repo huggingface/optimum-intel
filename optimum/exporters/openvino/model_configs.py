@@ -3389,14 +3389,15 @@ class QwenImage21TransformerOpenVINOConfig(UNetOpenVINOConfig):
         outputs = {
             "out_hidden_states": {0: "batch_size", 1: "joint_sequence_length"},
         }
+        # Named for tracing only: `post_process_ov_model` appends them to the state and removes them from the outputs.
         for i in range(self._config.num_layers):
             outputs[f"prefix_key_values.{i}.key"] = {0: "batch_size", 2: "prefix_sequence_length"}
             outputs[f"prefix_key_values.{i}.value"] = {0: "batch_size", 2: "prefix_sequence_length"}
         return outputs
 
     def post_process_ov_model(self, ov_model):
-        # The prefix KV cache is filled once per generation by the host (OVModelQwenImage21Transformer), so the past
-        # inputs become OpenVINO state that the graph only reads.
+        # The past inputs become OpenVINO state, which the prefill call fills with its prefix keys/values in the graph
+        # (`Assign(Concat(past, prefix))`), so they stay on the device and the later calls only read them.
         patch_stateful_prefix_cache(ov_model)
 
 

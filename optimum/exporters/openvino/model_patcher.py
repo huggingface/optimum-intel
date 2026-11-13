@@ -3734,9 +3734,12 @@ def _qwenimage21_apply_rotary_emb(x, cos, sin):
 # several passes over data-dependent segments, neither of which traces. This single-pass version takes the real
 # (cos, sin) table and a dense additive block-causal mask, and fuses to `ScaledDotProductAttention`.
 # Original code: https://github.com/huggingface/diffusers/blob/344d6e7300716ff245d5941bc1fe3e95ad8cd1c3/src/diffusers/models/transformers/transformer_qwenimage21.py#L474-L548 (QwenImage21AttnProcessor) and https://github.com/huggingface/diffusers/blob/344d6e7300716ff245d5941bc1fe3e95ad8cd1c3/src/diffusers/models/transformers/transformer_qwenimage21.py#L392-L459
-# The prefix KV cache is threaded through the blocks' `layer_cache` argument: the processor attends over the cached
-# prefix keys/values followed by the current tokens' ones, and hands back the rows of the current tokens that belong to
-# the prefix (all of them are prefix rows on the prefill call, none on the cached calls).
+# The prefix KV cache is threaded through the blocks' `layer_cache` argument: the processor appends the current tokens'
+# prefix rows (all of the prefix on the prefill call, none on the cached calls) to the cached prefix keys/values, hands
+# that back as the updated cache and attends over it followed by the current target rows. The prefix tokens lead the
+# processed sequence, so these keys are in the same order as the cached prefix followed by all current tokens. The
+# updated cache being `cat([past, new])` that also feeds the attention is the decoder KV cache layout, which the
+# plugins update in place once the past inputs become state.
 def _qwenimage21_attn_processor_call(
     self,
     attn,
@@ -3761,10 +3764,14 @@ def _qwenimage21_attn_processor_call(
     key = key.transpose(1, 2)
     value = value.transpose(1, 2)
     if layer_cache is not None:
-        layer_cache.prefix_key = torch.index_select(key, 2, layer_cache.prefix_idx)
-        layer_cache.prefix_value = torch.index_select(value, 2, layer_cache.prefix_idx)
-        key = torch.cat([layer_cache.past_key.to(key.dtype), key], dim=2)
-        value = torch.cat([layer_cache.past_value.to(value.dtype), value], dim=2)
+        layer_cache.prefix_key = torch.cat(
+            [layer_cache.past_key.to(key.dtype), torch.index_select(key, 2, layer_cache.prefix_idx)], dim=2
+        )
+        layer_cache.prefix_value = torch.cat(
+            [layer_cache.past_value.to(value.dtype), torch.index_select(value, 2, layer_cache.prefix_idx)], dim=2
+        )
+        key = torch.cat([layer_cache.prefix_key, torch.index_select(key, 2, layer_cache.target_idx)], dim=2)
+        value = torch.cat([layer_cache.prefix_value, torch.index_select(value, 2, layer_cache.target_idx)], dim=2)
     hidden_states = F.scaled_dot_product_attention(query, key, value, attn_mask=attention_mask)
     hidden_states = hidden_states.transpose(1, 2).flatten(2, 3).type_as(query)
 
@@ -3773,10 +3780,11 @@ def _qwenimage21_attn_processor_call(
 
 
 class _QwenImage21TracedLayerCache:
-    def __init__(self, past_key, past_value, prefix_idx):
+    def __init__(self, past_key, past_value, prefix_idx, target_idx):
         self.past_key = past_key
         self.past_value = past_value
         self.prefix_idx = prefix_idx
+        self.target_idx = target_idx
         self.prefix_key = None
         self.prefix_value = None
 
@@ -3790,7 +3798,7 @@ class _QwenImage21TracedLayerCache:
 #   - `modulation_mask` is `target_token_mask`, which picks each token's modulation row.
 # The text and condition-image keys/values do not depend on the timestep or the latents (`causal_condition`), so they
 # are the prefix KV cache: `past_key_values` holds them for every block (empty on the prefill call) and
-# `prefix_key_values` returns the processed tokens' prefix rows (the ones with `modulation_mask == False`) to fill it.
+# `prefix_key_values` returns it with the processed tokens' prefix rows (the ones with `modulation_mask == False`) appended.
 # After conversion the past inputs become OpenVINO state, so the cached calls process only the target tokens.
 # Original code: https://github.com/huggingface/diffusers/blob/344d6e7300716ff245d5941bc1fe3e95ad8cd1c3/src/diffusers/models/transformers/transformer_qwenimage21.py#L847-L1018
 def _qwenimage21_transformer_forward(
@@ -3819,9 +3827,10 @@ def _qwenimage21_transformer_forward(
     rotary_emb = (cos, sin)
     # NonZero keeps the prefix row count dynamic: the prefill call has prefix rows, the cached calls have none.
     prefix_idx = torch.nonzero(~modulation_mask).squeeze(1)
+    target_idx = torch.nonzero(modulation_mask).squeeze(1)
     layer_caches = []
     for block, (past_key, past_value) in zip(self.transformer_blocks, past_key_values):
-        layer_cache = _QwenImage21TracedLayerCache(past_key, past_value, prefix_idx)
+        layer_cache = _QwenImage21TracedLayerCache(past_key, past_value, prefix_idx, target_idx)
         joint = block(
             hidden_states=joint,
             modulation=modulation,

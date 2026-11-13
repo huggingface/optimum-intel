@@ -627,10 +627,12 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         )
         transformer = pipeline.transformer
         self.assertTrue(transformer.has_prefix_cache)
-        # one read-only state variable per block and per key/value
+        # one state variable per block and per key/value, which the graph fills with the prefix keys/values itself
         num_layers = transformer.config.num_layers
         self.assertEqual(len(transformer.model.get_variables()), 2 * num_layers)
         self.assertEqual(len(transformer.model.get_sinks()), 2 * num_layers)
+        output_names = [name for output in transformer.model.outputs for name in output.names]
+        self.assertEqual(output_names, ["out_hidden_states"])
 
         processed_tokens = []
         transformer_forward = transformer.forward
@@ -650,8 +652,18 @@ class OVPipelineForText2ImageTest(unittest.TestCase):
         self.assertTrue(all(tokens > num_target for _, tokens in processed_tokens[:2]))
         self.assertTrue(all(tokens == num_target for _, tokens in processed_tokens[2:]))
 
+        # the next generation reuses the per-pass infer requests and refills their cache
+        requests = dict(transformer._cache_requests)
+        self.assertEqual(set(requests), {"cond", "uncond"})
+        cached_again = pipeline(**inputs, generator=get_generator("pt", SEED)).images
+        self.assertTrue(all(transformer._cache_requests[name] is request for name, request in requests.items()))
+        np.testing.assert_array_equal(cached, cached_again)
+
         uncached = pipeline(**inputs, use_kv_cache=False, generator=get_generator("pt", SEED)).images
         np.testing.assert_allclose(cached, uncached, atol=1e-5)
+
+        transformer.release_prefix_cache()
+        self.assertEqual(transformer._cache_requests, {})
 
 
 class OVPipelineForImage2ImageTest(unittest.TestCase):
