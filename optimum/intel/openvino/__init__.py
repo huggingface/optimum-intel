@@ -66,6 +66,13 @@ if is_nncf_available():
     from .quantization import OVCalibrationDataset, OVQuantizer
 
 
+from .generation_guard import (
+    OVGuard,
+    OVGuardConfig,
+    OVGuardReport,
+    OVGuardVerdict,
+    OVGuardViolationError,
+)
 from .modeling import (
     OVModelForAudioClassification,
     OVModelForAudioFrameClassification,
