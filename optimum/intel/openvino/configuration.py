@@ -636,7 +636,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         },
     },
     "Lightricks/LTX-2.5-Diffusers": {
-            "quantization_configs": {
+        "quantization_configs": {
             "transformer": {"bits": 4, "sym": True, "group_size": 32, "weight_only": True},
             "connectors": {"bits": 4, "sym": True, "group_size": 32, "weight_only": True},
             "text_encoder": {"bits": 4, "sym": False, "weight_only": True},
