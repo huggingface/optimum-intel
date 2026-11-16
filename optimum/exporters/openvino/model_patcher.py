@@ -4084,6 +4084,7 @@ class MiniCPMVImageEmbeddingsModelPatcher(ModelPatcher):
                 layer.self_attn.forward = layer.self_attn._orig_forward
 
 
+# Original code: https://github.com/huggingface/transformers/blob/v5.22.1/src/transformers/models/minicpmv4_6/modeling_minicpmv4_6.py#L604
 def _minicpmv4_6_vision_embeddings_forward(self, pixel_values, position_ids, window_index, merge_index):
     """Traceable forward for the MiniCPM-V-4.6 vision tower + merger.
 
@@ -4098,15 +4099,6 @@ def _minicpmv4_6_vision_embeddings_forward(self, pixel_values, position_ids, win
     of visual patches. All spatial ``reshape``/``permute`` groupings of the
     original implementation are expressed as ``index_select`` + ``reshape`` so
     the graph is valid for any image resolution.
-
-    Original implementations:
-    https://github.com/huggingface/transformers/blob/v5.22.1/src/transformers/models/minicpmv4_6/modeling_minicpmv4_6.py#L80-L93
-    https://github.com/huggingface/transformers/blob/v5.22.1/src/transformers/models/minicpmv4_6/modeling_minicpmv4_6.py#L170-L234
-    https://github.com/huggingface/transformers/blob/v5.22.1/src/transformers/models/minicpmv4_6/modeling_minicpmv4_6.py#L247-L268
-    https://github.com/huggingface/transformers/blob/v5.22.1/src/transformers/models/minicpmv4_6/modeling_minicpmv4_6.py#L355-L393
-    https://github.com/huggingface/transformers/blob/v5.22.1/src/transformers/models/minicpmv4_6/modeling_minicpmv4_6.py#L445-L491
-    https://github.com/huggingface/transformers/blob/v5.22.1/src/transformers/models/minicpmv4_6/modeling_minicpmv4_6.py#L505-L570
-    https://github.com/huggingface/transformers/blob/v5.22.1/src/transformers/models/minicpmv4_6/modeling_minicpmv4_6.py#L604-L661
     """
     vision_tower = self.model.vision_tower
     merger = self.model.merger
@@ -11686,13 +11678,9 @@ def qwen3_5_gated_delta_net_forward(
     return output
 
 
+# Original code: https://github.com/huggingface/transformers/blob/v5.22.1/src/transformers/models/qwen3_5/modeling_qwen3_5.py#L1681
 class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
-    """Expose grouped cache tensors around the original language-model forwards.
-
-    Original Qwen3_5TextModel.forward and Qwen3_5ForCausalLM.forward:
-    https://github.com/huggingface/transformers/blob/v5.22.1/src/transformers/models/qwen3_5/modeling_qwen3_5.py#L1227
-    https://github.com/huggingface/transformers/blob/v5.22.1/src/transformers/models/qwen3_5/modeling_qwen3_5.py#L1681
-    """
+    """Expose grouped cache tensors around the original language-model forwards."""
 
     def __init__(
         self,
