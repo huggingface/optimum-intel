@@ -16,9 +16,10 @@ import gc
 import logging
 import os
 import re
+import shutil
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import numpy as np
 import openvino
@@ -40,6 +41,7 @@ from transformers.file_utils import add_start_docstrings
 from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.utils import ModelOutput
 
+from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import model_has_state
 from . import OV_DECODER_NAME, OV_ENCODER_NAME
 from .configuration import OVConfig, OVWeightQuantizationConfig
@@ -1436,8 +1438,6 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
         :meth:`_resolve_ir_dir` resolves for this model, so a second load finds the IRs already
         there instead of converting again.
         """
-        from optimum.exporters.openvino import main_export
-
         source = Path(str(model_id))
         if source.is_dir() and cls._is_complete_export(source):
             return source  # already an exported directory
@@ -1975,6 +1975,64 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
     def reshape(self, *args, **kwargs):
         logger.warning("Static shapes are not supported for Qwen3-TTS.")
         return self
+
+    def _save_pretrained(self, save_directory: Union[str, Path]):
+        """
+        Saves the model to the OpenVINO IR format so that it can be re-loaded using the
+        [`~optimum.intel.openvino.modeling.OVModel.from_pretrained`] class method.
+
+        Arguments:
+            save_directory (`str` or `Path`):
+                The directory where to save the model files.
+        """
+        super()._save_pretrained(save_directory)
+
+        save_directory = Path(save_directory)
+        source = Path(str(self._ir_dir))
+        if source.is_dir() and self._is_complete_export(source) and source.resolve() != save_directory.resolve():
+            # ``super()._save_pretrained`` already serialized every OpenVINO IR (``*.xml`` / ``*.bin``).
+            asset_files = {
+                "config.json",  # main model configuration
+                "generation_config.json",  # default generation parameters
+                "preprocessor_config.json",  # processor / feature-extractor configuration
+                "tokenizer_config.json",  # tokenizer configuration
+                "tokenizer.json",  # fast (tokenizers) tokenizer definition
+                "vocab.json",  # tokenizer vocabulary
+                "merges.txt",  # BPE merge rules
+            }
+            asset_dirs = {
+                "speech_tokenizer": "neural codec (speech tokenizer) configuration",
+            }
+            self._copy_assets(source, save_directory, set(asset_files), set(asset_dirs))
+        elif not self._is_complete_export(save_directory):
+            # Fallback to main_export when there is no complete export to copy from.
+            # This happens when an instance is loaded with `export=False`.
+            main_export(
+                model_name_or_path=str(self.model_save_dir),
+                output=save_directory,
+                task=self.export_feature,
+            )
+
+    def _copy_assets(
+        self,
+        source: Path,
+        destination: Path,
+        asset_files: Set[str],
+        asset_dirs: Set[str],
+    ) -> None:
+        """Copy the non-IR assets of a complete export into ``destination``."""
+
+        for item in source.iterdir():
+            if item.is_dir():
+                if item.name in asset_dirs:
+                    shutil.copytree(item, destination / item.name, dirs_exist_ok=True)
+                continue
+            if item.name not in asset_files:
+                continue
+            dest = destination / item.name
+            if dest.resolve() == item.resolve():
+                continue
+            shutil.copy2(item, dest)
 
     def _apply_quantization(
         self,

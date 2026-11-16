@@ -473,6 +473,14 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "quant_method": OVQuantizationMethod.AWQ,
         "group_size_fallback": "adjust",
     },
+    "google/gemma-4-31B-it": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "ratio": 1.0,
+        "group_size_fallback": "ignore",
+        "dq_group_size": 128,
+    },
     "google/gemma-4-E4B-it": {
         "quantization_configs": {
             "lm_model": {
@@ -588,6 +596,14 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
             "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
         },
     },
+    "openbmb/MiniCPM-OCR-1.0": {
+        "quantization_configs": {
+            # Two-stage int4 + int8 compression, see `_MiniCPMOCRQuantizationConfig`
+            "lm_model": {"config_class": "minicpm_ocr"},
+            "text_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
+            "vision_embeddings_model": {"bits": 8, "sym": True, "weight_only": True},
+        },
+    },
     "openbmb/MiniCPM5-2B": {
         "bits": 4,
         "sym": False,
@@ -596,17 +612,105 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "dataset": "gsm8k",
         "scale_estimation": True,
     },
+    "LiquidAI/LFM3-Omni-2B": {"bits": 4, "sym": False, "group_size": 64},
+    "LiquidAI/LFM3-1.7B": {"bits": 4, "sym": False, "group_size": 64},
+    "LiquidAI/LFM3-VL-2B": {"bits": 4, "sym": False, "group_size": 64},
     "BAAI/bge-reranker-v2-m3": {
         "bits": 4,
         "sym": False,
         "group_size": 32,
         "ratio": 0.9,
     },
+    # The intermediate size of the experts, 1856, is not a multiple of 128: with the default group size, the down
+    # projections of the experts would keep their original precision
+    "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16": {"bits": 4, "sym": False, "group_size": 64},
+    "nvidia/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-BF16": {"bits": 4, "sym": False, "group_size": 64},
+    # The hidden size, 3136, is not a multiple of 128: with the default group size, about half of the weights would
+    # keep their original precision
+    "nvidia/NVIDIA-Nemotron-3-Nano-4B-BF16": {"bits": 4, "sym": False, "group_size": 64},
+    "diffusers/LTX-2.3-Diffusers": {
+        "quantization_configs": {
+            "transformer": {"bits": 4, "sym": True, "group_size": 32, "weight_only": True},
+            "connectors": {"bits": 4, "sym": True, "group_size": 32, "weight_only": True},
+            "text_encoder": {"bits": 4, "sym": False, "weight_only": True},
+        },
+    },
+    "Lightricks/LTX-2.5-Diffusers": {
+        "quantization_configs": {
+            "transformer": {"bits": 4, "sym": True, "group_size": 32, "weight_only": True},
+            "connectors": {"bits": 4, "sym": True, "group_size": 32, "weight_only": True},
+            "text_encoder": {"bits": 4, "sym": False, "weight_only": True},
+        },
+    },
 }
 
 _DEFAULT_8BIT_WQ_CONFIGS = {
     "Qwen/Qwen2.5-Coder-3B-Instruct": {"bits": 8, "sym": False, "dq_group_size": 128},
     "diffusers/LTX-2.3-Diffusers": {
+        "quantization_configs": {
+            "transformer": {
+                "bits": 8,
+                "sym": True,
+                "group_size": 32,
+                "weight_only": True,
+                "ignored_scope": {
+                    "patterns": [
+                        r".*proj_in.*",  # patchify_proj, audio_patchify_proj
+                        r".*proj_out.*",  # proj_out, audio_proj_out
+                        r".*time_embed.*",  # adaln_single, audio_adaln_single
+                        r".*av_cross_attn_.*",  # av_ca_*_adaln_single
+                        r".*prompt_adaln.*",  # prompt_adaln_single, audio_prompt_adaln_single
+                    ],
+                },
+            },
+            "connectors": {
+                "bits": 8,
+                "sym": True,
+                "group_size": 32,
+                "weight_only": True,
+                "ignored_scope": {"patterns": [r".*text_proj_in"]},
+            },
+            "text_encoder": {"bits": 8, "sym": False, "weight_only": True},
+        },
+    },
+    "Lightricks/LTX-2.5-Diffusers": {
+        "quantization_configs": {
+            "transformer": {
+                "bits": 8,
+                "sym": True,
+                "group_size": 32,
+                "weight_only": True,
+                "ignored_scope": {
+                    "patterns": [
+                        r".*proj_in.*",  # patchify_proj, audio_patchify_proj
+                        r".*proj_out.*",  # proj_out, audio_proj_out
+                        r".*time_embed.*",  # adaln_single, audio_adaln_single
+                        r".*av_cross_attn_.*",  # av_ca_*_adaln_single
+                        r".*prompt_adaln.*",  # prompt_adaln_single, audio_prompt_adaln_single
+                    ],
+                },
+            },
+            "connectors": {
+                "bits": 8,
+                "sym": True,
+                "group_size": 32,
+                "weight_only": True,
+                "ignored_scope": {"patterns": [r".*text_proj_in"]},
+            },
+            "text_encoder": {"bits": 8, "sym": False, "weight_only": True},
+        },
+    },
+}
+
+# The int8 configs used instead of the ones above that need a newer NNCF version than the installed one
+_DEFAULT_8BIT_WQ_CONFIGS_FOR_OLDER_NNCF = {
+    "diffusers/LTX-2.3-Diffusers": {
+        "quantization_configs": {
+            "transformer": {"bits": 8, "sym": False, "weight_only": True},
+            "text_encoder": {"bits": 8, "sym": False, "weight_only": True},
+        },
+    },
+    "Lightricks/LTX-2.5-Diffusers": {
         "quantization_configs": {
             "transformer": {"bits": 8, "sym": False, "weight_only": True},
             "text_encoder": {"bits": 8, "sym": False, "weight_only": True},
@@ -806,12 +910,14 @@ def get_default_quantization_config(
         quant_mode (`str`, *optional*):
             The quantization mode. Currently only "int8" value is supported.
     Returns:
-        Default quantization config for the given model if found and `None` otherwise.
+        Default quantization config for the given model if found and `None` otherwise. If the installed NNCF version
+        does not support the default config, the one registered for older NNCF versions is returned instead, if any.
     """
 
     if weight_format is None and quant_mode is None:
         raise ValueError("Either `weight_format` or `quant_mode` must be provided.")
 
+    configs_for_older_nncf = {}
     if weight_format == "int2":
         default_configs_dict = _DEFAULT_2BIT_WQ_CONFIGS
     elif weight_format == "int3":
@@ -820,11 +926,29 @@ def get_default_quantization_config(
         default_configs_dict = _DEFAULT_4BIT_WQ_CONFIGS
     elif weight_format == "int8":
         default_configs_dict = _DEFAULT_8BIT_WQ_CONFIGS
+        configs_for_older_nncf = _DEFAULT_8BIT_WQ_CONFIGS_FOR_OLDER_NNCF
     elif quant_mode == "int8":
         default_configs_dict = _DEFAULT_INT8_FQ_CONFIGS
     else:
         return None
 
+    config = _find_model_config(model_id_or_path, default_configs_dict)
+    missing_nncf_version = _get_missing_nncf_version(config)
+    if missing_nncf_version is not None:
+        logger.warning(
+            f"The default {weight_format or quant_mode} config of {model_id_or_path} needs "
+            f"nncf>={missing_nncf_version}, so it is replaced with one that the installed nncf version supports, "
+            "which may keep less of the model quality. Please install the latest nncf version, e.g. with "
+            "`pip install -U nncf`."
+        )
+        config = _find_model_config(model_id_or_path, configs_for_older_nncf)
+    return config
+
+
+def _find_model_config(model_id_or_path: str, default_configs_dict: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Returns the config of the given model in `default_configs_dict` if found and `None` otherwise.
+    """
     # Check if the model_id_or_path is in the default configs
     model_id_candidates = _get_model_id_candidates(model_id_or_path)
     for model_id in model_id_candidates:
@@ -838,6 +962,29 @@ def get_default_quantization_config(
         if model_path.name == short_id:
             return config
 
+    return None
+
+
+def _get_missing_nncf_version(quantization_config: Optional[Dict[str, Any]]) -> Optional[str]:
+    """
+    Returns the NNCF version that the given quantization config needs if the installed NNCF version is older, and
+    `None` otherwise. So far, only group-wise int8 weight compression needs a newer NNCF version: NNCF supports it
+    since 3.5.0.
+    """
+    if quantization_config is None:
+        return None
+
+    if "quantization_configs" in quantization_config:  # a config per submodel
+        configs = quantization_config["quantization_configs"].values()
+    else:
+        configs = [quantization_config]
+    for config in configs:
+        # The data type of the weights is given either by `dtype` or by `bits`, which is 8 by default
+        is_int8 = (config.get("dtype") or f"int{config.get('bits', 8)}") == "int8"
+        # Only the release counts: a development build of NNCF 3.5.0 (3.5.0.dev0+<commit>) supports group-wise int8
+        # weight compression only if it includes the commit that added it, which its version does not tell
+        if is_int8 and config.get("group_size") not in (None, -1) and not is_nncf_version(">=", "3.5.0"):
+            return "3.5.0"
     return None
 
 
@@ -906,6 +1053,64 @@ def _apply_default_ignored_scope_config(
             merged_ignored_scope = _merge_ignored_scopes(q_config.ignored_scope, default_ignored_scope)
             q_config.ignored_scope = merged_ignored_scope
     return quantization_config_copy or quantization_config
+
+
+def _get_compression_mode(
+    sym: bool, bits: Optional[int] = None, dtype: Optional[str] = None
+) -> "nncf.CompressWeightsMode":
+    """
+    Converts weight compression parameters to `nncf.CompressWeightsMode`.
+    """
+    if dtype is None and bits is None:
+        raise ValueError("Either `dtype` or `bits` must be provided to determine the weight compression mode.")
+    mode = dtype or f"int{bits}"
+    if mode.startswith("int"):
+        mode += "_sym" if sym else "_asym"
+    # Codebook is not supported by scopedconfig.
+    if mode == "cb4" and is_nncf_version("<=", "2.19"):
+        mode = "cb4_f8e4m3"
+    return nncf.CompressWeightsMode(mode)
+
+
+def _get_scoped_config_instances(scoped_configs: Optional[List[dict]]) -> Optional[List["nncf.ScopedConfig"]]:
+    """
+    Converts scoped configs to `nncf.ScopedConfig` instances for `nncf.compress_weights()` call.
+    """
+    if scoped_configs is None:
+        return None
+    instances = []
+    for scoped_config in scoped_configs:
+        scoped_config = dict(scoped_config)
+        bits = scoped_config.pop("bits", 8)
+        sym = scoped_config.pop("sym", False)
+        mode = _get_compression_mode(sym, bits=bits)
+        instances.append(nncf.ScopedConfig(**scoped_config, mode=mode))
+    return instances
+
+
+def _validate_scoped_configs(scoped_configs: Optional[List[dict]]):
+    if scoped_configs is None:
+        return
+    if not hasattr(nncf, "ScopedConfig"):
+        raise ImportError(
+            "The `scoped_configs` parameter requires a newer NNCF version with `nncf.ScopedConfig` support. "
+            "Please update NNCF."
+        )
+    if not isinstance(scoped_configs, list) or not all(isinstance(config, dict) for config in scoped_configs):
+        raise ValueError(f"`scoped_configs` is expected to be a list of dicts, but found: {scoped_configs}")
+    for scoped_config in scoped_configs:
+        bits = scoped_config.get("bits", 8)
+        if bits not in [2, 3, 4, 8]:
+            raise ValueError(f"Only support quantization to [2,3,4,8] bits but found {bits}")
+        group_size = scoped_config.get("group_size")
+        if group_size is not None and group_size != -1 and group_size <= 0:
+            raise ValueError(f"`group_size` must be greater than 0 or equal to -1, but found {group_size}")
+    try:
+        _get_scoped_config_instances(scoped_configs)
+    except Exception as e:
+        raise ValueError(
+            f"Can't create `nncf.ScopedConfig` objects from the provided scoped configs: {scoped_configs}.\n{e}"
+        )
 
 
 @dataclass
@@ -1041,6 +1246,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             Whether to use symmetric quantization on the weights. Does not affect backup precision symmetricity.
         group_size (`int`, *optional*):
             The group size to use for quantization. Recommended value is 128 and -1 uses per-column quantization.
+            8-bit quantization is per-column by default.
         tokenizer (`str`, *optional*):
             The tokenizer used to process the dataset. You can pass either:
                 - A string, the *model id* of a predefined tokenizer hosted inside a model repo on huggingface.co.
@@ -1129,6 +1335,19 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             "DYNAMIC_QUANTIZATION_GROUP_SIZE" runtime info value in the OpenVINO model IR. If not explicitly set,
             dynamic quantization of activations may still be applied by OpenVINO runtime. Value 0 disables dynamic
             quantization of activations.
+        scoped_configs (`List[dict]`, *optional*):
+            A list of weight compression configurations, each applied to a portion of the model. Every entry is a
+            dict with the following keys:
+            - "names", "patterns", "types", "subgraphs", "validate": define the nodes the configuration is applied
+                to, same as the keys of an `ignored_scope` dict.
+            - "bits" (`int`, defaults to 8): the number of bits to quantize to.
+            - "sym" (`bool`, defaults to `False`): whether to use symmetric quantization.
+            - "group_size" (`int`, *optional*): the group size to use for quantization, -1 uses per-column
+                quantization. If not set, the default group size for the given bits is used.
+            A scoped configuration overrides the precision assigned to the matched layers by `ratio`,
+            `ignored_scope`, `all_layers` and `backup_precision`. If several scoped configurations match the same
+            layer, the last one in the list is applied. Requires NNCF with `nncf.ScopedConfig` support.
+            Example: `[{"patterns": [".*self_attn.*"], "bits": 8, "sym": False, "group_size": -1}]`.
         kwargs: Additional parameters for nncf.compress_weights() call.
     """
 
@@ -1154,6 +1373,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         statistics_path: Optional[str] = None,
         group_size_fallback: Optional[str] = None,
         dq_group_size: Optional[int] = None,
+        scoped_configs: Optional[List[dict]] = None,
         **kwargs,
     ):
         weight_format = kwargs.pop("weight_format", None)
@@ -1186,6 +1406,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         self.statistics_path = statistics_path
         self.group_size_fallback = group_size_fallback
         self.dq_group_size = dq_group_size
+        self.scoped_configs = scoped_configs
         self.post_init()
 
     def post_init(self):
@@ -1193,6 +1414,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         Safety checker that arguments are correct
         """
         super().post_init()
+        _validate_scoped_configs(self.scoped_configs)
         if not (0 <= self.ratio <= 1):
             raise ValueError("`ratio` must between 0 and 1.")
         if self.group_size is not None and self.group_size != -1 and self.group_size <= 0:
@@ -1253,10 +1475,6 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
             if self.ratio != 1:
                 raise ValueError(
                     f"For 8-bit quantization, `ratio` is expected to be set to 1.0, but was set to {self.ratio}"
-                )
-            if self.group_size is not None and self.group_size != -1:
-                raise ValueError(
-                    f"For 8-bit quantization, `group_size` is expected to be set to -1, but was set to {self.group_size}"
                 )
             if self.all_layers:
                 raise ValueError("The `all_layers` parameter is not supported for 8-bit quantization")
@@ -1332,14 +1550,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         Returns a dictionary with the variables that are ready to use for nncf.quantize() call.
         """
 
-        signed_bitness = {2: "int2", 3: "int3", 4: "int4", 8: "int8"}
-        mode = self.dtype if self.dtype else signed_bitness[self.bits]
-        if mode in signed_bitness.values():
-            mode += "_sym" if self.sym else "_asym"
-
-        if mode == "cb4" and is_nncf_version("<=", "2.19"):
-            mode = "cb4_f8e4m3"
-        mode = nncf.CompressWeightsMode(mode)
+        mode = _get_compression_mode(self.sym, bits=self.bits, dtype=self.dtype)
 
         awq = True if self.quant_method == OVQuantizationMethod.AWQ else None
         sensitivity_metric = nncf.SensitivityMetric(self.sensitivity_metric) if self.sensitivity_metric else None
@@ -1354,6 +1565,8 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
                     advanced_parameters, group_size_fallback_mode=nncf.GroupSizeFallbackMode(self.group_size_fallback)
                 )
             kwargs["advanced_parameters"] = advanced_parameters
+        if self.scoped_configs is not None:
+            kwargs["scoped_configs"] = _get_scoped_config_instances(self.scoped_configs)
         result = {
             "mode": mode,
             "ratio": self.ratio,
@@ -1442,6 +1655,11 @@ class OVQuantizationConfig(OVQuantizationConfigBase):
                 "Please use `dtype` instead."
             )
             dtype = activation_format
+        if kwargs.pop("scoped_configs", None) is not None:
+            raise ValueError(
+                "`scoped_configs` is a weight compression parameter and is not supported for full quantization. "
+                "Please use `OVWeightQuantizationConfig` or `OVMixedQuantizationConfig` instead."
+            )
         super().__init__(
             ignored_scope=ignored_scope,
             num_samples=num_samples,
@@ -1599,6 +1817,8 @@ class OVConfig(BaseConfig):
             dtype = "_".join(dtypes)
         elif isinstance(quantization_config, _GPTOSSQuantizationConfig):
             dtype = "int4"
+        elif isinstance(quantization_config, _MiniCPMOCRQuantizationConfig):
+            dtype = quantization_config.first_stage.dtype
         else:
             raise ValueError(f"Unsupported type of quantization config: {type(quantization_config)}")
         return dtype
@@ -1680,6 +1900,11 @@ class OVMixedQuantizationConfig(OVQuantizationConfigBase):
         dataset_kwargs = kwargs.get("_dataset_kwargs", {}) or wqc._dataset_kwargs or fqc._dataset_kwargs
         if dataset_kwargs:
             kwargs["_dataset_kwargs"] = dataset_kwargs
+        if kwargs.pop("scoped_configs", None) is not None:
+            raise ValueError(
+                "`scoped_configs` is a weight compression parameter and is not supported for mixed quantization "
+                "config. Please provide it in `weight_quantization_config` instead."
+            )
         super().__init__(
             ignored_scope=ignored_scope,
             num_samples=num_samples,
@@ -1763,6 +1988,11 @@ class OVPipelineQuantizationConfig(OVQuantizationConfigBase):
                 "`ignored_scope` parameter is not supported for pipeline quantization. It will be ignored. "
                 "Please use `ignored_scope` parameter in the model configs instead."
             )
+        if kwargs.pop("scoped_configs", None) is not None:
+            logger.warning(
+                "`scoped_configs` parameter is not supported for pipeline quantization. It will be ignored. "
+                "Please use `scoped_configs` parameter in the model configs instead."
+            )
 
         quantization_configs = copy.deepcopy(quantization_configs)
         for ov_model_name, ov_model_config in quantization_configs.items():
@@ -1838,6 +2068,52 @@ class _GPTOSSQuantizationConfig(QuantizationConfigMixin):
         return result
 
 
+class _MiniCPMOCRQuantizationConfig(OVQuantizationConfigBase):
+    CONFIG_CLASS = "minicpm_ocr"
+
+    # Settings of the two compression passes for the language model of openbmb/MiniCPM-OCR-1.0
+    DEFAULT_FIRST_STAGE = {
+        "bits": 4,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 1.0,
+        "dataset": "textvqa",
+        "num_samples": 32,
+        "quant_method": OVQuantizationMethod.AWQ,
+        "scale_estimation": True,
+        # MLP weights are kept in original precision at the first stage and quantized to int8 at the second
+        "ignored_scope": {"patterns": [".*mlp\\.(gate_proj|up_proj|down_proj)/.*"]},
+    }
+    DEFAULT_SECOND_STAGE = {"bits": 8, "sym": False, "weight_only": True}
+
+    def __init__(
+        self,
+        first_stage: Optional[Union[Dict, OVWeightQuantizationConfig]] = None,
+        second_stage: Optional[Union[Dict, OVWeightQuantizationConfig]] = None,
+        **kwargs,
+    ):
+        """Two-pass weight compression config for the language model of openbmb/MiniCPM-OCR-1.0."""
+        kwargs.pop("config_class", None)
+        first_stage = self.DEFAULT_FIRST_STAGE if first_stage is None else first_stage
+        second_stage = self.DEFAULT_SECOND_STAGE if second_stage is None else second_stage
+        if isinstance(first_stage, dict):
+            first_stage = OVWeightQuantizationConfig.from_dict(copy.deepcopy(first_stage))
+        if isinstance(second_stage, dict):
+            second_stage = OVWeightQuantizationConfig.from_dict(copy.deepcopy(second_stage))
+        self.first_stage, self.second_stage = first_stage, second_stage
+        # Calibration data related parameters are taken from the first stage
+        for field in ("dataset", "num_samples", "tokenizer", "processor", "_dataset_kwargs"):
+            kwargs.setdefault(field, getattr(self.first_stage, field))
+        super().__init__(**kwargs)
+
+    def to_dict(self) -> Dict[str, Any]:
+        result = super().to_dict()
+        result["config_class"] = self.CONFIG_CLASS
+        result["first_stage"] = self.first_stage.to_dict()
+        result["second_stage"] = self.second_stage.to_dict()
+        return result
+
+
 def _quantization_config_from_dict(config_dict: Dict[str, Any]) -> OVQuantizationConfigBase:
     """
     Helper function to create a quantization config from a dictionary.
@@ -1850,6 +2126,10 @@ def _quantization_config_from_dict(config_dict: Dict[str, Any]) -> OVQuantizatio
     # Check for OVPipelineQuantizationConfig
     if "quantization_configs" in config_dict:
         return OVPipelineQuantizationConfig.from_dict(config_dict)
+
+    # Check for MiniCPM-OCR quantization config
+    if config_dict.get("config_class") == _MiniCPMOCRQuantizationConfig.CONFIG_CLASS:
+        return _MiniCPMOCRQuantizationConfig.from_dict(config_dict)
 
     # Check for GPT-OSS quantization config
     if "quantization_config1" in config_dict and "quantization_config2" in config_dict:

@@ -621,7 +621,7 @@ class OVBaseModel(OptimizedModel, OVModelHostMixin):
         _export = export
         model_dir = model_id
         try:
-            if local_files_only:
+            if local_files_only and not os.path.isdir(model_id):
                 object_id = model_id.replace("/", "--")
                 cached_model_dir = os.path.join(cache_dir, f"models--{object_id}")
                 refs_file = os.path.join(os.path.join(cached_model_dir, "refs"), revision or "main")

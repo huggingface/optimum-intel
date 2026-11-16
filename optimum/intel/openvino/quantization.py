@@ -56,6 +56,7 @@ from .configuration import (
     OVQuantizationMethod,
     OVWeightQuantizationConfig,
     _merge_ignored_scopes,
+    _MiniCPMOCRQuantizationConfig,
 )
 from .modeling import OVModelForFeatureExtraction, OVModelForMaskedLM, OVModelForZeroShotImageClassification
 from .modeling_base import OVBaseModel
@@ -1503,7 +1504,14 @@ class OVQuantizer(OptimumQuantizer):
                 config = config.clone()
                 config.num_samples = nncf_dataset.get_length()
 
-            if isinstance(config, OVWeightQuantizationConfig):
+            if isinstance(config, _MiniCPMOCRQuantizationConfig):
+                first_stage = config.first_stage.clone()
+                first_stage.num_samples = config.num_samples
+                quantized_model = _weight_only_quantization(ov_model, first_stage, nncf_dataset, **kwargs)
+                quantized_model = _weight_only_quantization(
+                    quantized_model, config.second_stage, verify_not_optimized=False, **kwargs
+                )
+            elif isinstance(config, OVWeightQuantizationConfig):
                 if config.bits == 8:
                     # 8-bit weight only data-aware quantization is not supported
                     nncf_dataset = None
