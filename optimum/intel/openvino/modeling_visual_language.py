@@ -499,7 +499,7 @@ class OVQwen3AudioEncoder(OVAudioEncoder):
         R = n_window_infer // (n_window * 2)
         chunk_list = list(audio_flat.T.split(chunk_lengths.tolist(), dim=0))
         real_output_lens = _get_feat_extract_output_lengths(chunk_lengths).tolist()
-        full_chunk_frames = n_window * 2
+        pad_chunk_frames = int(chunk_lengths.max())
         num_mels = audio_flat.shape[0]
 
         # Pad every audio's chunk count up to a multiple of R = n_window_infer // (n_window * 2),
@@ -514,7 +514,7 @@ class OVQwen3AudioEncoder(OVAudioEncoder):
                 padded_chunk_output_lens.append(real_output_lens[cursor])
                 cursor += 1
             for _ in range((-audio_chunk_count) % R):
-                padded_chunk_list.append(audio_flat.new_zeros(full_chunk_frames, num_mels))
+                padded_chunk_list.append(audio_flat.new_zeros(pad_chunk_frames, num_mels))
                 padded_chunk_output_lens.append(0)
 
         padded_feature = torch.nn.utils.rnn.pad_sequence(padded_chunk_list, batch_first=True).transpose(1, 2)
