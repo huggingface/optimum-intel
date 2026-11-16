@@ -56,6 +56,7 @@ from .configuration import (
     OVQuantizationConfigBase,
     OVWeightQuantizationConfig,
 )
+from .generation_guard import OVGuard, OVGuardConfig, start_guarded_generation
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import (
     ONNX_WEIGHTS_NAME,
@@ -772,6 +773,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         streamer: Optional["BaseStreamer"] = None,
         negative_prompt_ids: Optional[torch.Tensor] = None,
         negative_prompt_attention_mask: Optional[torch.Tensor] = None,
+        guard: Optional[Union["OVGuard", "PreTrainedModel"]] = None,
+        guard_config: Optional[OVGuardConfig] = None,
         **kwargs,
     ) -> Union[GenerateOutput, torch.LongTensor]:
         _generation_config, _ = self._prepare_generation_config(generation_config, **kwargs)
@@ -785,6 +788,13 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         ]
         if is_beam_search:
             self._first_iter_beam_search = True
+
+        guard_session = None
+        if guard is not None:
+            guard_session, stopping_criteria, streamer = start_guarded_generation(
+                guard, guard_config, self.config, inputs, stopping_criteria, streamer, not is_beam_search, kwargs
+            )
+
         result = super().generate(
             inputs,
             generation_config,
@@ -798,6 +808,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             negative_prompt_attention_mask,
             **kwargs,
         )
+
+        if guard_session is not None:
+            result = guard_session.finalize(result, _generation_config.pad_token_id)
         return result
 
     def _get_past_length(self, past_key_values=None):

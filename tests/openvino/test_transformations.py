@@ -567,6 +567,30 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
     if arch in get_supported_model_for_library("transformers") or _NON_TRANSFORMERS_ARCHS.get(arch, False)
 }
 
+# A streaming token classifier exported with a KV cache gets the same decoder fusions as a causal LM.
+if "qwen3_guard" in MODEL_NAMES:
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_guard"] = {
+        "model_class": "OVModelForTokenClassification",
+        "task": "token-classification-with-past",
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+        ],
+        "compile": [
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "CommonDecompositions",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "ConvertBroadcast3",
+            "ConvertMatMulToFC",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+        ],
+    }
+
 
 # Diffusion architectures are loaded through a pipeline class and live in the diffusers library (not
 # transformers), so they are added after the transformers filter above with an explicit `model_class`.
@@ -734,7 +758,7 @@ def _get_flat_transforms(arch):
     return entry["convert"] + entry["compile"]
 
 
-def _capture_stderr_during(model_id, OPENVINO_DEVICE, trust_remote_code, model_class="OVModelForCausalLM"):
+def _capture_stderr_during(model_id, OPENVINO_DEVICE, trust_remote_code, model_class="OVModelForCausalLM", task=None):
     #  Runs model loading in a subprocess to reliably capture OpenVINO C++ logs.
 
     code = textwrap.dedent(
@@ -750,6 +774,7 @@ def _capture_stderr_during(model_id, OPENVINO_DEVICE, trust_remote_code, model_c
             compile=True,
             device="{OPENVINO_DEVICE}",
             trust_remote_code={trust_remote_code},
+            {f"task={task!r}," if task else ""}
         )
     """
     )
@@ -821,6 +846,7 @@ class OVTransformationTest(unittest.TestCase):
             OPENVINO_DEVICE,
             trust_remote_code,
             model_class,
+            ARCH_TO_EXPECTED_TRANSFORMATIONS[model_arch].get("task"),
         )
 
         result = check_failed_transformations(log_output, expected_transforms)
