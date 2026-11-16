@@ -13,7 +13,6 @@
 #  limitations under the License.
 import logging
 import os
-from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
@@ -796,20 +795,19 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 guard, guard_config, self.config, inputs, stopping_criteria, streamer, not is_beam_search, kwargs
             )
 
-        with guard_session or nullcontext():
-            result = super().generate(
-                inputs,
-                generation_config,
-                logits_processor,
-                stopping_criteria,
-                prefix_allowed_tokens_fn,
-                synced_gpus,
-                assistant_model,
-                streamer,
-                negative_prompt_ids,
-                negative_prompt_attention_mask,
-                **kwargs,
-            )
+        result = super().generate(
+            inputs,
+            generation_config,
+            logits_processor,
+            stopping_criteria,
+            prefix_allowed_tokens_fn,
+            synced_gpus,
+            assistant_model,
+            streamer,
+            negative_prompt_ids,
+            negative_prompt_attention_mask,
+            **kwargs,
+        )
 
         if guard_session is not None:
             result = guard_session.finalize(result, _generation_config.pad_token_id)

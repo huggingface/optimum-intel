@@ -651,6 +651,7 @@ class OVGuard:
 
     def __init__(self, backend: OVGuardBackend):
         self.backend = backend
+        self._session: Optional[OVGuardSession] = None
 
     @classmethod
     def from_pretrained(
@@ -851,7 +852,12 @@ class OVGuard:
                 Whether the guarded sequences only ever grow by appending, which lets a token
                 classifier guard reuse its KV cache. Beam search has to set this to `False`.
         """
-        return OVGuardSession(self, config, tokenizer, incremental)
+        if self._session is not None:
+            # A `generate` that failed before its first step leaves the async prompt check running.
+            # shortcut: a bare guard model passed to `generate` is rewrapped per call and not covered here.
+            self._session.close()
+        self._session = OVGuardSession(self, config, tokenizer, incremental)
+        return self._session
 
 
 # --------------------------------------------------------------------------------------------- #
@@ -993,12 +999,6 @@ class OVGuardSession:
             for row, cleared in enumerate(keep):
                 sequences[row, self._prompt_length + cleared :] = pad_token_id
         return sequences
-
-    def __enter__(self) -> "OVGuardSession":
-        return self
-
-    def __exit__(self, *exc_info) -> None:
-        self.close()
 
     def finalize(self, result, pad_token_id: Optional[int] = None):
         """Moderates the tail of a finished `generate` call and applies the verdicts to its `result`."""
@@ -1188,8 +1188,8 @@ def start_guarded_generation(
 ):
     """Starts guarding a `generate` call.
 
-    Returns the started [`OVGuardSession`], to be closed once generation ends, along with the stopping
-    criteria and streamer that `generate` has to use instead of `stopping_criteria` and `streamer`.
+    Returns the started [`OVGuardSession`], to be finished with [`~OVGuardSession.finalize`], along with the
+    stopping criteria and streamer that `generate` has to use instead of `stopping_criteria` and `streamer`.
     """
     guard = guard if isinstance(guard, OVGuard) else OVGuard.from_model(guard)
     guard.backend.validate_target(target_config)
