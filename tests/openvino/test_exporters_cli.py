@@ -1714,6 +1714,25 @@ class OVCLIExportTestCase(unittest.TestCase):
             model = OVSentenceTransformer.from_pretrained(tmpdir, compile=False, device=OPENVINO_DEVICE)
             self.assertFalse("last_hidden_state" in model.output_names)
 
+    @parameterized.expand([("token-classification",), ("token-classification-with-past",)])
+    @unittest.skipIf("qwen3_guard" not in MODEL_NAMES, "Qwen3Guard-Stream remote code requires transformers<5")
+    def test_exporters_cli_multi_head_token_classifier(self, task):
+        with TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                f"optimum-cli export openvino --model {MODEL_NAMES['qwen3_guard']} --task {task} --trust-remote-code {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            model = OVModelForTokenClassification.from_pretrained(
+                tmpdir, trust_remote_code=True, compile=False, device=OPENVINO_DEVICE
+            )
+        self.assertEqual(model.stateful, task.endswith("-with-past"))
+        self.assertEqual(
+            model.head_names,
+            ("risk_level_logits", "category_logits", "query_risk_level_logits", "query_category_logits"),
+        )
+        self.assertTrue(set(model.head_names).issubset(model.output_names))
+
     def test_exporters_cli_open_clip(self):
         model_id = MODEL_NAMES["open-clip"]
         with TemporaryDirectory() as tmpdir:

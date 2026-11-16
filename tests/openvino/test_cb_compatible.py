@@ -96,6 +96,13 @@ ARCH_TO_CB_COMPATIBLE_SUBMODELS = {
     if arch in get_supported_model_for_library("transformers") or _NON_TRANSFORMERS_ARCHS.get(arch, False)
 }
 
+# A streaming token classifier keeps a KV cache like a decoder, so it can be served with paged attention too.
+if "qwen3_guard" in MODEL_NAMES:
+    ARCH_TO_CB_COMPATIBLE_SUBMODELS["qwen3_guard"] = {
+        "task": "token-classification-with-past",
+        "submodels": ("model",),
+    }
+
 # The inputs through which a PagedAttention graph receives the paged cache and its layout.
 _PAGED_ATTENTION_INPUTS = (
     "past_lens",

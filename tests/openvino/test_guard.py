@@ -493,7 +493,7 @@ class OVGuardedGenerationTest(unittest.TestCase):
         self.assertEqual(out.guard.first_violation.token_index, 0)
         torch.testing.assert_close(out.sequences, ids)
 
-        with self.assertLogs("optimum.intel.openvino.modeling_decoder", level="WARNING"):
+        with self.assertLogs("optimum.intel.openvino.generation_guard", level="WARNING"):
             sequences = llm.generate(ids, max_new_tokens=8, do_sample=False, guard=guard, guard_config=config)
         torch.testing.assert_close(sequences, ids)
         del llm, guard

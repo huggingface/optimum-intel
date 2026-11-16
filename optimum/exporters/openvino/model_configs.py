@@ -270,10 +270,10 @@ from optimum.exporters.openvino.model_patcher import (
     _get_model_attribute,
 )
 from optimum.exporters.openvino.utils import (
-    get_multi_head_token_classification_spec,
     GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE,
     GRANITEMOEHYBRID_MAMBA_LAYER_TYPE,
     LTX2_ROPE_INPUTS,
+    get_multi_head_token_classification_spec,
     has_ltx2_extended_guidance_inputs,
 )
 from optimum.exporters.tasks import TasksManager

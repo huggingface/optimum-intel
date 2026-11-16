@@ -22,7 +22,7 @@ import openvino as ov
 import torch
 from parameterized import parameterized
 from sentence_transformers import SentenceTransformer, models
-from transformers import AutoConfig, AutoTokenizer, GenerationConfig
+from transformers import AutoConfig, AutoModel, AutoTokenizer, GenerationConfig
 from utils_tests import (
     F32_CONFIG,
     MODEL_NAMES,
@@ -750,3 +750,24 @@ class CustomExportModelTest(unittest.TestCase):
         ov_outputs = ov_model(**tokens)
         self.assertTrue(torch.allclose(ov_outputs.token_embeddings, model_outputs.token_embeddings, atol=1e-4))
         self.assertTrue(torch.allclose(ov_outputs.sentence_embedding, model_outputs.sentence_embedding, atol=1e-4))
+
+    @parameterized.expand([("token-classification",), ("token-classification-with-past",)])
+    @unittest.skipIf("qwen3_guard" not in MODEL_NAMES, "Qwen3Guard-Stream remote code requires transformers<5")
+    def test_export_multi_head_token_classifier(self, task):
+        model_id = MODEL_NAMES["qwen3_guard"]
+        model = AutoModel.from_pretrained(model_id, trust_remote_code=True).eval()
+        input_ids = torch.randint(0, model.config.vocab_size, (2, 6))
+        attention_mask = torch.ones_like(input_ids)
+        with torch.no_grad():
+            pt_outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+
+        with TemporaryDirectory() as tmpdirname:
+            export_from_model(model, output=tmpdirname, task=task)
+            ov_model = OVModelForTokenClassification.from_pretrained(
+                tmpdirname, trust_remote_code=True, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
+            )
+
+        self.assertEqual(ov_model.stateful, task.endswith("-with-past"))
+        ov_outputs = ov_model(input_ids, attention_mask=attention_mask)
+        for name in ov_model.head_names:
+            torch.testing.assert_close(ov_outputs[name], getattr(pt_outputs, name), atol=1e-4, rtol=1e-4)

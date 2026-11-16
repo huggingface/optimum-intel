@@ -35,7 +35,8 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence,
 import numpy as np
 import torch
 from transformers import AutoConfig, AutoTokenizer, PretrainedConfig
-from transformers.generation.stopping_criteria import StoppingCriteria
+from transformers.generation.stopping_criteria import StoppingCriteria, StoppingCriteriaList
+from transformers.utils import ModelOutput
 
 from optimum.exporters.openvino.utils import get_multi_head_token_classification_spec
 
@@ -993,6 +994,28 @@ class OVGuardSession:
                 sequences[row, self._prompt_length + cleared :] = pad_token_id
         return sequences
 
+    def __enter__(self) -> "OVGuardSession":
+        return self
+
+    def __exit__(self, *exc_info) -> None:
+        self.close()
+
+    def finalize(self, result, pad_token_id: Optional[int] = None):
+        """Moderates the tail of a finished `generate` call and applies the verdicts to its `result`."""
+        sequences = result.sequences if isinstance(result, ModelOutput) else result
+        self.flush(sequences)
+        sequences = self.redact(sequences, pad_token_id)
+        if isinstance(result, ModelOutput):
+            result.sequences = sequences
+            result.guard = self.report
+            return result
+        if self.report.flagged:
+            logger.warning(
+                f"The guard model flagged this generation: {self.report.first_violation}. "
+                "Pass `return_dict_in_generate=True` to get the full report in `output.guard`."
+            )
+        return sequences
+
     def close(self) -> None:
         """Releases the background worker used by `prompt_mode="async"`."""
         if self._executor is not None:
@@ -1151,6 +1174,35 @@ class OVGuardedStreamer:
         while self._released < min(self.session.cleared_tokens, len(self._pending)):
             self.streamer.put(self._pending[self._released])
             self._released += 1
+
+
+def start_guarded_generation(
+    guard: Union[OVGuard, "OVBaseModel"],
+    guard_config: Optional[OVGuardConfig],
+    target_config: PretrainedConfig,
+    inputs: Optional[torch.Tensor],
+    stopping_criteria: Optional[StoppingCriteriaList],
+    streamer,
+    incremental: bool,
+    generate_kwargs: Dict[str, Any],
+):
+    """Starts guarding a `generate` call.
+
+    Returns the started [`OVGuardSession`], to be closed once generation ends, along with the stopping
+    criteria and streamer that `generate` has to use instead of `stopping_criteria` and `streamer`.
+    """
+    guard = guard if isinstance(guard, OVGuard) else OVGuard.from_model(guard)
+    guard.backend.validate_target(target_config)
+    input_ids = inputs if inputs is not None else generate_kwargs.get("input_ids")
+    if input_ids is None:
+        raise ValueError("`guard` requires `input_ids` to be passed to `generate`.")
+    session = guard.open_session(guard_config, tokenizer=generate_kwargs.get("tokenizer"), incremental=incremental)
+    stopping_criteria = StoppingCriteriaList(stopping_criteria or [])
+    stopping_criteria.append(OVGuardStoppingCriteria(session))
+    if not session.config.emit_before_check and streamer is not None:
+        streamer = OVGuardedStreamer(streamer, session)
+    session.start(input_ids, generate_kwargs.get("attention_mask"))
+    return session, stopping_criteria, streamer
 
 
 # --------------------------------------------------------------------------------------------- #

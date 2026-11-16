@@ -13,6 +13,7 @@
 #  limitations under the License.
 import logging
 import os
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
@@ -56,12 +57,7 @@ from .configuration import (
     OVQuantizationConfigBase,
     OVWeightQuantizationConfig,
 )
-from .generation_guard import (
-    OVGuard,
-    OVGuardConfig,
-    OVGuardedStreamer,
-    OVGuardStoppingCriteria,
-)
+from .generation_guard import OVGuard, OVGuardConfig, start_guarded_generation
 from .modeling import _TOKENIZER_FOR_DOC, INPUTS_DOCSTRING, MODEL_START_DOCSTRING, OVModel
 from .utils import (
     ONNX_WEIGHTS_NAME,
@@ -796,22 +792,11 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
 
         guard_session = None
         if guard is not None:
-            guard = OVGuard.from_model(guard) if not isinstance(guard, OVGuard) else guard
-            guard.backend.validate_target(self.config)
-            guard_session = guard.open_session(
-                guard_config, tokenizer=kwargs.get("tokenizer"), incremental=not is_beam_search
+            guard_session, stopping_criteria, streamer = start_guarded_generation(
+                guard, guard_config, self.config, inputs, stopping_criteria, streamer, not is_beam_search, kwargs
             )
-            input_ids = inputs if inputs is not None else kwargs.get("input_ids")
-            if input_ids is None:
-                raise ValueError("`guard` requires `input_ids` to be passed to `generate`.")
-            stopping_criteria = StoppingCriteriaList(stopping_criteria or [])
-            stopping_criteria.append(OVGuardStoppingCriteria(guard_session))
-            if not guard_session.config.emit_before_check and streamer is not None:
-                streamer = OVGuardedStreamer(streamer, guard_session)
 
-        try:
-            if guard_session is not None:
-                guard_session.start(input_ids, kwargs.get("attention_mask"))
+        with guard_session or nullcontext():
             result = super().generate(
                 inputs,
                 generation_config,
@@ -825,24 +810,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
                 negative_prompt_attention_mask,
                 **kwargs,
             )
-        finally:
-            if guard_session is not None:
-                guard_session.close()
 
         if guard_session is not None:
-            sequences = result.sequences if isinstance(result, ModelOutput) else result
-            guard_session.flush(sequences)
-            sequences = guard_session.redact(sequences, _generation_config.pad_token_id)
-            if isinstance(result, ModelOutput):
-                result.sequences = sequences
-                result.guard = guard_session.report
-            else:
-                result = sequences
-                if guard_session.report.flagged:
-                    logger.warning(
-                        f"The guard model flagged this generation: {guard_session.report.first_violation}. "
-                        "Pass `return_dict_in_generate=True` to get the full report in `output.guard`."
-                    )
+            result = guard_session.finalize(result, _generation_config.pad_token_id)
         return result
 
     def _get_past_length(self, past_key_values=None):
