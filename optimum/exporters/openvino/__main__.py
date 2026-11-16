@@ -89,6 +89,15 @@ def infer_task(
     library_name: Optional[str] = None,
     trust_remote_code: bool = False,
 ):
+    if library_name is None:
+        library_name = infer_library_name(
+            model_name_or_path,
+            subfolder=subfolder,
+            revision=revision,
+            cache_dir=cache_dir,
+            token=token,
+        )
+
     original_task = task
     task = TasksManager.map_from_synonym(task)
     if task == "auto":
@@ -119,25 +128,88 @@ def infer_task(
                     token=token,
                     library_name=library_name,
                 )
-            except KeyError as e:
+            except (KeyError, RuntimeError) as e:
+                if isinstance(e, RuntimeError) and "Cannot infer the task from a local directory" not in str(e):
+                    raise e
                 try:
-                    config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=trust_remote_code)
-                    with_past_arch_list = [
-                        "MistralForCausalLM",
-                        "Zamba2ForCausalLM",
-                        "LlamaForCausalLMEagle3",
-                        "Eagle3LlamaForCausalLM",
-                    ]
-                    if any(arch in config.architectures for arch in with_past_arch_list):
-                        # VLM Eagle3 models (targeting VLM architectures like Qwen3-VL)
-                        # should use image-text-to-text task for proper inputs_embeds/3D position_ids export.
-                        if "Eagle3LlamaForCausalLM" in config.architectures and (
-                            getattr(config, "modal_type", "") == "VLM"
-                            or getattr(config, "target_model_type", "") in {"qwen2_vl", "qwen3_vl"}
-                        ):
-                            task = "image-text-to-text"
-                        else:
+                    if library_name == "timm":
+                        task = "image-classification"
+                    elif library_name == "sentence_transformers":
+                        task = "feature-extraction"
+                    elif library_name == "diffusers":
+                        from diffusers import DiffusionPipeline
+
+                        diffusers_config = DiffusionPipeline.load_config(
+                            model_name_or_path,
+                            subfolder=subfolder,
+                            revision=revision,
+                            cache_dir=cache_dir,
+                            token=token,
+                        )
+                        diffusers_class_name = diffusers_config.get("_class_name")
+                        for task_name, model_mapping in TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS.items():
+                            if diffusers_class_name in model_mapping.values():
+                                task = task_name
+                                break
+                    else:
+                        config = AutoConfig.from_pretrained(
+                            model_name_or_path,
+                            subfolder=subfolder,
+                            revision=revision,
+                            cache_dir=cache_dir,
+                            token=token,
+                            trust_remote_code=trust_remote_code,
+                        )
+                        architectures = getattr(config, "architectures", None) or []
+                        with_past_arch_list = [
+                            "MistralForCausalLM",
+                            "Zamba2ForCausalLM",
+                            "LlamaForCausalLMEagle3",
+                            "Eagle3LlamaForCausalLM",
+                        ]
+                        if any(arch in architectures for arch in with_past_arch_list):
+                            # VLM Eagle3 models (targeting VLM architectures like Qwen3-VL)
+                            # should use image-text-to-text task for proper inputs_embeds/3D position_ids export.
+                            if "Eagle3LlamaForCausalLM" in config.architectures and (
+                                getattr(config, "modal_type", "") == "VLM"
+                                or getattr(config, "target_model_type", "") in {"qwen2_vl", "qwen3_vl"}
+                            ):
+                                task = "image-text-to-text"
+                            else:
+                                task = "text-generation-with-past"
+                        elif architectures and architectures[0] in _NATIVE_DRAFT_MODEL_CLASSES:
                             task = "text-generation-with-past"
+                        else:
+                            model_type = getattr(config, "export_model_type", config.model_type)
+                            supported_tasks = (
+                                TasksManager.get_supported_tasks_for_model_type(
+                                    model_type, exporter="openvino", library_name=library_name
+                                )
+                                if model_type in TasksManager._SUPPORTED_MODEL_TYPE
+                                else {}
+                            )
+                            candidate_tasks = [t for t in supported_tasks if not t.endswith("-with-past")] or list(
+                                TasksManager._TRANSFORMERS_TASKS_TO_MODEL_MAPPINGS.keys()
+                            )
+                            for task_name in candidate_tasks:
+                                model_mapping = TasksManager._TRANSFORMERS_TASKS_TO_MODEL_MAPPINGS.get(task_name, {})
+                                if model_mapping.get(model_type) in architectures or any(
+                                    arch in model_mapping.values() for arch in architectures
+                                ):
+                                    task = task_name
+                                    break
+                            if task == "auto" and isinstance(getattr(config, "auto_map", None), dict):
+                                for (
+                                    task_name,
+                                    model_loaders,
+                                ) in TasksManager._TRANSFORMERS_TASKS_TO_MODEL_LOADERS.items():
+                                    if isinstance(model_loaders, str):
+                                        model_loaders = (model_loaders,)
+                                    if any(loader in config.auto_map for loader in model_loaders):
+                                        task = task_name
+                                        break
+                    if task == "auto":
+                        raise KeyError(f"Could not find the proper task name for the model {model_name_or_path}.")
                 except Exception:
                     raise KeyError(
                         f"The task could not be automatically inferred. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
