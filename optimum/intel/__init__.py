@@ -75,6 +75,8 @@ _import_structure = {
         "OVModelForTextToSpeechSeq2Seq",
         "OVModelForVision2Seq",
         "OVModelForVisualCausalLM",
+        "OVAssistantForCausalLM",
+        "OVModelForVisualSequenceClassification",
         "OVModelForSequenceClassification",
         "OVModelForTokenClassification",
         "OVConfig",
@@ -206,6 +208,7 @@ else:
 
 if TYPE_CHECKING:
     from .openvino import (
+        OVAssistantForCausalLM,
         OVConfig,
         OVModelForAudioClassification,
         OVModelForAudioFrameClassification,
@@ -226,6 +229,7 @@ if TYPE_CHECKING:
         OVModelForTokenClassification,
         OVModelForVision2Seq,
         OVModelForVisualCausalLM,
+        OVModelForVisualSequenceClassification,
         OVModelForZeroShotImageClassification,
         OVModelOpenCLIPForZeroShotImageClassification,
         OVModelOpenCLIPText,

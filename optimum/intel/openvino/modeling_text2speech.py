@@ -16,9 +16,10 @@ import gc
 import logging
 import os
 import re
+import shutil
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import numpy as np
 import openvino
@@ -40,6 +41,7 @@ from transformers.file_utils import add_start_docstrings
 from transformers.modeling_outputs import BaseModelOutputWithPast
 from transformers.utils import ModelOutput
 
+from ...exporters.openvino import main_export
 from ...exporters.openvino.stateful import model_has_state
 from . import OV_DECODER_NAME, OV_ENCODER_NAME
 from .configuration import OVConfig, OVWeightQuantizationConfig
@@ -1190,13 +1192,14 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
     #
     #     ov_config={"code_predictor_model.ov_config": {"INFERENCE_PRECISION_HINT": "f32"}}
     #
-    # Two settings are worth knowing about. On GPU the code predictor needs that f32 pin: it runs
-    # `num_code_groups - 1` steps inside every talker frame off a cache that is reset each frame, and
-    # in the plugin's default f16 its logits go non-finite within the first few frames, which surfaces
-    # as `probability tensor contains either inf, nan or element < 0` out of the multinomial sampling
-    # in `code_predictor.generate`. The talker stack is unaffected, so the bulk of the compute
-    # (28 layers vs 5) still runs in f16. On CPU the default is f32, or bf16 where the CPU has AMX -
-    # and bf16 has f32's exponent range, so the overflow f16 hits cannot happen there.
+    # Two settings are worth knowing about. On GPU the code predictor runs `num_code_groups - 1` steps
+    # inside every talker frame off a cache that is reset each frame, and in the plugin's default f16
+    # its logits go non-finite within the first few frames, which surfaces as `probability tensor
+    # contains either inf, nan or element < 0` out of the multinomial sampling in
+    # `code_predictor.generate`. The export writes `ACTIVATIONS_SCALE_FACTOR=8.0` into the rt_info of
+    # both decoder stacks, as for any stateful LLM, which keeps them finite in f16; IRs exported
+    # before that need re-exporting, or the f32 pin above. On CPU the default is f32, or bf16 where
+    # the CPU has AMX - and bf16 has f32's exponent range, so the overflow f16 hits cannot happen there.
     #
     # Both stacks compile to fused stateful SDPA, which quantizes the key/value cache per the
     # plugin's default (u8 on CPU). Greedy decoding still yields the same codes as PyTorch frame for
@@ -1435,8 +1438,6 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
         :meth:`_resolve_ir_dir` resolves for this model, so a second load finds the IRs already
         there instead of converting again.
         """
-        from optimum.exporters.openvino import main_export
-
         source = Path(str(model_id))
         if source.is_dir() and cls._is_complete_export(source):
             return source  # already an exported directory
@@ -1637,8 +1638,21 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
             per_component[component] = {**value}
         return shared, per_component
 
-    def _part_ov_config(self, name: str) -> Dict[str, Any]:
-        return {**self.ov_config, **self._supported_ov_config(self._device, self._component_ov_config.get(name))}
+    def _part_ov_config(self, name: str, model: Optional[openvino.Model] = None) -> Dict[str, Any]:
+        ov_config = {**self.ov_config, **self._supported_ov_config(self._device, self._component_ov_config.get(name))}
+        # The GPU plugin honours the exported `ACTIVATIONS_SCALE_FACTOR` rt_info for stateless graphs
+        # only: on GPUs with XMX it skips it for anything it classifies as an LLM, which the two
+        # stateful decoder stacks are. Their f16 activations then overflow, so pass the exported
+        # value explicitly, unless the caller set one.
+        option = ["runtime_options", "ACTIVATIONS_SCALE_FACTOR"]
+        if (
+            "GPU" in self._device
+            and isinstance(model, openvino.Model)
+            and "ACTIVATIONS_SCALE_FACTOR" not in ov_config
+            and model.has_rt_info(option)
+        ):
+            ov_config["ACTIVATIONS_SCALE_FACTOR"] = model.get_rt_info(option).astype(str)
+        return ov_config
 
     def _build_parts(self, ov_models: Dict[str, openvino.Model]) -> None:
         """Wrap each loaded graph in the part that drives it; components with no IR stay ``None``."""
@@ -1651,7 +1665,7 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
             model = ov_models.get(name)
             if model is None:
                 return None
-            return part_cls(model, self, model_name=name, ov_config=self._part_ov_config(name), **extra)
+            return part_cls(model, self, model_name=name, ov_config=self._part_ov_config(name, model), **extra)
 
         self.talker_model = build(
             "talker_model",
@@ -1961,6 +1975,64 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
     def reshape(self, *args, **kwargs):
         logger.warning("Static shapes are not supported for Qwen3-TTS.")
         return self
+
+    def _save_pretrained(self, save_directory: Union[str, Path]):
+        """
+        Saves the model to the OpenVINO IR format so that it can be re-loaded using the
+        [`~optimum.intel.openvino.modeling.OVModel.from_pretrained`] class method.
+
+        Arguments:
+            save_directory (`str` or `Path`):
+                The directory where to save the model files.
+        """
+        super()._save_pretrained(save_directory)
+
+        save_directory = Path(save_directory)
+        source = Path(str(self._ir_dir))
+        if source.is_dir() and self._is_complete_export(source) and source.resolve() != save_directory.resolve():
+            # ``super()._save_pretrained`` already serialized every OpenVINO IR (``*.xml`` / ``*.bin``).
+            asset_files = {
+                "config.json",  # main model configuration
+                "generation_config.json",  # default generation parameters
+                "preprocessor_config.json",  # processor / feature-extractor configuration
+                "tokenizer_config.json",  # tokenizer configuration
+                "tokenizer.json",  # fast (tokenizers) tokenizer definition
+                "vocab.json",  # tokenizer vocabulary
+                "merges.txt",  # BPE merge rules
+            }
+            asset_dirs = {
+                "speech_tokenizer": "neural codec (speech tokenizer) configuration",
+            }
+            self._copy_assets(source, save_directory, set(asset_files), set(asset_dirs))
+        elif not self._is_complete_export(save_directory):
+            # Fallback to main_export when there is no complete export to copy from.
+            # This happens when an instance is loaded with `export=False`.
+            main_export(
+                model_name_or_path=str(self.model_save_dir),
+                output=save_directory,
+                task=self.export_feature,
+            )
+
+    def _copy_assets(
+        self,
+        source: Path,
+        destination: Path,
+        asset_files: Set[str],
+        asset_dirs: Set[str],
+    ) -> None:
+        """Copy the non-IR assets of a complete export into ``destination``."""
+
+        for item in source.iterdir():
+            if item.is_dir():
+                if item.name in asset_dirs:
+                    shutil.copytree(item, destination / item.name, dirs_exist_ok=True)
+                continue
+            if item.name not in asset_files:
+                continue
+            dest = destination / item.name
+            if dest.resolve() == item.resolve():
+                continue
+            shutil.copy2(item, dest)
 
     def _apply_quantization(
         self,

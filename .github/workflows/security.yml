@@ -35,4 +35,4 @@ jobs:
           ref: ${{env.branch}}
           fetch-depth: ${{env.depth}}
       - name: Scan for secrets
-        uses: trufflesecurity/trufflehog@f714bf454f350590f4a24c3ddb1aef02c35bf5b6 # v3.97.5
+        uses: trufflesecurity/trufflehog@ea68ca03c865c5f324e86e849ced20ed3cf9dbbb # v3.99.8

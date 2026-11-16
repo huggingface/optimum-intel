@@ -29,7 +29,7 @@ except Exception as error:
 INSTALL_REQUIRE = [
     "torch>=2.1",
     "optimum~=2.3.0",
-    "transformers>=4.51,<5.11",
+    "transformers>=4.51,<5.16",
     "setuptools",
     "huggingface-hub>=0.23.2,<2.0",
     "nncf>=3.3.0",
@@ -77,7 +77,7 @@ QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]
 EXTRAS_REQUIRE = {
     "nncf": ["nncf>=2.19.0"],
     "openvino": ["nncf>=2.19.0", "openvino>=2026.0", "openvino-tokenizers>=2026.0"],
-    "diffusers": ["diffusers>=0.32,<0.41"],
+    "diffusers": ["diffusers>=0.32,<0.42"],
     "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,
 }
