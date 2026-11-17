@@ -291,6 +291,7 @@ HUB_MODEL_NAMES = {
     "mt5": "optimum-intel-internal-testing/mt5-tiny-random",
     "llava-qwen2": "optimum-intel-internal-testing/tiny-random-nanollava",
     "nanollava_vision_tower": "optimum-intel-internal-testing/tiny-random-siglip",
+    "nemotron_h": "optimum-intel-internal-testing/tiny-random-nemotron-h",
     "nystromformer": "optimum-intel-internal-testing/tiny-random-NystromformerModel",
     "olmo": "optimum-intel-internal-testing/tiny-random-olmo-hf",
     "orion": "optimum-intel-internal-testing/tiny-random-orion",
@@ -475,6 +476,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "cohere2": {"model": 32},
     "gpt2": {"model": 44},
     "granitemoehybrid": {"model": 70 if is_transformers_version(">=", "5.13") else 118},
+    "nemotron_h": {"model": 46},
     "wav2vec2": {"model": 34},
     "distilbert": {"model": 66},
     "t5": {

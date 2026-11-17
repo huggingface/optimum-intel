@@ -231,6 +231,20 @@ class OVASRTest(unittest.TestCase):
 
     @pytest.mark.skipif(
         is_transformers_version("<", "4.57") or is_transformers_version(">=", "4.58"),
+        reason="Currently, we support FunASR only for transformers==4.57 since it is a trust-remote-code model.",
+    )
+    def test_sense_voice_activations_scale_factor(self):
+        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
+            MODEL_NAMES["sense_voice"], export=True, trust_remote_code=True, compile=False
+        )
+        rt_info = ov_model.model.get_rt_info()
+        self.assertEqual(rt_info["runtime_options"]["ACTIVATIONS_SCALE_FACTOR"].value, "4.0")
+
+        del ov_model
+        gc.collect()
+
+    @pytest.mark.skipif(
+        is_transformers_version("<", "4.57") or is_transformers_version(">=", "4.58"),
         reason="Currently, we support SenseVoice only for transformers==4.57 since it is a trust-remote-code model.",
     )
     def test_sense_voice_sdpa_with_padding_mask(self):
