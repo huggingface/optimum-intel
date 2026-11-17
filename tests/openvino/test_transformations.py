@@ -29,6 +29,7 @@ from utils_tests import (
 
 from optimum.intel.utils.import_utils import (
     is_diffusers_version,
+    is_funasr_available,
     is_qwen_tts_available,
     is_transformers_version,
 )
@@ -370,6 +371,18 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "ConvertToCPUSpecificOpset",
         ],
     },
+    "sense_voice": {
+        # SenseVoiceModelPatcher exports the SANM attention with F.scaled_dot_product_attention, so the
+        # PyTorch frontend emits ScaledDotProductAttention directly; the CPU plugin then fuses it into its
+        # SDPA subgraph. The exact op count is checked in test_asr.py::test_sense_voice_sdpa_with_padding_mask.
+        "model_class": "OVModelForSpeechSeq2Seq",
+        "convert": [
+            "SDPAFusion",
+        ],
+        "compile": [
+            "SDPASubgraphFusion",
+        ],
+    },
     "qwen3_omni_moe": {
         "convert": [
             "SDPAFusion",
@@ -559,7 +572,13 @@ else:
 # filter architectures depending on min/max transformers supported versions
 # Architectures exported through an out-of-tree library are not part of the transformers set,
 # so they are kept explicitly and gated on that library being installed.
-_NON_TRANSFORMERS_ARCHS = {"qwen3_tts": is_qwen_tts_available()}
+_NON_TRANSFORMERS_ARCHS = {
+    "qwen3_tts": is_qwen_tts_available(),
+    # SenseVoice is a funasr trust-remote-code model, supported only for transformers==4.57.
+    "sense_voice": is_funasr_available()
+    and is_transformers_version(">=", "4.57")
+    and is_transformers_version("<", "4.58"),
+}
 
 ARCH_TO_EXPECTED_TRANSFORMATIONS = {
     arch: v
