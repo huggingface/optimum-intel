@@ -21,7 +21,7 @@ import pytest
 import torch
 from parameterized import parameterized
 from transformers import AutoProcessor, set_seed
-from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, SEED
+from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, SEED, get_num_sdpa
 
 from optimum.intel import OVModelForSpeechSeq2Seq
 from optimum.intel.utils.import_utils import is_transformers_version
@@ -250,11 +250,24 @@ class OVASRTest(unittest.TestCase):
     def test_sense_voice_sdpa_with_padding_mask(self):
         # SenseVoiceModelPatcher exports the SANM attention as ScaledDotProductAttention with an additive
         # padding mask, instead of MatMul + Select + Softmax + Select + MatMul.
+        from optimum.exporters.openvino.model_patcher import _sensevoice_sanm_layers
+        from optimum.intel.openvino.modeling_funasr import _SenseVoiceForCTC
+
         ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
             MODEL_NAMES["sense_voice"], export=True, trust_remote_code=True, compile=False
         )
+        pt_model = _SenseVoiceForCTC.from_pretrained(MODEL_NAMES["sense_voice"]).eval()
+
+        # Every SANM layer must be converted, not just a subset.
+        expected_num_sdpa = len(_sensevoice_sanm_layers(pt_model.encoder))
+        num_sdpa = get_num_sdpa(ov_model.model)
+        self.assertGreater(expected_num_sdpa, 0)
+        self.assertEqual(
+            expected_num_sdpa,
+            num_sdpa,
+            f"Expected number of SDPA {expected_num_sdpa}, while model contains {num_sdpa}",
+        )
         op_types = [op.get_type_name() for op in ov_model.model.get_ordered_ops()]
-        self.assertGreater(op_types.count("ScaledDotProductAttention"), 0)
         self.assertEqual(op_types.count("Softmax"), 0)
 
         compiled = ov.Core().compile_model(ov_model.model, OPENVINO_DEVICE, F32_CONFIG)
@@ -281,9 +294,6 @@ class OVASRTest(unittest.TestCase):
         self.assertFalse(np.isnan(batch_logits).any())
 
         # The exported model matches the original (unpatched) PyTorch attention on a padded batch.
-        from optimum.intel.openvino.modeling_funasr import _SenseVoiceForCTC
-
-        pt_model = _SenseVoiceForCTC.from_pretrained(MODEL_NAMES["sense_voice"]).eval()
         with torch.no_grad():
             pt_inputs = {name: torch.from_numpy(value.copy()) for name, value in inputs(features, lengths).items()}
             pt_logits, pt_lens = pt_model(**pt_inputs)
