@@ -122,8 +122,8 @@ def is_auto_compression_disabled(model: Any) -> bool:
     video quality for a silent default (measured on LTX-2.0: wwb similarity 0.80 for int8 against the
     fp32 reference). Compression is still applied when asked for explicitly via `--weight-format` /
     `--quant-mode`, and to the submodels that have an entry in the int8 config registered for the
-    model in `_DEFAULT_8BIT_WQ_CONFIGS` (e.g. LTX-2.3), which is tuned to keep the quality, if the
-    installed NNCF version supports it.
+    model in `_DEFAULT_8BIT_WQ_CONFIGS` (e.g. LTX-2.3, LTX-2.5), which is tuned to keep the quality,
+    if the installed NNCF version supports it.
 
     Both supported pipelines are listed explicitly: `LTX2ImageToVideoPipeline` does not subclass
     `LTX2Pipeline`, and they are the only two LTX-2 classes this exporter registers (see

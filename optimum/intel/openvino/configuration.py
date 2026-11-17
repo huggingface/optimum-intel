@@ -887,12 +887,52 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "group_size": 128,
         "ratio": 1.0,
         "group_size_fallback": "ignore",
+    "diffusers/LTX-2.3-Diffusers": {
+        "quantization_configs": {
+            "transformer": {"bits": 4, "sym": True, "group_size": 32, "weight_only": True},
+            "connectors": {"bits": 4, "sym": True, "group_size": 32, "weight_only": True},
+            "text_encoder": {"bits": 4, "sym": False, "weight_only": True},
+        },
+    },
+    "Lightricks/LTX-2.5-Diffusers": {
+        "quantization_configs": {
+            "transformer": {"bits": 4, "sym": True, "group_size": 32, "weight_only": True},
+            "connectors": {"bits": 4, "sym": True, "group_size": 32, "weight_only": True},
+            "text_encoder": {"bits": 4, "sym": False, "weight_only": True},
+        },
     },
 }
 
 _DEFAULT_8BIT_WQ_CONFIGS = {
     "Qwen/Qwen2.5-Coder-3B-Instruct": {"bits": 8, "sym": False, "dq_group_size": 128},
     "diffusers/LTX-2.3-Diffusers": {
+        "quantization_configs": {
+            "transformer": {
+                "bits": 8,
+                "sym": True,
+                "group_size": 32,
+                "weight_only": True,
+                "ignored_scope": {
+                    "patterns": [
+                        r".*proj_in.*",  # patchify_proj, audio_patchify_proj
+                        r".*proj_out.*",  # proj_out, audio_proj_out
+                        r".*time_embed.*",  # adaln_single, audio_adaln_single
+                        r".*av_cross_attn_.*",  # av_ca_*_adaln_single
+                        r".*prompt_adaln.*",  # prompt_adaln_single, audio_prompt_adaln_single
+                    ],
+                },
+            },
+            "connectors": {
+                "bits": 8,
+                "sym": True,
+                "group_size": 32,
+                "weight_only": True,
+                "ignored_scope": {"patterns": [r".*text_proj_in"]},
+            },
+            "text_encoder": {"bits": 8, "sym": False, "weight_only": True},
+        },
+    },
+    "Lightricks/LTX-2.5-Diffusers": {
         "quantization_configs": {
             "transformer": {
                 "bits": 8,
