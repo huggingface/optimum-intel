@@ -851,10 +851,14 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         """
         return
 
+    # Overrides https://github.com/huggingface/transformers/blob/b7601f7325e6b8d5e35052d161dda3b43103b6cb/src/transformers/generation/utils.py#L2434
+    # Introduced in Transformers v4.52.0.
     def _valid_auto_compile_criteria(self, model_kwargs, generation_config):
         # The forward pass runs through an OpenVINO InferRequest and cannot be compiled with torch.compile.
         return False
 
+    # Overrides https://github.com/huggingface/transformers/blob/v5.3.0/src/transformers/generation/utils.py#L1713
+    # Introduced in Transformers v4.41.0; removed upstream in v5.4.0. Newer versions use _prefill.
     def _get_initial_cache_position(self, *args, model_kwargs=None, **kwargs):
         if model_kwargs is None:
             *args, model_kwargs = args
@@ -871,6 +875,8 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             return model_kwargs
         return super()._get_initial_cache_position(*args, model_kwargs=model_kwargs, **kwargs)
 
+    # Overrides https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/generation/utils.py#L3849
+    # Introduced in Transformers v5.0.0.
     def _prefill(self, input_ids, generation_config, model_kwargs, **kwargs):
         if (
             isinstance(model_kwargs.get("past_key_values"), (tuple, list))
