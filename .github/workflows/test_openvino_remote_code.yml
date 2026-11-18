@@ -79,6 +79,12 @@ jobs:
         run: |
           pytest tests/openvino/${{ matrix.test-pattern }} -k "qwen3_asr or fun_asr or sense_voice" --durations=0
 
+      - if: ${{ matrix.test-pattern == '*export*' }}
+        name: Test SenseVoice transformations
+        run: |
+          # test_transformations.py does not match the test patterns above, so the SenseVoice case is run here.
+          pytest tests/openvino/test_transformations.py -k "sense_voice" --durations=0
+
       - if: ${{ matrix.test-pattern == '*export*' || matrix.test-pattern == '*quantization*' }}
         name: Install qwen-tts package and uninstall qwen-asr
         run: |
