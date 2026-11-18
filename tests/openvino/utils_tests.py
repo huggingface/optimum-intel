@@ -452,7 +452,7 @@ DFLASH_VLM_MODELS = {
     "muse_glimmer": ("muse_glimmer_assistant", "muse_glimmer"),
     # GenAI without DSpark support runs this draft as a plain DFlash draft and ignores the Markov head.
     "minicpmv4_7_dspark": ("minicpmv4_7_dspark", "minicpmv4_7"),
-    # GenAI without pruned draft vocabulary support ignores d2t, so the target rejects this draft's tokens.
+    # A DSpark draft with a pruned vocabulary: its logits cover the draft vocabulary, and d2t maps them to target ids.
     "minicpm_ocr_dspark": ("minicpm_ocr_dspark", "minicpm_ocr"),
 }
 
