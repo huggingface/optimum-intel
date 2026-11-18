@@ -9976,7 +9976,7 @@ def _dflash_block_tap_masks(
     return [mask.index_select(0, block_rows) for mask in masks]
 
 
-# adopted from https://github.com/z-lab/dflash/blob/main/dflash/model.py#L185
+# adopted from https://github.com/z-lab/dflash/blob/95c8aeca5e4b4c4f9c0c967c05ab89fa3ed24f4c/dflash/model.py#L340
 class Qwen3DFlashAttention(Qwen3Attention):
     """Qwen3 attention in which only the block rows get a query.
 
@@ -10049,7 +10049,7 @@ class Qwen3DFlashAttention(Qwen3Attention):
         return self.o_proj(attn_output.index_select(0, block_rows))
 
 
-# adopted from https://github.com/z-lab/dflash/blob/main/dflash/model.py#L258
+# adopted from https://github.com/z-lab/dflash/blob/95c8aeca5e4b4c4f9c0c967c05ab89fa3ed24f4c/dflash/model.py#L423
 class Qwen3DFlashDecoderLayer(nn.Module):
     def __init__(self, config: "Qwen3Config", layer_idx: int):
         super().__init__()
@@ -10106,7 +10106,7 @@ class Qwen3DFlashDecoderLayer(nn.Module):
         return hidden_states
 
 
-# adopted from https://github.com/z-lab/dflash/blob/main/dflash/model.py#L302
+# adopted from https://github.com/z-lab/dflash/blob/95c8aeca5e4b4c4f9c0c967c05ab89fa3ed24f4c/dflash/model.py#L550
 class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
     config_class = Qwen3Config
     dflash_version = 1
@@ -10236,7 +10236,7 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
         )
 
 
-# adopted from https://github.com/z-lab/dflash/blob/main/dflash/model.py#L302
+# adopted from https://github.com/z-lab/dflash/blob/95c8aeca5e4b4c4f9c0c967c05ab89fa3ed24f4c/dflash/model.py#L550
 class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
     """DFlash draft head exported as embeddings-in / hidden-states-out.
 
@@ -10440,6 +10440,7 @@ def get_muse_glimmer_assistant_draft_model_class():
     return MuseGlimmerAssistantDFlashForCausalLM
 
 
+# adopted from https://github.com/z-lab/dflash/blob/95c8aeca5e4b4c4f9c0c967c05ab89fa3ed24f4c/dflash/model.py#L478-L512
 class GroupedDynamicCausalConv(nn.Module):
     """Block-local grouped dynamic convolution used around each DFlash-2 sublayer.
 
@@ -10502,6 +10503,7 @@ class GroupedDynamicCausalConv(nn.Module):
         return self._apply_kernel(hidden_states, dynamic_kernel, 1, block_tap_masks)
 
 
+# adopted from https://github.com/z-lab/dflash/blob/95c8aeca5e4b4c4f9c0c967c05ab89fa3ed24f4c/dflash/model.py#L515
 class DFlash2CandidateSelector(nn.Module):
     """Weights of the DFlash-2 candidate selector, which is exported as the Markov head of the draft.
 
@@ -10519,6 +10521,7 @@ class DFlash2CandidateSelector(nn.Module):
         nn.init.normal_(self.successor_codebook, mean=0.0, std=std)
 
 
+# adopted from https://github.com/z-lab/dflash/blob/95c8aeca5e4b4c4f9c0c967c05ab89fa3ed24f4c/dflash/model.py#L641-L649
 class Qwen3DFlash2DecoderLayer(Qwen3DFlashDecoderLayer):
     def __init__(self, config: "Qwen3Config", layer_idx: int):
         super().__init__(config, layer_idx)
@@ -10528,6 +10531,7 @@ class Qwen3DFlash2DecoderLayer(Qwen3DFlashDecoderLayer):
         self.mlp_conv = GroupedDynamicCausalConv(*conv_sizes)
 
 
+# adopted from https://github.com/z-lab/dflash/blob/95c8aeca5e4b4c4f9c0c967c05ab89fa3ed24f4c/dflash/model.py#L630
 class Qwen3DFlash2DraftModel(Qwen3DFlashDraftModel):
     dflash_version = 2
     decoder_layer_class = Qwen3DFlash2DecoderLayer
@@ -10541,6 +10545,7 @@ class Qwen3DFlash2DraftModel(Qwen3DFlashDraftModel):
         return {"block_tap_masks": _dflash_block_tap_masks(token_type_ids, block_rows, kernel_size)}
 
 
+# adopted from https://github.com/z-lab/dflash/blob/95c8aeca5e4b4c4f9c0c967c05ab89fa3ed24f4c/dflash/model.py#L653
 class Qwen3DFlash2ForCausalLM(Qwen3DFlash2DraftModel, Qwen3DFlashForCausalLM):
     """DFlash-2 backbone exported like the DFlash one: embeddings in, the hidden states of every row out.
 
@@ -10691,6 +10696,8 @@ class DSparkVanillaMarkovHeadForExport(MarkovHeadForExport):
         return torch.matmul(predecessor_codes, successor_rows.transpose(-1, -2))
 
 
+# adopted from https://github.com/z-lab/dflash/blob/95c8aeca5e4b4c4f9c0c967c05ab89fa3ed24f4c/dflash/model.py#L524
+# and https://github.com/z-lab/dflash/blob/95c8aeca5e4b4c4f9c0c967c05ab89fa3ed24f4c/dflash/model.py#L599
 class DFlash2MarkovHeadForExport(MarkovHeadForExport):
     """DFlash-2 candidate selector as a gated Markov head without a dense step.
 
