@@ -458,13 +458,20 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "group_size": 128,
         "ratio": 1.0,
         "all_layers": True,
-        # Attention projections of decoder layers 20-47 are compressed to int8
         "scoped_configs": [
+            # Attention projections of decoder layers 20-47 are compressed to int8
             {
                 "patterns": [".*layers\\.(2[0-9]|3[0-9]|4[0-7])\\.self_attn\\.(q_proj|k_proj|v_proj|o_proj)/.*"],
                 "bits": 8,
                 "sym": False,
-            }
+            },
+            # All MLP projections are compressed to int4 with a finer group size
+            {
+                "patterns": [".*mlp\\.(gate_proj|up_proj|down_proj)/.*"],
+                "bits": 4,
+                "sym": False,
+                "group_size": 64,
+            },
         ],
     },
     "google/gemma-4-26B-A4B-it": {
