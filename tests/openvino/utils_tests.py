@@ -440,6 +440,7 @@ EAGLE3_MODELS = {"qwen3_eagle3": ("qwen3_eagle3", "qwen3_eagle3_target")}
 DFLASH_MODELS = {
     "qwen3_dflash": ("qwen3_dflash", "qwen3"),
     "qwen3_deepspec_dflash": ("qwen3_deepspec_dflash", "qwen3"),
+    "qwen3_dflash2": ("qwen3_dflash2", "qwen3"),
 }
 
 DFLASH_VLM_MODELS = {
@@ -778,6 +779,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "qwen3_eagle3": {"model": 20},
     "qwen3_dflash": {"model": 30},
     "qwen3_deepspec_dflash": {"model": 30},
+    "qwen3_dflash2": {"model": 38},
     "minicpmv4_7_dspark": {"model": 30},
     "muse_glimmer_assistant": {"model": 30},
     "qwen3_vl_eagle3": {"model": 18},

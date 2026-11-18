@@ -542,6 +542,34 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
 }
 
 
+# DFlash and DSpark drafts have the model type of their backbone decoder (qwen3), so they are added after the
+# transformers filter above. They load through OVModelForCausalLM, as in test_exporters_cli.
+_DFLASH_DRAFT_TRANSFORMATIONS = {
+    "model_class": "OVModelForCausalLM",
+    "convert": [
+        "SDPAFusion",
+        "MakeStateful",
+    ],
+    "compile": [
+        "StatefulSDPAFusion",
+        "SDPASubgraphFusion",
+        "CommonDecompositions",
+        "ConvertBroadcast3",
+        "RoPEFusionGPTNEOX",
+        "RoPEFusionPreprocess",
+        "RoPEFusion",
+        "RMSFusion",
+        "ConvertMatMulToFC",
+        "ConvertToSwishCPU",
+    ],
+}
+ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_dflash"] = _DFLASH_DRAFT_TRANSFORMATIONS
+ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_dflash2"] = _DFLASH_DRAFT_TRANSFORMATIONS
+# DSpark drafts describe their RoPE in the rope_parameters of transformers 5, which earlier versions misread.
+if is_transformers_version(">=", "5"):
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["minicpmv4_7_dspark"] = _DFLASH_DRAFT_TRANSFORMATIONS
+
+
 # Diffusion architectures are loaded through a pipeline class and live in the diffusers library (not
 # transformers), so they are added after the transformers filter above with an explicit `model_class`.
 # QwenImage's real-valued rotary embedding is written so the traced subgraph matches the GPT-NeoX

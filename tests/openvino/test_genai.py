@@ -708,6 +708,10 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
     ):
         if is_openvino_version("<", min_openvino_version):
             self.skipTest(f"{speculative_decoding_type} requires openvino-genai >= {min_openvino_version}")
+        # TODO: enable once openvinotoolkit/openvino.genai#4847 is merged. Until then GenAI supports only the vanilla
+        # Markov head and rejects the draft.
+        if model_arch == "qwen3_dflash2":
+            self.skipTest("DFlash v2 drafts require openvinotoolkit/openvino.genai#4847")
 
         draft_model_name, target_model_name = model_pair
         draft_model_id, target_model_id = MODEL_NAMES[draft_model_name], MODEL_NAMES[target_model_name]

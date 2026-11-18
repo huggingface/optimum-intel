@@ -159,6 +159,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "qwen3_dflash"),
         ("text-generation-with-past", "muse_glimmer_assistant"),
         ("text-generation-with-past", "qwen3_deepspec_dflash"),
+        ("text-generation-with-past", "qwen3_dflash2"),
         ("text-generation-with-past", "minicpmv4_7_dspark"),
         ("text-generation-with-past", "zamba2"),
         ("text-generation-with-past", "exaone4"),
