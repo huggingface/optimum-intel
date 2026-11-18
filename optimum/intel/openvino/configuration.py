@@ -455,8 +455,17 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
     "google/gemma-4-12B-it": {
         "bits": 4,
         "sym": False,
-        "group_size": 64,
-        "quant_method": OVQuantizationMethod.AWQ,
+        "group_size": 128,
+        "ratio": 1.0,
+        "all_layers": True,
+        # Attention projections of decoder layers 20-47 are compressed to int8
+        "scoped_configs": [
+            {
+                "patterns": [".*layers\\.(2[0-9]|3[0-9]|4[0-7])\\.self_attn\\.(q_proj|k_proj|v_proj|o_proj)/.*"],
+                "bits": 8,
+                "sym": False,
+            }
+        ],
     },
     "google/gemma-4-26B-A4B-it": {
         "bits": 4,
