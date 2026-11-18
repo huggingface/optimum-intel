@@ -50,9 +50,11 @@ from optimum.intel.utils.modeling_utils import (
 from .utils import (
     _MAX_UNCOMPRESSED_SIZE,
     MULTI_MODAL_TEXT_GENERATION_MODELS,
+    TEXT_GENERATION_FROM_VLM_MODEL_TYPES,
     check_transformers_version_compatibility,
     clear_class_registry,
     deduce_diffusers_dtype,
+    get_causal_lm_from_vlm,
     is_auto_compression_disabled,
     keep_mixed_precision_parameters,
     load_preprocessors,
@@ -728,6 +730,14 @@ def main_export(
                 )
                 if has_remote_code and trust_remote_code and task == "image-text-to-text" and not image_text_only:
                     task_model_loading = "text-generation"
+            # the full VLM is loaded to export its text decoder on its own as a causal LM
+            text_from_vlm = (
+                library_name == "transformers"
+                and task.startswith("text-generation")
+                and config.model_type in TEXT_GENERATION_FROM_VLM_MODEL_TYPES
+            )
+            if text_from_vlm:
+                task_model_loading = "image-text-to-text"
 
             model = TasksManager.get_model_from_task(
                 task_model_loading,
@@ -744,6 +754,8 @@ def main_export(
                 library_name=library_name,
                 **loading_kwargs,
             )
+            if text_from_vlm:
+                model = get_causal_lm_from_vlm(model)
 
         if getattr(model, "dtype", None) in [torch.float16, torch.bfloat16]:
             patch_16bit = True

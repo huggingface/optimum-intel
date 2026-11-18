@@ -178,6 +178,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-to-image", "flux.2-klein"),
         ("image-text-to-text", "mistral3"),
         ("image-text-to-text", "ministral3"),
+        ("text-generation", "ministral3"),
+        ("text-generation-with-past", "ministral3"),
         ("text-to-image", "z-image"),
         ("image-text-to-text", "muse_glimmer"),
         ("image-text-to-text", "minicpmv4_7"),
@@ -1341,6 +1343,9 @@ class OVCLIExportTestCase(unittest.TestCase):
             if task == "text-to-video" and model_type in ["ltx2", "ltx2.3", "ltx2.5"]:
                 # Only the LTX-2 image-to-video pipeline loads a VAE encoder, to encode the input image.
                 del expected_int8["vae_encoder"]
+            if task.startswith("text-generation") and model_type == "ministral3":
+                # Only the text decoder of the Mistral3 VLM is exported, as a single causal LM.
+                expected_int8 = {"model": {"int8": 32}}
             check_compression_state_per_model(self, model.ov_models, expected_int8)
 
     @parameterized.expand(SUPPORTED_SD_HYBRID_ARCHITECTURES)

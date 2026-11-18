@@ -1506,9 +1506,11 @@ class MistralOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
 
 @register_in_tasks_manager(
     "ministral3",
-    "text-generation-with-past",
+    *["text-generation", "text-generation-with-past"],
     library_name="transformers",
 )
+# mistral3 (VLM) checkpoints exported for text generation are exported as their ministral3 text decoder.
+@register_in_tasks_manager("mistral3", *["text-generation", "text-generation-with-past"], library_name="transformers")
 class Ministral3OpenVINOConfig(MistralOpenVINOConfig):
     # ministral3 is the text-decoder config used inside Mistral3ForConditionalGeneration (Mistral3 VLM family).
     MIN_TRANSFORMERS_VERSION = "5.0.0"
