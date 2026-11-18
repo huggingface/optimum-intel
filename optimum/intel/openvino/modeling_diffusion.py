@@ -1779,6 +1779,24 @@ class OVModelQwenImage21Transformer(OVPipelinePart):
         return (sample,)
 
 
+def _per_frame_timestep(timestep: torch.Tensor, height: Optional[int], width: Optional[int], patch_size: int):
+    """
+    Compresses a per-token video timestep [B, S] into one value per latent frame [B, S / (h * w)], the grouped
+    timestep the LTX-2 transformer export takes, when it is uniform within every frame. Returns it unchanged
+    otherwise, or when the frame size is unknown, since [B, S] is a valid grouping too.
+    """
+    if height is None or width is None:
+        return timestep
+    tokens_per_frame = (height // patch_size) * (width // patch_size)
+    batch_size, sequence_length = timestep.shape
+    if tokens_per_frame <= 1 or sequence_length % tokens_per_frame != 0:
+        return timestep
+    frames = timestep.reshape(batch_size, sequence_length // tokens_per_frame, tokens_per_frame)
+    if not torch.equal(frames, frames[..., :1].expand_as(frames)):
+        return timestep
+    return frames[..., 0]
+
+
 def _check_ltx2_rope_inputs(part: OVPipelinePart, required_inputs):
     # LTX-2 exports made before RoPE became host-computed (cos, sin) graph inputs take coordinates instead,
     # which the current wrappers no longer feed. Fail at load time with what to do, rather than at the first
@@ -1873,6 +1891,10 @@ class OVModelTransformerLTX2(OVPipelinePart):
         # memory for LTX-2.3 at 640x480x17.
         if timestep is not None and timestep.ndim == 1 and self._timestep_rank == 2:
             timestep = timestep.unsqueeze(-1)
+        # Exports with a grouped timestep take one value per latent frame, which I2V and conditions always
+        # produce (their conditioning masks are per frame), and broadcast it over the frame's tokens.
+        if timestep is not None and timestep.ndim == 2 and timestep.shape[1] > 1 and self._grouped_timestep:
+            timestep = _per_frame_timestep(timestep, height, width, self.config.get("patch_size", 1))
 
         # `share_inputs=True` reads raw buffers, so stride-0 views (e.g. `t.expand(batch)`) must be materialized.
         if timestep is not None:
@@ -2000,6 +2022,11 @@ class OVModelTransformerLTX2(OVPipelinePart):
             if inp.get_any_name() == "timestep":
                 return len(inp.partial_shape)
         return 1
+
+    @property
+    def _grouped_timestep(self):
+        model = self.model.get_runtime_model() if isinstance(self.model, openvino.CompiledModel) else self.model
+        return model.has_rt_info(["ltx2_grouped_timestep"])
 
     @property
     def _stg_num_blocks(self):

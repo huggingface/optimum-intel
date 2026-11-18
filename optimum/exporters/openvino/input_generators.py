@@ -1163,9 +1163,10 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
         if input_name == "audio_encoder_attention_mask":
             return self.random_float_tensor([self.batch_size, self.encoder_seq_length])
         if input_name == "timestep":
-            # Per-token [B, video_sequence_length]: i2v locks the first frame via the conditioning mask.
-            seq_len = self.num_frames * self.height * self.width
-            return self.random_float_tensor([self.batch_size, seq_len], framework=framework, dtype=float_dtype)
+            # Grouped [B, G]: one timestep per latent frame, as i2v and conditions drive it (their conditioning
+            # masks are per frame). G must differ from the sequence length in the trace, which would otherwise
+            # tie the two dimensions together.
+            return self.random_float_tensor([self.batch_size, self.num_frames], framework=framework, dtype=float_dtype)
         if input_name == "audio_timestep":
             # Audio uses a scalar-per-batch [B] timestep (not per-token, unlike video).
             return self.random_float_tensor([self.batch_size], framework=framework, dtype=float_dtype)

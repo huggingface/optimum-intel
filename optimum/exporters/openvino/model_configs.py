@@ -3607,7 +3607,7 @@ class LTX2VideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
             "audio_encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
             "encoder_attention_mask": {0: "batch_size", 1: "sequence_length"},
             "audio_encoder_attention_mask": {0: "batch_size", 1: "sequence_length"},
-            "timestep": {0: "batch_size", 1: "video_sequence_length"},
+            "timestep": {0: "batch_size", 1: "timestep_groups"},
             "audio_timestep": {0: "batch_size"},
         }
         # RoPE enters as precomputed cos/sin rather than coordinates; see `LTX2_ROPE_INPUTS`. The
