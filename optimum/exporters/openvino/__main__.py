@@ -143,8 +143,6 @@ def infer_task(
                             task = "image-text-to-text"
                         else:
                             task = "text-generation-with-past"
-                    else:
-                        raise e
                 except Exception:
                     raise KeyError(
                         f"The task could not be automatically inferred. Please provide the argument --task with the relevant task from {', '.join(TasksManager.get_all_tasks())}. Detailed error: {e}"
