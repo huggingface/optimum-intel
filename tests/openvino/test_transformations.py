@@ -591,6 +591,8 @@ _DFLASH_DRAFT_TRANSFORMATIONS = {
 }
 ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_dflash"] = _DFLASH_DRAFT_TRANSFORMATIONS
 ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_dflash2"] = _DFLASH_DRAFT_TRANSFORMATIONS
+# a DSpark draft with a pruned vocabulary, whose backbone emits its own logits
+ARCH_TO_EXPECTED_TRANSFORMATIONS["minicpm_ocr_dspark"] = _DFLASH_DRAFT_TRANSFORMATIONS
 # DSpark drafts describe their RoPE in the rope_parameters of transformers 5, which earlier versions misread.
 if is_transformers_version(">=", "5"):
     ARCH_TO_EXPECTED_TRANSFORMATIONS["minicpmv4_7_dspark"] = _DFLASH_DRAFT_TRANSFORMATIONS
