@@ -3817,7 +3817,6 @@ class MiniCPMVOpenVINOConfig(BaseVLMOpenVINOConfig):
 class MiniCPMOOpenVINOConfig(MiniCPMVOpenVINOConfig):
     MIN_TRANSFORMERS_VERSION = "4.51.0"
     MAX_TRANSFORMERS_VERSION = "4.51.3"
-    MODEL_TYPE = "minicpmo"
 
 
 class MiniCPMV4_7ConfigBehavior(str, enum.Enum):
