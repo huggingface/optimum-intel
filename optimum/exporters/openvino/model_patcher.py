@@ -5058,6 +5058,8 @@ class Qwen3OmniMoeAudioEncoderPatcher(ModelPatcher):
             # Windows are moved into the batch dimension, `_prepare_inputs` should pad every
             # audio's chunk count up to a multiple of R = n_window_infer // (n_window * 2),
             # so a window is exactly R consecutive conv chunks and never spans two audios.
+            # The graph additionally pads the total chunk count up to a multiple of R, so inputs
+            # that are not padded per audio (e.g. a single audio) are still valid.
             # Each window then is processed independently with a per-window padding mask.
             R = self.n_window_infer // (self.n_window * 2)
             padded_feature = padded_feature.unsqueeze(1)
@@ -5075,12 +5077,19 @@ class Qwen3OmniMoeAudioEncoderPatcher(ModelPatcher):
             padded_embed = padded_embed + positional_embedding
 
             batch, aftercnn_time, embed_dim = padded_embed.shape
-            num_windows = batch // R
+            num_windows = (batch + R - 1) // R
             window_len = R * aftercnn_time
+
+            embed_pad = torch.zeros_like(padded_embed[:1]).expand(R - 1, -1, -1)
+            padded_embed = torch.cat([padded_embed, embed_pad], dim=0)[: num_windows * R]
+
+            valid_mask = padded_mask_after_cnn.bool()
+            mask_pad = torch.zeros_like(valid_mask[:1]).expand(R - 1, -1)
+            valid_mask = torch.cat([valid_mask, mask_pad], dim=0)[: num_windows * R]
 
             hidden_states = padded_embed.reshape(num_windows, window_len, embed_dim)
 
-            window_valid = padded_mask_after_cnn.bool().reshape(num_windows, window_len)
+            window_valid = valid_mask.reshape(num_windows, window_len)
             attention_mask = torch.zeros(
                 (num_windows, window_len), dtype=padded_embed.dtype, device=padded_embed.device
             )
@@ -5091,7 +5100,7 @@ class Qwen3OmniMoeAudioEncoderPatcher(ModelPatcher):
                 layer_outputs = encoder_layer(hidden_states, attention_mask=attention_mask)
                 hidden_states = layer_outputs[0]
 
-            hidden_states = hidden_states.reshape(batch, aftercnn_time, embed_dim)
+            hidden_states = hidden_states.reshape(num_windows * R, aftercnn_time, embed_dim)[:batch]
 
             hidden_states = self.ln_post(hidden_states)
             hidden_states = self.proj1(hidden_states)
