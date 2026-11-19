@@ -17,6 +17,11 @@ from typing import Optional, Tuple
 
 import torch
 
+from optimum.exporters.openvino.dflash_utils import (
+    DFLASH_ARCHITECTURES,
+    config_architecture,
+    parse_and_validate_dflash_config,
+)
 from optimum.exporters.openvino.utils import (
     GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE,
     GRANITEMOEHYBRID_MAMBA_LAYER_TYPE,
@@ -229,14 +234,16 @@ class Eagle3DummyGenerator(DummyInputGenerator):
     intermediate hidden-state outputs of a *main (target) model*, which are
     required by the Eagle-3 draft model during speculative decoding.
 
-    It also produces the inputs of the DSpark Markov head model: the dense step and the Top-K lattice
-    over `batch_size` draft blocks of `sequence_length` rows each, packed back to back.
+    It also generates the inputs of the Markov head model exported next to a DFlash draft, for both its dense
+    step and its Top-K lattice. The lattice inputs cover `batch_size` draft blocks of `sequence_length` rows
+    each, packed back to back.
     """
 
     SUPPORTED_INPUT_NAMES = (
         "hidden_states",
         "prev_token_ids",  # previous tokens
         "draft_logits",  # draft logits of all blocks
+        "draft_hidden_states",  # draft hidden states of all blocks
         "anchor_token_ids",  # token before each block
         "subsequence_begins",  # start row of each block
     )
@@ -253,7 +260,12 @@ class Eagle3DummyGenerator(DummyInputGenerator):
         self.sequence_length = sequence_length
         self.hidden_size = normalized_config.hidden_size
         self.vocab_size = getattr(normalized_config, "vocab_size", None)
-        dflash_config = getattr(normalized_config.config, "dflash_config", None) or normalized_config.config.to_dict()
+        if config_architecture(normalized_config.config) in DFLASH_ARCHITECTURES:
+            dflash_config = parse_and_validate_dflash_config(normalized_config.config).values
+        else:
+            dflash_config = (
+                getattr(normalized_config.config, "dflash_config", None) or normalized_config.config.to_dict()
+            )
         self.num_hidden_state_layers = len(dflash_config.get("target_layer_ids", [])) or 3
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
@@ -263,6 +275,9 @@ class Eagle3DummyGenerator(DummyInputGenerator):
             )
         if input_name == "draft_logits":
             shape = (self.batch_size * self.sequence_length, self.vocab_size)
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "draft_hidden_states":
+            shape = (self.batch_size * self.sequence_length, self.hidden_size)
             return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
         if input_name == "subsequence_begins":
             return torch.arange(self.batch_size + 1, dtype=DTYPE_MAPPER.pt(int_dtype)) * self.sequence_length
@@ -2106,6 +2121,45 @@ class Zamba2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
             past_key_values.append(v)
 
         return past_key_values
+
+
+class NemotronHDummyPastKeyValuesGenerator(Zamba2DummyPastKeyValuesGenerator):
+    """
+    Generates dummy cache_params inputs for NemotronH architectures, with the GraniteMoeHybrid layout:
+    conv and SSM states for each Mamba2 layer, followed by keys and values for each attention layer.
+    """
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        # `Zamba2DummyPastKeyValuesGenerator.__init__` reads Zamba2 and GraniteMoeHybrid config attributes,
+        # so only the base initialization is reused and the cache dimensions are set from the NemotronH config.
+        DummyPastKeyValuesGenerator.__init__(
+            self,
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            **kwargs,
+        )
+
+        config = normalized_config.config
+        self.intermediate_size = config.mamba_num_heads * config.mamba_head_dim
+        self.conv_kernel_size = config.conv_kernel
+        self.mamba_d_state = config.ssm_state_size
+        self.n_mamba_heads = config.mamba_num_heads
+        self.mamba_ngroups = config.n_groups
+        self.mamba_headdim = config.mamba_head_dim
+        self.head_dim = config.head_dim
+        self.num_attention_heads = config.num_key_value_heads
+        self.num_attention_layers = config.layer_types.count(GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE)
+        self.num_mamba_layers = config.layer_types.count(GRANITEMOEHYBRID_MAMBA_LAYER_TYPE)
+        self.sequence_length = 0
 
 
 class Lfm2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):

@@ -161,6 +161,24 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "MulAddToFMA",
         ],
     },
+    # The MoE transformations depend on the experts patch, see below. The Mamba2 fusions (FuseSSMLoop,
+    # SelectiveSSMFusion) are only registered in SDPA -> PagedAttention, so they are checked in test_cb_compatible.py
+    "nemotron_h": {
+        "model_class": "OVModelForCausalLM",
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+        ],
+        "compile": [
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "CausalMaskPreprocessFusion",
+            "CommonDecompositions",
+            "ConvertMatMulToFC",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+        ],
+    },
     # hybrid short conv + full / sliding window attention, sandwich RMSNorm, per-layer-type RoPE
     "lfm3": {
         "convert": [
@@ -529,6 +547,14 @@ if is_transformers_version(">=", "5.0.0"):
         ]
     )
 
+# From transformers 5.13, the NemotronH experts use the grouped MatMul patch and become GatherMatmul.
+# Before that they use ov_batched_mm: its transposed expert weights give TransposeMatMul, and its non-gated experts
+# (up -> relu2 -> down) do not match ConvertTiledMoeBlockToGatherMatmuls
+if is_transformers_version(">=", "5.13"):
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["nemotron_h"]["compile"].append("ConvertGroupedMatMulToGatherMatmul")
+else:
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["nemotron_h"]["convert"].append("TransposeMatMul")
+
 
 # filter architectures depending on min/max transformers supported versions
 # Architectures exported through an out-of-tree library are not part of the transformers set,
@@ -540,6 +566,34 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
     for arch, v in ARCH_TO_EXPECTED_TRANSFORMATIONS.items()
     if arch in get_supported_model_for_library("transformers") or _NON_TRANSFORMERS_ARCHS.get(arch, False)
 }
+
+
+# DFlash and DSpark drafts have the model type of their backbone decoder (qwen3), so they are added after the
+# transformers filter above. They load through OVModelForCausalLM, as in test_exporters_cli.
+_DFLASH_DRAFT_TRANSFORMATIONS = {
+    "model_class": "OVModelForCausalLM",
+    "convert": [
+        "SDPAFusion",
+        "MakeStateful",
+    ],
+    "compile": [
+        "StatefulSDPAFusion",
+        "SDPASubgraphFusion",
+        "CommonDecompositions",
+        "ConvertBroadcast3",
+        "RoPEFusionGPTNEOX",
+        "RoPEFusionPreprocess",
+        "RoPEFusion",
+        "RMSFusion",
+        "ConvertMatMulToFC",
+        "ConvertToSwishCPU",
+    ],
+}
+ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_dflash"] = _DFLASH_DRAFT_TRANSFORMATIONS
+ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_dflash2"] = _DFLASH_DRAFT_TRANSFORMATIONS
+# DSpark drafts describe their RoPE in the rope_parameters of transformers 5, which earlier versions misread.
+if is_transformers_version(">=", "5"):
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["minicpmv4_7_dspark"] = _DFLASH_DRAFT_TRANSFORMATIONS
 
 
 # Diffusion architectures are loaded through a pipeline class and live in the diffusers library (not
