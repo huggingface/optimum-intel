@@ -823,7 +823,12 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         self._check_openvino_model_attributes(ov_model, use_cache=True, stateful=True)
 
         image = self.IMAGE.resize((600, 600))
+        if model_arch == "minicpmv4_6":
+            # The Transformers reference vision merger cannot reshape unequal-sized crops.
+            preprocessors["processor"].image_processor.max_slice_nums = 1
         inputs = ov_model.preprocess_inputs(**preprocessors, text=prompt, image=image)
+        if model_arch == "minicpmv4_6":
+            self.assertEqual(inputs["target_sizes"].shape[0], 1)
         if model_arch in ["gemma3", "gemma3n", "mistral3"]:
             # validate that preprocessed input ids contain exactly one bos token
             bos_token = preprocessors["processor"].tokenizer.bos_token_id
