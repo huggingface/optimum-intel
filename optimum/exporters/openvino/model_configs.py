@@ -746,6 +746,7 @@ class MiniCPMOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
 )
 class MiniCPM5MoeOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     # no native transformers implementation yet, the checkpoint code (`trust_remote_code`) uses the transformers 4.x API
+    MIN_TRANSFORMERS_VERSION = "4.57.6"
     MAX_TRANSFORMERS_VERSION = "4.57.6"
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
