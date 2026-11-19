@@ -12548,6 +12548,7 @@ class FunASRModelPatcher(OVSeq2SeqModelPatcher):
                     del attn._orig_forward
 
 
+# Original code: https://github.com/modelscope/FunASR/blob/v1.4.1/funasr/models/sense_voice/model.py#L201-L258
 def _sensevoice_sanm_sdpa_forward(self, x, mask, mask_shfit_chunk=None, mask_att_chunk_encoder=None):
     """SDPA version of funasr `MultiHeadedAttentionSANM.forward` used by SenseVoiceSmall.
 
