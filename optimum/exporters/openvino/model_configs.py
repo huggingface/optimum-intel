@@ -58,9 +58,9 @@ from optimum.exporters.openvino.input_generators import (
     DummyGemma4UnifiedVisionInputGenerator,
     DummyGemma4VisionInputGenerator,
     DummyKokoroInputGenerator,
+    DummyLfm2VlVisionEmbedInputGenerator,
     DummyLfm3AudioInputGenerator,
     DummyLfm3VlInputGenerator,
-    DummyLfm2VlVisionEmbedInputGenerator,
     DummyLLavaMultiModalProjectorInputGenerator,
     DummyMiniCPMV4_7LMInputGenerator,
     DummyMiniCPMV4_7VisionInputGenerator,
@@ -176,6 +176,7 @@ from optimum.exporters.openvino.model_patcher import (
     KokoroModelPatcher,
     Lfm2ModelPatcher,
     Lfm2MoeModelPatcher,
+    Lfm2VlVisionEmbeddingsModelPatcher,
     Lfm3ModelPatcher,
     Lfm3OmniAudioDecoderPatcher,
     Lfm3OmniAudioEncoderPatcher,
@@ -186,7 +187,6 @@ from optimum.exporters.openvino.model_patcher import (
     Lfm3VlLanguageModelPatcher,
     Lfm3VlNestedLanguageModelPatcher,
     Lfm3VlVisionEmbeddingsPatcher,
-    Lfm2VlVisionEmbeddingsModelPatcher,
     Llama4ImageEmbeddingsModelPatcher,
     Llama4TextModelPatcher,
     LlavaImageEmbeddingModelPatcher,
@@ -6408,6 +6408,9 @@ class Lfm2VlOpenVINOConfig(BaseVLMOpenVINOConfig):
     # LFM2-VL (Lfm2 hybrid conv/attention text backbone + Siglip2 naflex vision tower + downsample
     # projector) was added to transformers in 5.8.0.
     MIN_TRANSFORMERS_VERSION = "5.8.0"
+    # The language model reuses the LFM2 patching, which relies on `Lfm2ShortConv.slow_forward`;
+    # keep the same upper bound as LFM2OpenVINOConfig.
+    MAX_TRANSFORMERS_VERSION = "5.10.99"
     SUPPORTED_BEHAVIORS = [behavior.value for behavior in Lfm2VlConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyLfm2VlVisionEmbedInputGenerator,)

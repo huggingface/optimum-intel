@@ -847,7 +847,8 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     },
     "zamba2": {"model": 44},
     "exaone4": {"model": 16},
-    "lfm2": {"model": 52 if is_transformers_version("<", "5") else 54},
+    # transformers 5.0 to 5.3 export lm_head as a separate weight instead of tying it to embed_tokens
+    "lfm2": {"model": 54 if is_transformers_version(">=", "5") and is_transformers_version("<", "5.4") else 52},
     "lfm2_moe": {"model": 46},
     "lfm3": {"model": 98},
     "lfm3_vl": {
