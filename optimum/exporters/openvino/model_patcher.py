@@ -13080,6 +13080,14 @@ class _LTX2TraceSafeAttnProcessor:
         else:
             apply_rotary = _ltx2_apply_split_rotary_emb
 
+        # Video hidden states come grouped as [B, G, S / G, D] (see `_ltx2_grouped_block_forward`);
+        # attention runs over the flat sequence, and the output is grouped like the query again.
+        grouped_query_shape = hidden_states.shape if hidden_states.ndim == 4 else None
+        if grouped_query_shape is not None:
+            hidden_states = hidden_states.flatten(1, 2)
+        if encoder_hidden_states is not None and encoder_hidden_states.ndim == 4:
+            encoder_hidden_states = encoder_hidden_states.flatten(1, 2)
+
         batch_size, sequence_length, _ = (
             hidden_states.shape if encoder_hidden_states is None else encoder_hidden_states.shape
         )
@@ -13137,6 +13145,10 @@ class _LTX2TraceSafeAttnProcessor:
 
         hidden_states = attn.to_out[0](hidden_states)
         hidden_states = attn.to_out[1](hidden_states)
+        if grouped_query_shape is not None:
+            hidden_states = hidden_states.reshape(
+                grouped_query_shape[0], grouped_query_shape[1], -1, hidden_states.shape[-1]
+            )
         return hidden_states
 
 
@@ -13272,6 +13284,87 @@ def _ltx2_precomputed_rope_forward(orig_forward, rope_state, module_name):
     return forward
 
 
+def _ltx2_grouped_block_forward(orig_forward, group_state):
+    """
+    Run an `LTX2VideoTransformerBlock` on video hidden states viewed as `[B, G, S / G, D]`, where G is the
+    number of timestep groups (see `LTX2TransformerPatcher`), and return them as `[B, S, D]` again.
+
+    In this view the per-group video modulation of the block, shaped `[B, G, 1, D]` by
+    `_ltx2_grouped_mod_params`, broadcasts over the tokens of each group instead of being materialized
+    per token. The reshapes are views, the attention processor flattens the sequence back for attention.
+    """
+
+    @functools.wraps(orig_forward)
+    def forward(*args, **kwargs):
+        groups = group_state.get("groups")
+        if groups is None:
+            return orig_forward(*args, **kwargs)
+        if "hidden_states" in kwargs:
+            hidden_states = kwargs.pop("hidden_states")
+        else:
+            hidden_states, args = args[0], args[1:]
+        batch_size, _, dim = hidden_states.shape
+        video_out, audio_out = orig_forward(hidden_states.reshape(batch_size, groups, -1, dim), *args, **kwargs)
+        return video_out.reshape(batch_size, -1, dim), audio_out
+
+    return forward
+
+
+def _ltx2_grouped_mod_params(block, orig_get_mod_params, group_state):
+    """
+    `get_mod_params` for an `LTX2VideoTransformerBlock` whose video hidden states are grouped (see
+    `_ltx2_grouped_block_forward`): the modulation parameters applied to the video hidden states get a
+    broadcast axis for the tokens of a group.
+
+    `scale_shift_table` parameters are applied as they are and become `[B, T, 1, D]`. The block squeezes
+    axis 2 off the video audio<->video cross-attention parameters before applying them, so those get two
+    axes. The audio and prompt parameters are applied to `[B, L, D]` tensors and are left unchanged.
+    """
+    video_ca_table = getattr(block, "video_a2v_cross_attn_scale_shift_table", None)
+    video_ca_storage = None if video_ca_table is None else video_ca_table.untyped_storage().data_ptr()
+
+    def get_mod_params(scale_shift_table, temb, batch_size):
+        params = orig_get_mod_params(scale_shift_table, temb, batch_size)
+        if group_state.get("groups") is None:
+            return params
+        if scale_shift_table is block.scale_shift_table:
+            return tuple(param.unsqueeze(2) for param in params)
+        if video_ca_storage is not None and scale_shift_table.untyped_storage().data_ptr() == video_ca_storage:
+            return tuple(param.unsqueeze(2).unsqueeze(2) for param in params)
+        return params
+
+    return get_mod_params
+
+
+def _ltx2_grouped_norm_out_forward(orig_forward, group_state):
+    """
+    Final video norm returning `[S / G, B, G, D]`, so that the output modulation the model computes from the
+    per-group timestep embedding, `[B, G, D]`, broadcasts against it. `_ltx2_grouped_proj_out_forward` restores
+    `[B, S, D]` before the output projection.
+    """
+
+    @functools.wraps(orig_forward)
+    def forward(hidden_states):
+        out = orig_forward(hidden_states)
+        groups = group_state.get("groups")
+        if groups is None:
+            return out
+        batch_size, _, dim = out.shape
+        return out.reshape(batch_size, groups, -1, dim).permute(2, 0, 1, 3)
+
+    return forward
+
+
+def _ltx2_grouped_proj_out_forward(orig_forward):
+    @functools.wraps(orig_forward)
+    def forward(hidden_states):
+        if hidden_states.ndim == 4:
+            hidden_states = hidden_states.permute(1, 2, 0, 3).flatten(1, 2)
+        return orig_forward(hidden_states)
+
+    return forward
+
+
 class LTX2TransformerPatcher(ModelPatcher):
     """
     Export patcher for the LTX2 transformer: installs the trace-safe attention processor and
@@ -13286,6 +13379,12 @@ class LTX2TransformerPatcher(ModelPatcher):
     RoPE is traced from precomputed (cos, sin) inputs (`LTX2_ROPE_INPUTS`) rather than from
     `video_coords`/`audio_coords`, so the large rotary angles are never computed in the graph, where
     an f16 inference precision would destroy them.
+
+    The video `timestep` is grouped: `[B, G]` gives one timestep to each of G equal runs of consecutive
+    tokens, e.g. one per latent frame for image-to-video and conditions. The modulation is computed per
+    group and broadcast over its tokens, where diffusers expands it to every token, which costs
+    `[B, S, 9 * D]` floats per tensor. `[B, 1]` (one timestep for all tokens) and `[B, S]` (one per token)
+    are the special cases G = 1 and G = S, so existing callers are unaffected.
     """
 
     def __enter__(self):
@@ -13328,6 +13427,25 @@ class LTX2TransformerPatcher(ModelPatcher):
                     self._orig_cross_modality_forwards.append((attn, attn.forward))
                     attn.forward = _ltx2_cross_modality_gated_forward(attn.forward, self._guidance_state)
 
+        # Grouped video timestep: the blocks and the output layer apply the modulation per timestep group.
+        # `groups` is set from the traced `timestep` in the patched forward.
+        self._group_state = {}
+        self._orig_block_forwards = []
+        for block in transformer_blocks:
+            self._orig_block_forwards.append((block, block.forward))
+            block.forward = _ltx2_grouped_block_forward(block.forward, self._group_state)
+            block.get_mod_params = _ltx2_grouped_mod_params(block, block.get_mod_params, self._group_state)
+        self._orig_output_forwards = []
+        if getattr(self._model, "norm_out", None) is not None and getattr(self._model, "proj_out", None) is not None:
+            self._orig_output_forwards = [
+                (self._model.norm_out, self._model.norm_out.forward),
+                (self._model.proj_out, self._model.proj_out.forward),
+            ]
+            self._model.norm_out.forward = _ltx2_grouped_norm_out_forward(
+                self._model.norm_out.forward, self._group_state
+            )
+            self._model.proj_out.forward = _ltx2_grouped_proj_out_forward(self._model.proj_out.forward)
+
         # Wrap forward to return dict (needed for output naming) and force return_dict=False internally
         self._orig_model_forward = self._model.forward
 
@@ -13346,6 +13464,11 @@ class LTX2TransformerPatcher(ModelPatcher):
         # this keeps LTX-2.0 export working across diffusers versions.
         _fwd_params = inspect.signature(self._orig_model_forward).parameters
         _supports_sigma = "sigma" in _fwd_params
+        # The audio<->video cross-attention modulation takes the other modality's noise level with
+        # `use_cross_timestep=True`, and each token's own timestep otherwise. The transformer forward
+        # defaults to False, but the diffusers pipelines pass True for every LTX-2 checkpoint, so trace
+        # that. The two differ only when the video timestep varies per token (image-to-video, conditions).
+        _supports_cross_timestep = _supports_sigma and "use_cross_timestep" in _fwd_params
 
         # `sigma`/`audio_sigma` sit here, rather than after `audio_coords`, to keep the parameter
         # order of the wrapped forward. OpenVINO traces the model directly when the dummy inputs are
@@ -13379,6 +13502,7 @@ class LTX2TransformerPatcher(ModelPatcher):
         ):
             self._guidance_state["cross_modality_gate"] = cross_modality_gate
             self._guidance_state["stg_perturbation_mask"] = stg_perturbation_mask
+            self._group_state["groups"] = timestep.shape[1] if timestep.ndim == 2 else 1
 
             rope_inputs = {
                 "rope": (video_rotary_cos, video_rotary_sin),
@@ -13417,6 +13541,8 @@ class LTX2TransformerPatcher(ModelPatcher):
                     audio_sigma = sigma
                 extra_forward_kwargs["sigma"] = sigma
                 extra_forward_kwargs["audio_sigma"] = audio_sigma
+            if _supports_cross_timestep:
+                extra_forward_kwargs["use_cross_timestep"] = True
             result = self._orig_model_forward(
                 hidden_states=hidden_states,
                 audio_hidden_states=audio_hidden_states,
@@ -13451,6 +13577,12 @@ class LTX2TransformerPatcher(ModelPatcher):
 
         for attn, orig_forward in self._orig_cross_modality_forwards:
             attn.forward = orig_forward
+
+        for block, orig_forward in self._orig_block_forwards:
+            block.forward = orig_forward
+            del block.get_mod_params
+        for module, orig_forward in self._orig_output_forwards:
+            module.forward = orig_forward
 
         # Restore original attention processors
         for name, module in self._model.named_modules():

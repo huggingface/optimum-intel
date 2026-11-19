@@ -12,6 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import dataclasses
 import json
 import logging
 import unittest
@@ -28,10 +29,12 @@ from diffusers import (
 from diffusers.pipelines.stable_diffusion import StableDiffusionSafetyChecker
 from diffusers.utils import load_image
 from parameterized import parameterized
+from PIL import Image
 from utils_tests import F32_CONFIG, HUB_MODEL_NAMES, MODEL_NAMES, OPENVINO_DEVICE, SEED
 
 from optimum.intel.openvino import (
     OVDiffusionPipeline,
+    OVLTX2ConditionPipeline,
     OVPipelineForImage2Image,
     OVPipelineForImage2Video,
     OVPipelineForInpainting,
@@ -1550,23 +1553,58 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
-    def test_ltx2_timestep_per_token(self, model_arch: str):
-        # Image-to-video keeps its conditioning frames at a lower noise level than the rest, so the
-        # timestep must stay per token ([B, S]), unlike text-to-video's [B, 1].
+    def test_ltx2_timestep_per_frame(self, model_arch: str):
+        # Image-to-video keeps its conditioning frame at a lower noise level than the rest, so the
+        # timestep varies across the video, unlike text-to-video's [B, 1]. It is uniform within each
+        # latent frame, and the grouped-timestep export takes one value per frame ([B, F]).
         if not model_arch.startswith("ltx2"):
             self.skipTest(f"{model_arch} takes a rank-1 timestep")
 
         pipeline = self.OVMODEL_CLASS.from_pretrained(
             MODEL_NAMES[model_arch], ov_config=F32_CONFIG, device=OPENVINO_DEVICE
         )
+        self.assertTrue(pipeline.transformer.model.has_rt_info(["ltx2_grouped_timestep"]))
         timestep_shapes = _record_ltx2_timestep_shapes(pipeline)
         inputs = self.generate_inputs(height=64, width=64, batch_size=1, num_frames=9, model_arch=model_arch)
         pipeline(**inputs)
 
         self.assertTrue(timestep_shapes)
+        latent_num_frames = (9 - 1) // pipeline.vae_temporal_compression_ratio + 1
         for shape in timestep_shapes:
-            self.assertEqual(shape[0], 1)
-            self.assertGreater(shape[1], 1)
+            self.assertEqual(shape, (1, latent_num_frames))
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
+    @require_diffusers
+    def test_ltx2_grouped_timestep_matches_per_token(self, model_arch: str):
+        # A per-frame timestep is broadcast over the frame's tokens in the graph, so expanding it per
+        # token ([B, S], what the export took before grouping) gives the same outputs.
+        if not model_arch.startswith("ltx2"):
+            self.skipTest(f"{model_arch} takes a rank-1 timestep")
+
+        pipeline = self.OVMODEL_CLASS.from_pretrained(
+            MODEL_NAMES[model_arch], ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+        pipeline.transformer.compile()
+        request = pipeline.transformer.request
+        recorded = []
+
+        def recording_request(inputs, *args, **kwargs):
+            if not recorded:
+                recorded.append({name: torch.as_tensor(value).clone() for name, value in inputs.items()})
+            return request(inputs, *args, **kwargs)
+
+        pipeline.transformer.request = recording_request
+        inputs = self.generate_inputs(height=64, width=64, batch_size=1, num_frames=9, model_arch=model_arch)
+        pipeline(**inputs)
+
+        grouped = recorded[0]
+        per_token = dict(grouped)
+        tokens_per_frame = grouped["hidden_states"].shape[1] // grouped["timestep"].shape[1]
+        per_token["timestep"] = grouped["timestep"].repeat_interleave(tokens_per_frame, dim=1)
+        grouped_outputs = [torch.from_numpy(value.copy()) for value in request(grouped).values()]
+        per_token_outputs = [torch.from_numpy(value.copy()) for value in request(per_token).values()]
+        for grouped_output, per_token_output in zip(grouped_outputs, per_token_outputs):
+            torch.testing.assert_close(grouped_output, per_token_output, atol=1e-6, rtol=0)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
@@ -1748,6 +1786,83 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
         # num_frames is floored to the nearest latent frame count, not rejected
         invalid_inputs = self.generate_inputs(height=64, width=96, batch_size=1, num_frames=10, model_arch=model_arch)
         self.assertEqual(len(np.array(pipeline(**invalid_inputs).frames[0])), 9)
+
+
+class OVLTX2ConditionPipelineTest(unittest.TestCase):
+    """`OVLTX2ConditionPipeline`: LTX-2 generation conditioned on videos and images placed at given frames.
+
+    Every condition is VAE-encoded on its own and the conditioned tokens get their own timestep, so this covers the
+    multi-frame VAE encoder and the per-token audio-video cross-attention modulation that text-to-video never reaches.
+    """
+
+    SUPPORTED_ARCHITECTURES = []
+    if is_diffusers_version(">=", "0.38.0"):
+        SUPPORTED_ARCHITECTURES.append("ltx2")
+    if is_diffusers_version(">=", "0.40.0"):
+        SUPPORTED_ARCHITECTURES.append("ltx2.3")
+    if is_transformers_version(">=", "5.10.0") and is_diffusers_version(">=", "0.40.0"):
+        SUPPORTED_ARCHITECTURES.append("ltx2.5")
+
+    def generate_inputs(self, height=64, width=96, num_frames=9, model_arch=""):
+        from diffusers.pipelines.ltx2.pipeline_ltx2_condition import LTX2VideoCondition
+
+        rng = np.random.default_rng(SEED)
+        video = [Image.fromarray(frame) for frame in rng.integers(0, 255, (num_frames, height, width, 3), np.uint8)]
+        # Image conditions are H.264 re-compressed by default (diffusers>=0.40.0), which would tie the result to the codec.
+        image_kwargs = {"crf": 0} if "crf" in {field.name for field in dataclasses.fields(LTX2VideoCondition)} else {}
+        inputs = {
+            "conditions": [
+                # Video-to-video: the input video from the first frame, partly kept.
+                LTX2VideoCondition(frames=video, index=0, strength=0.6),
+                # A keyframe on the last frame, appended to the sequence. `index` counts latent frames (8 video
+                # frames each), so the last frame is -1: a video frame number past the latent count is skipped.
+                LTX2VideoCondition(frames=video[-1], index=-1, strength=1.0, **image_kwargs),
+            ],
+            "prompt": "a dog running in a field",
+            "negative_prompt": "static, motionless",
+            "height": height,
+            "width": width,
+            "num_frames": num_frames,
+            "num_inference_steps": 2,
+            "guidance_scale": 4.5,
+        }
+        inputs.update(_ltx2_modality_isolation_off(model_arch))
+        return inputs
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
+    @require_diffusers
+    def test_compare_to_diffusers_pipeline(self, model_arch: str):
+        from diffusers import LTX2ConditionPipeline
+
+        ov_pipeline = OVLTX2ConditionPipeline.from_pretrained(
+            MODEL_NAMES[model_arch], ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+        diffusers_pipeline = LTX2ConditionPipeline.from_pretrained(MODEL_NAMES[model_arch])
+        inputs = self.generate_inputs(model_arch=model_arch)
+
+        ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED), output_type="np").frames
+        diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED), output_type="np").frames
+        np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
+    @require_diffusers
+    def test_static_shape_generation(self, model_arch: str):
+        # A video and an image condition have different frame counts, so the VAE encoder must keep a dynamic frame
+        # axis after the pipeline is reshaped to a static size. Both go at the first frame: a condition at a later
+        # latent frame is appended to the video tokens, which a statically reshaped transformer cannot take.
+        height, width, num_frames = 64, 96, 9
+        pipeline = OVLTX2ConditionPipeline.from_pretrained(
+            MODEL_NAMES[model_arch], ov_config=F32_CONFIG, device=OPENVINO_DEVICE, compile=False
+        )
+        pipeline.reshape(batch_size=1, height=height, width=width, num_images_per_prompt=1, num_frames=num_frames)
+        pipeline.compile()
+
+        inputs = self.generate_inputs(height, width, num_frames, model_arch)
+        video_condition, image_condition = inputs.pop("conditions")
+        image_condition.index = 0
+        for condition in (video_condition, image_condition):
+            frames = pipeline(**inputs, conditions=[condition], output_type="np").frames
+            self.assertEqual(frames.shape, (1, num_frames, height, width, 3))
 
 
 class OVLTX2AutoDurationTest(unittest.TestCase):

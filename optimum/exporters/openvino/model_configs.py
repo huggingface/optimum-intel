@@ -450,6 +450,8 @@ def init_model_configs():
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS.setdefault("image-to-video", {})
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["image-to-video"]["ltx-video"] = "LTXImageToVideoPipeline"
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["image-to-video"]["ltx2"] = "LTX2ImageToVideoPipeline"
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS.setdefault("video-to-video", {})
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["video-to-video"]["ltx2"] = "LTX2ConditionPipeline"
 
 
 init_model_configs()
@@ -3609,7 +3611,7 @@ class LTX2VideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
             "audio_encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
             "encoder_attention_mask": {0: "batch_size", 1: "sequence_length"},
             "audio_encoder_attention_mask": {0: "batch_size", 1: "sequence_length"},
-            "timestep": {0: "batch_size", 1: "video_sequence_length"},
+            "timestep": {0: "batch_size", 1: "timestep_groups"},
             "audio_timestep": {0: "batch_size"},
         }
         # RoPE enters as precomputed cos/sin rather than coordinates; see `LTX2_ROPE_INPUTS`. The
