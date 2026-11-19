@@ -85,12 +85,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "ratio": 1.0,
         "quant_method": OVQuantizationMethod.AWQ,
     },
-    "meta-llama/Llama-2-13b-chat-hf": {
-        "bits": 4,
-        "sym": True,
-        "group_size": 128,
-        "ratio": 1.0,
-    },
+    "meta-llama/Llama-2-13b-chat-hf": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.8},
     "stabilityai/stablelm-3b-4e1t": {
         "bits": 4,
         "sym": True,
@@ -109,12 +104,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
     "stabilityai/stable-code-3b": {"bits": 4, "sym": True, "group_size": 64, "ratio": 0.8},
     "pansophic/rocket-3B": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.8},
     "THUDM/chatglm2-6b": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.72},
-    "Qwen/Qwen-7B-Chat": {
-        "bits": 4,
-        "sym": True,
-        "group_size": 128,
-        "ratio": 1.0,
-    },
+    "Qwen/Qwen-7B-Chat": {"bits": 4, "sym": True, "group_size": 128, "ratio": 0.6},
     "Qwen/Qwen2.5-1.5B-Instruct": {
         "bits": 4,
         "sym": True,
@@ -126,7 +116,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
     },
     "Qwen/Qwen2.5-7B-Instruct": {
         "bits": 4,
-        "sym": True,
+        "sym": False,
         "group_size": 128,
         "ratio": 1.0,
         "quant_method": OVQuantizationMethod.AWQ,
@@ -173,7 +163,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
     },
     "Qwen/Qwen3-VL-4B-Instruct": {
         "bits": 4,
-        "sym": True,
+        "sym": False,
         "group_size": 128,
         "ratio": 1.0,
         "dataset": "textvqa",
@@ -273,14 +263,14 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
     },
     "meta-llama/Meta-Llama-3.1-8B-Instruct": {
         "bits": 4,
-        "sym": True,
-        "group_size": 128,
-        "ratio": 1.0,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 0.8,
         "quant_method": OVQuantizationMethod.AWQ,
     },
     "meta-llama/Llama-3.2-1B-Instruct": {
         "bits": 4,
-        "sym": True,
+        "sym": False,
         "group_size": 128,
         "ratio": 1.0,
         "quant_method": OVQuantizationMethod.AWQ,
@@ -336,9 +326,9 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
     },
     "deepseek-ai/DeepSeek-R1-Distill-Llama-8B": {
         "bits": 4,
-        "sym": True,
-        "group_size": 128,
-        "ratio": 1.0,
+        "sym": False,
+        "group_size": 64,
+        "ratio": 0.8,
         "quant_method": OVQuantizationMethod.AWQ,
     },
     "microsoft/Phi-4-multimodal-instruct": {
@@ -366,8 +356,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "quantization_config1": {
             "bits": 4,
             "sym": True,
-            "group_size": 128,
-            "ratio": 1.0,
+            "group_size": 32,
             # With ignored scope below we keep some weights in their original precision during the first quantization
             # run and then quantize them to int8 in the second run.
             "ignored_scope": {"patterns": [".*self_attn.*", ".*router.*"]},
@@ -466,9 +455,8 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
     },
     "google/gemma-4-12B-it": {
         "bits": 4,
-        "sym": True,
-        "group_size": 128,
-        "ratio": 1.0,
+        "sym": False,
+        "group_size": 64,
         "quant_method": OVQuantizationMethod.AWQ,
     },
     "google/gemma-4-26B-A4B-it": {
@@ -650,13 +638,6 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "ratio": 1.0,
         "group_size_fallback": "ignore",
     },
-    "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B": {
-        "bits": 4,
-        "sym": True,
-        "group_size": 128,
-        "ratio": 1.0,
-        "group_size_fallback": "ignore",
-    },
     "LGAI-EXAONE/EXAONE-4.0-1.2B": {
         "bits": 4,
         "sym": True,
@@ -679,27 +660,6 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "group_size_fallback": "ignore",
     },
     "google/gemma-3-4b-it": {
-        "bits": 4,
-        "sym": True,
-        "group_size": 128,
-        "ratio": 1.0,
-        "group_size_fallback": "ignore",
-    },
-    "google/gemma-3n-E2B-it": {
-        "bits": 4,
-        "sym": True,
-        "group_size": 128,
-        "ratio": 1.0,
-        "group_size_fallback": "ignore",
-    },
-    "google/gemma-3n-E4B-it": {
-        "bits": 4,
-        "sym": True,
-        "group_size": 128,
-        "ratio": 1.0,
-        "group_size_fallback": "ignore",
-    },
-    "ibm-granite/granite-4.0-h-micro": {
         "bits": 4,
         "sym": True,
         "group_size": 128,
@@ -755,13 +715,6 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "ratio": 1.0,
         "group_size_fallback": "ignore",
     },
-    "openbmb/MiniCPM4-8B": {
-        "bits": 4,
-        "sym": True,
-        "group_size": 128,
-        "ratio": 1.0,
-        "group_size_fallback": "ignore",
-    },
     "mistralai/Mistral-7B-Instruct-v0.2": {
         "bits": 4,
         "sym": True,
@@ -811,20 +764,6 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "ratio": 1.0,
         "group_size_fallback": "ignore",
     },
-    "Qwen/Qwen3.5-0.8B": {
-        "bits": 4,
-        "sym": True,
-        "group_size": 128,
-        "ratio": 1.0,
-        "group_size_fallback": "ignore",
-    },
-    "Qwen/Qwen3.5-9B": {
-        "bits": 4,
-        "sym": True,
-        "group_size": 128,
-        "ratio": 1.0,
-        "group_size_fallback": "ignore",
-    },
     "HuggingFaceTB/SmolLM3-3B": {
         "bits": 4,
         "sym": True,
@@ -832,28 +771,7 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "ratio": 1.0,
         "group_size_fallback": "ignore",
     },
-    "OpenGVLab/InternVL2-4B": {
-        "bits": 4,
-        "sym": True,
-        "group_size": 128,
-        "ratio": 1.0,
-        "group_size_fallback": "ignore",
-    },
-    "openbmb/MiniCPM-o-2_6": {
-        "bits": 4,
-        "sym": True,
-        "group_size": 128,
-        "ratio": 1.0,
-        "group_size_fallback": "ignore",
-    },
     "openbmb/MiniCPM-V-2_6": {
-        "bits": 4,
-        "sym": True,
-        "group_size": 128,
-        "ratio": 1.0,
-        "group_size_fallback": "ignore",
-    },
-    "openbmb/MiniCPM-V-4_5": {
         "bits": 4,
         "sym": True,
         "group_size": 128,
