@@ -265,6 +265,8 @@ Source support without tests is incomplete. Update the applicable files:
 - `tests/openvino/test_decoder.py` for decoder-only generation;
 - `tests/openvino/test_seq2seq.py` for seq2seq and VLM integration;
 - `tests/openvino/test_tts.py` for text-to-speech integration;
+- `tests/openvino/test_diffusion.py` for diffusers pipelines (image and video
+  generation);
 - `tests/openvino/test_export.py` for model/API export coverage;
 - `tests/openvino/test_exporters_cli.py` for CLI export coverage;
 - `tests/openvino/test_quantization.py` for compression and quantization;
@@ -323,6 +325,10 @@ Kokoro pattern in `tests/openvino/utils_tests.py`:
 
 Do not upload new tiny models to the Hub. Reuse a Hub fixture only when it
 predates the support and is already the established repository fixture.
+Diffusers pipelines are the exception: their fixtures are Hub repositories
+under `optimum-intel-internal-testing` mapped in `utils_tests.py`, with
+reference IRs on an `ov` revision. Follow the task-specific instructions for
+them.
 
 Follow the task-specific repository-test requirements supplied for `<task>`.
 
