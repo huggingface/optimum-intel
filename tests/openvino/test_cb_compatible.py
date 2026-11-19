@@ -24,7 +24,7 @@ from utils_tests import MODEL_NAMES, OPENVINO_DEVICE, REMOTE_CODE_MODELS, get_su
 
 from optimum.exporters.openvino import main_export
 from optimum.intel.openvino.utils import TemporaryDirectory
-from optimum.intel.utils.import_utils import is_qwen_tts_available
+from optimum.intel.utils.import_utils import is_qwen_tts_available, is_transformers_version
 
 
 # The submodels of each architecture that continuous batching can serve, i.e. whose stateful
@@ -59,6 +59,14 @@ ARCH_TO_CB_COMPATIBLE_SUBMODELS = {
         "task": "image-text-to-text",
         "submodels": ("language_model",),
     },
+    # hybrid Mamba2 + attention language model: the Mamba2 layers become PagedSelectiveSSM / PagedCausalConv1D. The
+    # Mamba2 fusions (FuseSSMLoop, SelectiveSSMFusion) only run in this transformation, not on the stateful model
+    "nemotron_h": {
+        "task": "text-generation-with-past",
+        "submodels": ("model",),
+        # one of each per Mamba2 layer of the tiny model
+        "paged_ops": {"PagedSelectiveSSM": 2, "PagedCausalConv1D": 2},
+    },
     # hybrid short conv + full / sliding window attention: besides SDPA -> PagedAttention (with the sliding window
     # extracted from the attention mask), the conv layers become PagedCausalConv1D
     "lfm3": {
@@ -92,6 +100,15 @@ ARCH_TO_CB_COMPATIBLE_SUBMODELS = {
     if arch in get_supported_model_for_library("transformers") or _NON_TRANSFORMERS_ARCHS.get(arch, False)
 }
 
+# DFlash and DSpark drafts have the model type of their backbone decoder (qwen3), so they are added after the
+# transformers filter above. The Markov head model of DFlash v2 and DSpark drafts has no key/value cache.
+_DFLASH_DRAFT_SUBMODELS = {"task": "text-generation-with-past", "submodels": ("model",)}
+ARCH_TO_CB_COMPATIBLE_SUBMODELS["qwen3_dflash"] = _DFLASH_DRAFT_SUBMODELS
+ARCH_TO_CB_COMPATIBLE_SUBMODELS["qwen3_dflash2"] = _DFLASH_DRAFT_SUBMODELS
+# DSpark drafts describe their RoPE in the rope_parameters of transformers 5, which earlier versions misread.
+if is_transformers_version(">=", "5"):
+    ARCH_TO_CB_COMPATIBLE_SUBMODELS["minicpmv4_7_dspark"] = _DFLASH_DRAFT_SUBMODELS
+
 # The inputs through which a PagedAttention graph receives the paged cache and its layout.
 _PAGED_ATTENTION_INPUTS = (
     "past_lens",
@@ -121,7 +138,7 @@ class OVContinuousBatchingCompatibilityTest(unittest.TestCase):
                 with self.subTest(submodel=submodel):
                     model = core.read_model(Path(tmpdir) / f"openvino_{submodel}.xml")
                     label = f"{model_arch}/{submodel}"
-                    self._assert_paged_attention_applicable(core, model, label)
+                    self._assert_paged_attention_applicable(core, model, label, expected.get("paged_ops", {}))
                     if expected.get("paged_causal_conv1d"):
                         self._assert_paged_causal_conv1d(model, config, label)
                     if expected.get("sliding_window"):
@@ -155,7 +172,7 @@ class OVContinuousBatchingCompatibilityTest(unittest.TestCase):
                 windows.append(int(window.get_data().flatten()[0]))
         self.assertEqual(windows, expected, f"{label}: unexpected PagedAttention sliding windows")
 
-    def _assert_paged_attention_applicable(self, core, model, label):
+    def _assert_paged_attention_applicable(self, core, model, label, paged_ops):
         num_sdpa = Counter(op.get_type_name() for op in model.get_ops())["ScaledDotProductAttention"]
         self.assertGreater(num_sdpa, 0, f"{label}: no ScaledDotProductAttention to convert")
 
@@ -169,6 +186,8 @@ class OVContinuousBatchingCompatibilityTest(unittest.TestCase):
         self.assertEqual(
             ops["PagedAttentionExtension"], num_sdpa, f"{label}: not every SDPA became a PagedAttention block"
         )
+        for op_type, count in paged_ops.items():
+            self.assertEqual(ops[op_type], count, f"{label}: expected {count} {op_type} blocks, got {ops[op_type]}")
         # The paged cache replaces the stateful one entirely. The state operations are what is checked:
         # the transformation removes them but leaves their variables registered on the model.
         self.assertEqual(ops["ReadValue"] + ops["Assign"], 0, f"{label}: key/value cache state left in the graph")

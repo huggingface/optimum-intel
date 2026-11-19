@@ -57,7 +57,12 @@ from transformers.utils import ModelOutput
 
 from optimum.exporters.openvino._ov_ops import convert_recurrent_attention_cell, convert_recurrent_selective_ssm_cell
 from optimum.exporters.openvino.base import OpenVINOConfig
-from optimum.exporters.openvino.dflash_utils import parse_and_validate_dspark_config
+from optimum.exporters.openvino.dflash_utils import (
+    DFLASH_ARCHITECTURES,
+    config_architecture,
+    parse_and_validate_dflash_config,
+    parse_and_validate_dspark_config,
+)
 from optimum.exporters.openvino.patching_utils import (
     ModelPatcher,
     eager_mask_without_vmap,
@@ -258,13 +263,16 @@ def batched_mm_experts_forward_patched(
 ) -> torch.Tensor:
     num_tokens = hidden_states.size(0)
     hidden_dim = hidden_states.size(-1)
-    num_experts = self.gate_up_proj.size(0)
+    # Experts without gating (e.g. NemotronH) only have `up_proj` and apply the activation alone.
+    # Older transformers versions do not set `has_gate`, and their experts are all gated.
+    has_gate = getattr(self, "has_gate", True)
+    gate_up_proj = self.gate_up_proj if has_gate else self.up_proj
+    num_experts = gate_up_proj.size(0)
 
     if not self.is_transposed:
-        gate_up_proj = self.gate_up_proj.transpose(1, 2)
+        gate_up_proj = gate_up_proj.transpose(1, 2)
         down_proj = self.down_proj.transpose(1, 2)
     else:
-        gate_up_proj = self.gate_up_proj
         down_proj = self.down_proj
 
     dense_routing_weights = torch.zeros(
@@ -284,14 +292,15 @@ def batched_mm_experts_forward_patched(
     # (S, 2 * intermediate_dim)
 
     if self.has_bias:
-        gate_up_out = gate_up_out + self.gate_up_proj_bias[..., None, :]
+        gate_up_proj_bias = self.gate_up_proj_bias if has_gate else self.up_proj_bias
+        gate_up_out = gate_up_out + gate_up_proj_bias[..., None, :]
 
     # Apply gating
     # gate, up = gate_up_out[..., ::2], gate_up_out[..., 1::2]
     # gate = gate.clamp(min=None, max=self.limit)
     # up = up.clamp(min=-self.limit, max=self.limit)
     # gated_out = gate * torch.sigmoid(gate * self.alpha)
-    gated_out = self._apply_gate(gate_up_out)
+    gated_out = self._apply_gate(gate_up_out) if has_gate else self.act_fn(gate_up_out)
 
     # --- Down projection per expert (batched) ---
     next_states = torch.bmm(gated_out, down_proj)  # (S, hidden_dim)
@@ -9270,6 +9279,9 @@ class GptOssModelPatcher(OVDecoderModelPatcher):
 # This patch replaces the chunked SSD implementation with a recurrent form that uses
 # `SelectiveSSMRecurrentCell`, which is replaced by an `ov::Loop` during
 # conversion. It runs a single unified code path for both prefill and decoding stages.
+# It is also used for `NemotronHMamba2Mixer`, which has the same projections and parameters.
+# `time_step_limit` overrides the `(min, max)` range used to clamp `dt`, `self.time_step_limit` by default.
+# With `clamp_single_token=False`, calls with a single token in all (batch x sequence) keep `dt` unclamped.
 def granite_moe_hybrid_mamba_mixer_forward(
     self,
     hidden_states: torch.Tensor,
@@ -9277,6 +9289,8 @@ def granite_moe_hybrid_mamba_mixer_forward(
     conv_state: Optional[torch.Tensor] = None,
     recurrent_state: Optional[torch.Tensor] = None,
     attention_mask: Optional[torch.Tensor] = None,
+    time_step_limit: Optional[Tuple[float, float]] = None,
+    clamp_single_token: bool = True,
 ):
     batch_size, seq_len, _ = hidden_states.shape
 
@@ -9313,7 +9327,14 @@ def granite_moe_hybrid_mamba_mixer_forward(
     # 3. State Space Model transformation in recurrent form
     A = -torch.exp(self.A_log.float())  # (num_heads,)
     dt = torch.nn.functional.softplus(dt + self.dt_bias)  # (B, T, num_heads)
-    dt = torch.clamp(dt, self.time_step_limit[0], self.time_step_limit[1]).float()
+    time_step_limit = self.time_step_limit if time_step_limit is None else time_step_limit
+    clamped_dt = torch.clamp(dt, time_step_limit[0], time_step_limit[1])
+    if not clamp_single_token:
+        # true when the call has more than one token in all: the paged attention layout is [tokens, 1], so a decode
+        # step of one sequence has a single token there too. As a tensor, the condition stays dynamic in the graph
+        is_multi_token = torch.ones_like(dt[:, :, :1]).sum() > 1
+        clamped_dt = torch.where(is_multi_token, clamped_dt, dt)
+    dt = clamped_dt.float()
 
     x = hidden_states_ssm.reshape(batch_size, seq_len, self.num_heads, self.head_dim).float()
     B = B.reshape(batch_size, seq_len, self.n_groups, self.ssm_state_size).float()
@@ -9347,6 +9368,13 @@ def granite_moe_hybrid_mamba_mixer_forward(
 
 
 class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
+    # `(min, max)` range used to clamp `dt` in the Mamba2 mixers, `None` keeps each mixer's `time_step_limit`
+    _mamba_time_step_limit = None
+    # whether calls with a single token also clamp `dt`
+    _mamba_clamp_single_token = True
+    # 2D attention mask of the traced forward, used by the Mamba2 mixers to zero the padding tokens
+    _mamba_attention_mask = None
+
     def __init__(
         self,
         config: "OpenVINOConfig",
@@ -9441,6 +9469,8 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
                     self.real_config._config, conv_states, recurrent_states, key_cache, value_cache, attention_mask
                 )
 
+            # without cache, the Mamba2 mixers take the padding mask from here
+            self._mamba_attention_mask = attention_mask
             causal_lm_output = self.model_orig_forward(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
@@ -9477,6 +9507,9 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
             ConversionExtension("SelectiveSSMRecurrentCellOp", convert_recurrent_selective_ssm_cell),
         ]
 
+    def _get_mamba_layers(self):
+        return [layer.mamba for layer in self._model.model.layers if layer.mamba is not None]
+
     def __enter__(self):
         def patch_sparse_moe(sparse_moe_layer):
             sparse_moe_layer.router._orig_forward = sparse_moe_layer.router.forward
@@ -9505,14 +9538,21 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
             def _forward(hidden_states, cache_params=None, attention_mask=None, **kwargs):
                 conv_state = None
                 recurrent_state = None
-                raw_attention_mask = None
+                raw_attention_mask = self._mamba_attention_mask
                 if cache_params is not None:
                     mamba_idx = cache_params.mamba_mapping[mamba_layer.layer_idx]
                     conv_state = cache_params.conv_states[mamba_idx]
                     recurrent_state = cache_params.recurrent_states[mamba_idx]
                     raw_attention_mask = cache_params.raw_attention_mask
                 out, new_conv_state, new_recurrent_state = granite_moe_hybrid_mamba_mixer_forward(
-                    mamba_layer, hidden_states, cache_params, conv_state, recurrent_state, raw_attention_mask
+                    mamba_layer,
+                    hidden_states,
+                    cache_params,
+                    conv_state,
+                    recurrent_state,
+                    raw_attention_mask,
+                    time_step_limit=self._mamba_time_step_limit,
+                    clamp_single_token=self._mamba_clamp_single_token,
                 )
                 if cache_params is not None:
                     mamba_idx = cache_params.mamba_mapping[mamba_layer.layer_idx]
@@ -9525,11 +9565,11 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
         for layer in self._model.model.layers:
             if getattr(layer, "block_sparse_moe", None) is not None and is_transformers_version("<", "5.13"):
                 patch_sparse_moe(layer.block_sparse_moe)
-            if layer.mamba is not None:
-                mamba_layer = layer.mamba
-                mamba_layer._orig_forward = mamba_layer.forward
-                mamba_layer.selective_ssm_recurrent_cell = SelectiveSSMRecurrentCell()
-                mamba_layer.forward = make_mamba_forward(mamba_layer)
+
+        for mamba_layer in self._get_mamba_layers():
+            mamba_layer._orig_forward = mamba_layer.forward
+            mamba_layer.selective_ssm_recurrent_cell = SelectiveSSMRecurrentCell()
+            mamba_layer.forward = make_mamba_forward(mamba_layer)
 
         if is_transformers_version(">=", "5.13"):
             if SUPPORT_GROUPED_MM:
@@ -9547,15 +9587,52 @@ class GraniteMoeHybridModelPatcher(OVDecoderModelPatcher):
 
         super().__exit__(exc_type, exc_value, traceback)
         setattr(self._model, self.orig_forward_name, self.model_orig_forward)
+        self._mamba_attention_mask = None
 
         for layer in self._model.model.layers:
             if getattr(layer, "block_sparse_moe", None) is not None and is_transformers_version("<", "5.13"):
                 unpatch_sparse_moe(layer.block_sparse_moe)
-            if layer.mamba is not None:
-                mamba_layer = layer.mamba
-                mamba_layer.forward = mamba_layer._orig_forward
-                if hasattr(mamba_layer, "selective_ssm_recurrent_cell"):
-                    del mamba_layer.selective_ssm_recurrent_cell
+
+        for mamba_layer in self._get_mamba_layers():
+            mamba_layer.forward = mamba_layer._orig_forward
+            if hasattr(mamba_layer, "selective_ssm_recurrent_cell"):
+                del mamba_layer.selective_ssm_recurrent_cell
+
+
+class NemotronHModelPatcher(GraniteMoeHybridModelPatcher):
+    """
+    NemotronH shares the cache layout and the Mamba2 mixer of GraniteMoeHybrid. Differences:
+    - each layer has a single mixer, so the Mamba2 mixers are selected by block type;
+    - `dt` is clamped at `config.time_step_min` as in the PyTorch path of transformers: in every call up to 5.14, and
+      since 5.15 only in calls with more than one token, as its single-token update does not clamp. Several sequences
+      in one call, as a batch or with continuous batching, count as several tokens. NVIDIA's implementation,
+      mamba_ssm and vLLM use `config.time_step_limit` instead, (0, inf) for the released models, and
+      https://github.com/huggingface/transformers/pull/48989 would switch transformers to it. Update this clamp if it
+      is merged;
+    - the experts are also patched before transformers 5.13, with `ov_batched_mm`.
+    """
+
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Optional[Dict[str, Any]] = None,
+    ):
+        super().__init__(config, model, model_kwargs)
+        self._mamba_time_step_limit = (self._model.config.time_step_min, float("inf"))
+        self._mamba_clamp_single_token = is_transformers_version("<", "5.15")
+
+    def _get_mamba_layers(self):
+        return [
+            layer.mixer for layer in self._model.model.layers if layer.block_type == GRANITEMOEHYBRID_MAMBA_LAYER_TYPE
+        ]
+
+    def __enter__(self):
+        super().__enter__()
+        # GraniteMoeHybrid only patches the experts from transformers 5.13. Before that, the NemotronH experts would
+        # keep the default `grouped_mm`, which uses `torch.histc` and can't be converted
+        if is_transformers_version("<", "5.13"):
+            register_ov_batched_mm(self)
 
 
 class BigBirdPegasusModelPatcher(OVSeq2SeqModelPatcher):
@@ -10037,7 +10114,25 @@ def _dflash_attention_masks(
     return full_mask, torch.where(masked, min_value, window_mask)
 
 
-# adopted from https://github.com/z-lab/dflash/blob/main/dflash/model.py#L185
+def _dflash_block_tap_masks(
+    token_type_ids: torch.Tensor, block_rows: torch.Tensor, kernel_size: int
+) -> List[torch.Tensor]:
+    """Per-tap [N, 1] masks over the packed block rows for block-local causal convolution.
+
+    Entry `tap` is True where a block row and the `tap` rows before it all lie in one contiguous block run, so a
+    tap never reaches another block. In such a run the packed rows are the flattened rows minus the context
+    rows, so a tap of `tap` packed rows is also `tap` flattened rows. Blocks of different sequences must be
+    separated by context rows.
+    """
+    token_types = token_type_ids.reshape(-1, 1)
+    masks = [token_types == 1]
+    for tap in range(1, kernel_size):
+        shifted_types = F.pad(token_types, (0, 0, tap, 0))[:-tap]
+        masks.append(masks[-1] & (shifted_types == 1))
+    return [mask.index_select(0, block_rows) for mask in masks]
+
+
+# adopted from https://github.com/z-lab/dflash/blob/95c8aeca5e4b4c4f9c0c967c05ab89fa3ed24f4c/dflash/model.py#L340
 class Qwen3DFlashAttention(Qwen3Attention):
     """Qwen3 attention in which only the block rows get a query.
 
@@ -10085,7 +10180,7 @@ class Qwen3DFlashAttention(Qwen3Attention):
         query_states = query_states * block_cos.unsqueeze(1) + qwen3_rotate_half(query_states) * block_sin.unsqueeze(1)
         # zero queries for the context rows: attention needs one query per key row
         all_queries = query_states.new_zeros(batch_size * seq_len, num_heads, self.head_dim)
-        all_queries[block_rows] = query_states.transpose(1, 2)[0]
+        all_queries.index_put_((block_rows,), query_states.transpose(1, 2)[0])
         query_states = all_queries.view(batch_size, seq_len, num_heads, self.head_dim).transpose(1, 2)
 
         if past_key_values is not None:
@@ -10110,7 +10205,7 @@ class Qwen3DFlashAttention(Qwen3Attention):
         return self.o_proj(attn_output.index_select(0, block_rows))
 
 
-# adopted from https://github.com/z-lab/dflash/blob/main/dflash/model.py#L258
+# adopted from https://github.com/z-lab/dflash/blob/95c8aeca5e4b4c4f9c0c967c05ab89fa3ed24f4c/dflash/model.py#L423
 class Qwen3DFlashDecoderLayer(nn.Module):
     def __init__(self, config: "Qwen3Config", layer_idx: int):
         super().__init__()
@@ -10119,6 +10214,8 @@ class Qwen3DFlashDecoderLayer(nn.Module):
         self.mlp = Qwen3MLP(config)
         self.input_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.post_attention_layernorm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.attention_conv = None
+        self.mlp_conv = None
 
     def forward(
         self,
@@ -10128,15 +10225,18 @@ class Qwen3DFlashDecoderLayer(nn.Module):
         attention_mask: Optional[torch.Tensor] = None,
         past_key_values: Optional[Cache] = None,
         position_embeddings: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+        block_tap_masks: Optional[List[torch.Tensor]] = None,
         **kwargs: Unpack[TransformersKwargs],
     ) -> torch.FloatTensor:
         # hidden_states holds only the block rows [N, hidden]: the norms, o_proj and MLP run on them alone.
         # Context rows enter as target_hidden, which feeds only their keys and values.
         residual = hidden_states
         block_states = self.input_layernorm(hidden_states)
+        attention_kernel = None
+        if self.attention_conv is not None:
+            block_states, attention_kernel = self.attention_conv.prepare(block_states, block_tap_masks)
         # attention input of every row: target features, with the normalized block rows written in
-        attention_input = target_hidden.flatten(0, 1).clone()
-        attention_input[block_rows] = block_states
+        attention_input = target_hidden.flatten(0, 1).clone().index_put_((block_rows,), block_states)
         hidden_states = self.self_attn(
             hidden_states=attention_input.view_as(target_hidden),
             block_states=block_states,
@@ -10146,18 +10246,27 @@ class Qwen3DFlashDecoderLayer(nn.Module):
             past_key_values=past_key_values,
             **kwargs,
         )
+        if attention_kernel is not None:
+            hidden_states = self.attention_conv.finish(hidden_states, attention_kernel, block_tap_masks)
         hidden_states = residual + hidden_states
 
         residual = hidden_states
         hidden_states = self.post_attention_layernorm(hidden_states)
+        mlp_kernel = None
+        if self.mlp_conv is not None:
+            hidden_states, mlp_kernel = self.mlp_conv.prepare(hidden_states, block_tap_masks)
         hidden_states = self.mlp(hidden_states)
+        if mlp_kernel is not None:
+            hidden_states = self.mlp_conv.finish(hidden_states, mlp_kernel, block_tap_masks)
         hidden_states = residual + hidden_states
         return hidden_states
 
 
-# adopted from https://github.com/z-lab/dflash/blob/main/dflash/model.py#L302
+# adopted from https://github.com/z-lab/dflash/blob/95c8aeca5e4b4c4f9c0c967c05ab89fa3ed24f4c/dflash/model.py#L550
 class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
     config_class = Qwen3Config
+    dflash_version = 1
+    decoder_layer_class = Qwen3DFlashDecoderLayer
     _no_split_modules = ["Qwen3DFlashDecoderLayer"]
 
     def __init__(self, config) -> None:
@@ -10165,10 +10274,13 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
         if not hasattr(config, "_orig_attn_implementation"):
             config._orig_attn_implementation = config._attn_implementation
         config._attn_implementation = "sdpa"
+        if config_architecture(config) in DFLASH_ARCHITECTURES:
+            dflash_config = parse_and_validate_dflash_config(config, expected_version=self.dflash_version).values
+        else:
+            dflash_config = getattr(config, "dflash_config", None) or config.to_dict()
         self.layers = nn.ModuleList(
-            [Qwen3DFlashDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
+            [self.decoder_layer_class(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
-        dflash_config = getattr(config, "dflash_config", None) or config.to_dict()
         self.target_layer_ids = dflash_config.get("target_layer_ids", [])
         self.norm = Qwen3RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.rotary_emb = Qwen3RotaryEmbedding(config)
@@ -10181,6 +10293,9 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
     def _init_dflash_variant(self, config) -> None:
         # Called before post_init(), so that the modules a variant adds are weight-initialized and loaded too.
         pass
+
+    def _dflash_layer_inputs(self, token_type_ids: torch.LongTensor, block_rows: torch.LongTensor) -> Dict[str, Any]:
+        return {}
 
     def forward(
         self,
@@ -10224,12 +10339,15 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
         # target features of every row; the layers use them only for the context rows' keys and values
         target_hidden = self.hidden_norm(self.fc(hidden_states.to(noise_states.dtype)))
         # indices of the block rows in flattened [batch * seq] order, which fits both [1, seq] (stateful SDPA)
-        # and [tokens, 1] (PagedAttention); empty for a context-only prompt chunk
+        # and [tokens, 1] (PagedAttention); empty for a context-only prompt chunk. Rows are written with index_put_:
+        # item assignment views a one-row value without its leading dimension, which the trace freezes as a shape.
         block_rows = torch.nonzero(token_type_ids.flatten() == 1).squeeze(-1)
         use_cache = use_cache if use_cache is not None else self.config.use_cache
         if use_cache:
             if past_key_values is None:
-                past_key_values = DynamicCache(config=self.config)
+                # Without the config every layer keeps its whole past: sliding layers apply the window through
+                # the mask, and a sliding cache layer would drop keys that the mask still indexes.
+                past_key_values = DynamicCache()
             elif not isinstance(past_key_values, Cache):
                 if is_transformers_version("<", "5"):
                     past_key_values = DynamicCache.from_legacy_cache(past_key_values)
@@ -10251,6 +10369,7 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
         )
         # cos/sin of every row: keys use all of them, queries pick the block rows
         position_embeddings = self.rotary_emb(noise_states, position_ids)
+        layer_inputs = self._dflash_layer_inputs(token_type_ids, block_rows)
         # from here on the residual stream holds only the block rows
         noise_states = noise_states.flatten(0, 1).index_select(0, block_rows)
         for layer in self.layers:
@@ -10261,18 +10380,19 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
                 attention_mask=full_mask if layer.self_attn.sliding_window is None else sliding_mask,
                 past_key_values=past_key_values,
                 position_embeddings=position_embeddings,
+                **layer_inputs,
                 **kwargs,
             )
         # write the block rows back into all rows; the caller ignores the context rows, which stay zero
         last_hidden_state = target_hidden.new_zeros(target_hidden.shape).flatten(0, 1)
-        last_hidden_state[block_rows] = self.norm(noise_states)
+        last_hidden_state.index_put_((block_rows,), self.norm(noise_states))
         return BaseModelOutputWithPast(
             last_hidden_state=last_hidden_state.view_as(target_hidden),
             past_key_values=past_key_values if use_cache else None,
         )
 
 
-# adopted from https://github.com/z-lab/dflash/blob/main/dflash/model.py#L302
+# adopted from https://github.com/z-lab/dflash/blob/95c8aeca5e4b4c4f9c0c967c05ab89fa3ed24f4c/dflash/model.py#L550
 class Qwen3DFlashForCausalLM(Qwen3DFlashDraftModel, GenerationMixin):
     """DFlash draft head exported as embeddings-in / hidden-states-out.
 
@@ -10349,7 +10469,7 @@ def _muse_glimmer_assistant_attention_forward(
     query_states = query_states * block_cos.unsqueeze(1) + rotate_half(query_states) * block_sin.unsqueeze(1)
     # zero queries for the context rows: attention needs one query per key row
     all_queries = query_states.new_zeros(batch_size * seq_len, num_heads, head_dim)
-    all_queries[block_rows] = query_states.transpose(1, 2)[0]
+    all_queries.index_put_((block_rows,), query_states.transpose(1, 2)[0])
     query_states = all_queries.view(batch_size, seq_len, num_heads, head_dim).transpose(1, 2)
 
     if past_key_values is not None:
@@ -10387,8 +10507,7 @@ def _muse_glimmer_assistant_decoder_layer_forward(
     residual = hidden_states
     block_states = layer.input_layernorm(hidden_states)
     # attention input of every row: target features, with the normalized block rows written in
-    attention_input = target_hidden.flatten(0, 1).clone()
-    attention_input[block_rows] = block_states
+    attention_input = target_hidden.flatten(0, 1).clone().index_put_((block_rows,), block_states)
     hidden_states = _muse_glimmer_assistant_attention_forward(
         layer.self_attn,
         attention_input.view_as(target_hidden),
@@ -10435,7 +10554,9 @@ def get_muse_glimmer_assistant_draft_model_class():
             # target features of every row; the layers use them only for the context rows' keys and values
             target_hidden = self.encoder(hidden_states.to(inputs_embeds.dtype))
             # indices of the block rows in flattened [batch * seq] order, which fits both [1, seq] (stateful SDPA)
-            # and [tokens, 1] (PagedAttention); empty for a context-only prompt chunk
+            # and [tokens, 1] (PagedAttention); empty for a context-only prompt chunk. Rows are written with
+            # index_put_: item assignment views a one-row value without its leading dimension, which the trace
+            # freezes as a shape.
             block_rows = torch.nonzero(token_type_ids.flatten() == 1).squeeze(-1)
             if use_cache and not isinstance(past_key_values, Cache):
                 # no config: the sliding layers keep every row, and the caller rolls the block rows back
@@ -10466,13 +10587,129 @@ def get_muse_glimmer_assistant_draft_model_class():
                 )
             # write the block rows back into all rows; the caller ignores the context rows, which stay zero
             last_hidden_state = target_hidden.new_zeros(target_hidden.shape).flatten(0, 1)
-            last_hidden_state[block_rows] = self.norm(noise_states)
+            last_hidden_state.index_put_((block_rows,), self.norm(noise_states))
             return BaseModelOutputWithPast(
                 last_hidden_state=last_hidden_state.view_as(target_hidden),
                 past_key_values=past_key_values if use_cache else None,
             )
 
     return MuseGlimmerAssistantDFlashForCausalLM
+
+
+# adopted from https://github.com/z-lab/dflash/blob/95c8aeca5e4b4c4f9c0c967c05ab89fa3ed24f4c/dflash/model.py#L478-L512
+class GroupedDynamicCausalConv(nn.Module):
+    """Block-local grouped dynamic convolution used around each DFlash-2 sublayer.
+
+    Taps shift along the packed block rows [N, hidden] that the decoder layers carry, which keep one order
+    whether the tokens lie along the sequence axis or, after SDPAToPagedAttention, along the batch axis.
+    block_tap_masks keep every tap inside the block of the row it produces.
+    """
+
+    def __init__(self, hidden_size: int, kernel_size: int, group_size: int):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.kernel_size = kernel_size
+        self.group_size = group_size
+        self.num_groups = hidden_size // group_size
+
+        self.base_kernel = nn.Parameter(torch.zeros(2, self.kernel_size, self.hidden_size))
+        with torch.no_grad():
+            self.base_kernel[:, 0, :].fill_(1.0)
+        self.kernel_projection = nn.Linear(
+            self.hidden_size,
+            2 * self.kernel_size * self.num_groups,
+            bias=False,
+        )
+
+    def _apply_kernel(
+        self,
+        hidden_states: torch.Tensor,
+        dynamic_kernel: torch.Tensor,
+        side: int,
+        block_tap_masks: List[torch.Tensor],
+    ) -> torch.Tensor:
+        rows = hidden_states.reshape(-1, self.hidden_size)
+        base_kernel = self.base_kernel[side].reshape(
+            self.kernel_size,
+            self.num_groups,
+            self.group_size,
+        )
+        kernel = dynamic_kernel.unsqueeze(-1) + base_kernel[None, :, :, :]
+
+        output = torch.zeros_like(rows).reshape(-1, self.num_groups, self.group_size)
+        for tap in range(self.kernel_size):
+            if tap == 0:
+                shifted_states = rows
+            else:
+                # select rather than multiply, so a row of another block can never inject inf/nan
+                shifted_states = F.pad(rows, (0, 0, tap, 0))[:-tap].masked_fill(~block_tap_masks[tap], 0.0)
+            output = output + shifted_states.reshape(-1, self.num_groups, self.group_size) * kernel[:, tap, :, :]
+        return output.reshape(hidden_states.shape)
+
+    def prepare(
+        self, hidden_states: torch.Tensor, block_tap_masks: List[torch.Tensor]
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        dynamic_kernel = self.kernel_projection(hidden_states).reshape(-1, 2, self.kernel_size, self.num_groups)
+        prepared = self._apply_kernel(hidden_states, dynamic_kernel[:, 0, :, :], 0, block_tap_masks)
+        return prepared, dynamic_kernel[:, 1, :, :]
+
+    def finish(
+        self, hidden_states: torch.Tensor, dynamic_kernel: torch.Tensor, block_tap_masks: List[torch.Tensor]
+    ) -> torch.Tensor:
+        return self._apply_kernel(hidden_states, dynamic_kernel, 1, block_tap_masks)
+
+
+# adopted from https://github.com/z-lab/dflash/blob/95c8aeca5e4b4c4f9c0c967c05ab89fa3ed24f4c/dflash/model.py#L515
+class DFlash2CandidateSelector(nn.Module):
+    """Weights of the DFlash-2 candidate selector, which is exported as the Markov head of the draft.
+
+    ``DFlash2MarkovHeadForExport`` scores the top-K candidate transitions of every draft position with them.
+    """
+
+    def __init__(self, config: "Qwen3Config"):
+        super().__init__()
+        selector_rank = parse_and_validate_dflash_config(config, expected_version=2).values["selector_rank"]
+        self.predecessor_codebook = nn.Parameter(torch.empty(config.vocab_size, selector_rank))
+        self.successor_codebook = nn.Parameter(torch.empty(config.vocab_size, selector_rank))
+        self.hidden_projection = nn.Linear(config.hidden_size, selector_rank, bias=False)
+        std = getattr(config, "initializer_range", 0.02)
+        nn.init.normal_(self.predecessor_codebook, mean=0.0, std=std)
+        nn.init.normal_(self.successor_codebook, mean=0.0, std=std)
+
+
+# adopted from https://github.com/z-lab/dflash/blob/95c8aeca5e4b4c4f9c0c967c05ab89fa3ed24f4c/dflash/model.py#L641-L649
+class Qwen3DFlash2DecoderLayer(Qwen3DFlashDecoderLayer):
+    def __init__(self, config: "Qwen3Config", layer_idx: int):
+        super().__init__(config, layer_idx)
+        dflash_config = parse_and_validate_dflash_config(config, expected_version=2).values
+        conv_sizes = (config.hidden_size, dflash_config["conv_kernel_size"], dflash_config["conv_group_size"])
+        self.attention_conv = GroupedDynamicCausalConv(*conv_sizes)
+        self.mlp_conv = GroupedDynamicCausalConv(*conv_sizes)
+
+
+# adopted from https://github.com/z-lab/dflash/blob/95c8aeca5e4b4c4f9c0c967c05ab89fa3ed24f4c/dflash/model.py#L630
+class Qwen3DFlash2DraftModel(Qwen3DFlashDraftModel):
+    dflash_version = 2
+    decoder_layer_class = Qwen3DFlash2DecoderLayer
+    _no_split_modules = ["Qwen3DFlash2DecoderLayer"]
+
+    def _init_dflash_variant(self, config) -> None:
+        self.candidate_selector = DFlash2CandidateSelector(config)
+
+    def _dflash_layer_inputs(self, token_type_ids: torch.LongTensor, block_rows: torch.LongTensor) -> Dict[str, Any]:
+        kernel_size = self.layers[0].attention_conv.kernel_size
+        return {"block_tap_masks": _dflash_block_tap_masks(token_type_ids, block_rows, kernel_size)}
+
+
+# adopted from https://github.com/z-lab/dflash/blob/95c8aeca5e4b4c4f9c0c967c05ab89fa3ed24f4c/dflash/model.py#L653
+class Qwen3DFlash2ForCausalLM(Qwen3DFlash2DraftModel, Qwen3DFlashForCausalLM):
+    """DFlash-2 backbone exported like the DFlash one: embeddings in, the hidden states of every row out.
+
+    The candidate selector is exported separately, as the Markov head of the draft.
+    """
+
+    def markov_head_for_export(self, top_k: int) -> "MarkovHeadForExport":
+        return DFlash2MarkovHeadForExport(self.candidate_selector, self.config, top_k)
 
 
 # adopted from https://github.com/deepseek-ai/DeepSpec/blob/main/deepspec/modeling/dspark/markov_head.py
@@ -10511,20 +10748,22 @@ class Qwen3DSparkForCausalLM(Qwen3DFlashForCausalLM):
 
 
 class MarkovHeadForExport(nn.Module):
-    """Export-only first-order Markov head with two independent computations over the same weights.
+    """Export-only first-order Markov head of a DFlash draft, with two independent computations over the same weights.
 
-    - Dense step: ``prev_token_ids`` [N] -> ``markov_bias`` [N, vocab], one full-vocabulary bias row per
-      previous token. The runtime calls it once per draft position.
     - Top-K lattice: ``draft_logits`` [T, vocab], ``anchor_token_ids`` [N], ``subsequence_begins`` [N + 1] ->
       ``candidate_ids`` [T, K], ``edge_scores`` [T, K, K]. The rows of N draft blocks are packed back to back,
       and block n spans rows ``subsequence_begins[n]`` to ``subsequence_begins[n + 1]``. Every row keeps the
-      Top-K draft candidates. ``edge_scores[t, i, j]`` is the draft logit of candidate j plus the Markov
-      transition score from predecessor i to j, where the predecessors are the candidates of row t - 1, or
-      the block's anchor token on the first row of a block, so blocks never mix. ``subsequence_begins`` must
-      start at 0, increase strictly and end at T; the graph does not check it.
+      Top-K draft candidates. ``edge_scores[t, i, j]`` is the unary score of candidate j (its draft logit) plus
+      the Markov transition score from predecessor i to j, where the predecessors are the candidates of row
+      t - 1, or the block's anchor token on the first row of a block, so blocks never mix.
+      ``subsequence_begins`` must start at 0, increase strictly and end at T; the graph does not check it.
+    - Dense step: ``prev_token_ids`` [N] -> ``markov_bias`` [N, vocab], one full-vocabulary bias row per
+      previous token. The runtime calls it once per draft position.
 
-    Subclasses define the head through ``markov_bias`` and ``transition_scores``. Runtimes keep the computation
-    they use and may replace the K of the TopK.
+    Subclasses define the head through ``transition_scores`` and, optionally, ``unary_scores`` and
+    ``markov_bias``. A gated head also reads ``draft_hidden_states`` [T, hidden], the backbone rows that produced
+    ``draft_logits``, and has no dense step. Runtimes keep the computation they use and may replace the K of the
+    TopK.
     """
 
     def __init__(self, top_k: int):
@@ -10534,7 +10773,16 @@ class MarkovHeadForExport(nn.Module):
     def markov_bias(self, prev_token_ids: torch.LongTensor) -> torch.Tensor:
         raise NotImplementedError
 
-    def transition_scores(self, predecessor_ids: torch.LongTensor, candidate_ids: torch.LongTensor) -> torch.Tensor:
+    def unary_scores(self, unary_logits: torch.Tensor) -> torch.Tensor:
+        """Maps the Top-K draft logits [T, K] to the FP32 scores added to every transition into a candidate."""
+        return unary_logits.to(torch.float32)
+
+    def transition_scores(
+        self,
+        predecessor_ids: torch.LongTensor,
+        candidate_ids: torch.LongTensor,
+        draft_hidden_states: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         """Maps predecessor and candidate ids [T, K] to FP32 transition scores [T, K, K]."""
         raise NotImplementedError
 
@@ -10556,12 +10804,13 @@ class MarkovHeadForExport(nn.Module):
         anchor_token_ids: torch.LongTensor,
         subsequence_begins: torch.LongTensor,
         top_k: int,
+        draft_hidden_states: Optional[torch.Tensor] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         unary_logits, candidate_ids = torch.topk(draft_logits, top_k, dim=-1)
         candidate_ids = candidate_ids.to(torch.int64)
         predecessor_ids = self.predecessor_ids(candidate_ids, anchor_token_ids, subsequence_begins)
-        edge_scores = self.transition_scores(predecessor_ids, candidate_ids)
-        edge_scores = edge_scores + unary_logits.to(torch.float32).unsqueeze(-2)
+        edge_scores = self.transition_scores(predecessor_ids, candidate_ids, draft_hidden_states)
+        edge_scores = edge_scores + self.unary_scores(unary_logits).unsqueeze(-2)
         return edge_scores, candidate_ids
 
     def forward(
@@ -10592,10 +10841,67 @@ class DSparkVanillaMarkovHeadForExport(MarkovHeadForExport):
     def markov_bias(self, prev_token_ids: torch.LongTensor) -> torch.Tensor:
         return self.markov_head(prev_token_ids).to(torch.float32)
 
-    def transition_scores(self, predecessor_ids: torch.LongTensor, candidate_ids: torch.LongTensor) -> torch.Tensor:
+    def transition_scores(
+        self,
+        predecessor_ids: torch.LongTensor,
+        candidate_ids: torch.LongTensor,
+        draft_hidden_states: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         predecessor_codes = self.markov_head.markov_w1(predecessor_ids).to(torch.float32)
         successor_rows = self.markov_w2_rows(candidate_ids).to(torch.float32)
         return torch.matmul(predecessor_codes, successor_rows.transpose(-1, -2))
+
+
+# adopted from https://github.com/z-lab/dflash/blob/95c8aeca5e4b4c4f9c0c967c05ab89fa3ed24f4c/dflash/model.py#L524
+# and https://github.com/z-lab/dflash/blob/95c8aeca5e4b4c4f9c0c967c05ab89fa3ed24f4c/dflash/model.py#L599
+class DFlash2MarkovHeadForExport(MarkovHeadForExport):
+    """DFlash-2 candidate selector as a gated Markov head without a dense step.
+
+    The transition score from token i to token j on row t is
+    ``(predecessor_codebook[i] * hidden_projection(draft_hidden_states[t])) . successor_codebook[j]``, and the
+    unary score is the draft logit after the checkpoint's output_multiplier and final_logit_softcapping.
+    """
+
+    def __init__(self, candidate_selector: DFlash2CandidateSelector, config: "Qwen3Config", top_k: int):
+        super().__init__(top_k)
+        self.config = config
+        self.hidden_projection = candidate_selector.hidden_projection
+        dflash_config = parse_and_validate_dflash_config(config, expected_version=2).values
+        self.output_multiplier = dflash_config.get("output_multiplier", 1.0)
+        self.final_logit_softcapping = dflash_config.get("final_logit_softcapping", 0.0)
+        # 16-bit export keeps module weights in checkpoint precision but casts bare parameters to float32.
+        self.predecessor_lookup = nn.Embedding.from_pretrained(candidate_selector.predecessor_codebook, freeze=True)
+        self.successor_lookup = nn.Embedding.from_pretrained(candidate_selector.successor_codebook, freeze=True)
+
+    def unary_scores(self, unary_logits: torch.Tensor) -> torch.Tensor:
+        unary_scores = unary_logits.to(torch.float32) * self.output_multiplier
+        if self.final_logit_softcapping > 0.0:
+            unary_scores = torch.tanh(unary_scores / self.final_logit_softcapping) * self.final_logit_softcapping
+        return unary_scores
+
+    def transition_scores(
+        self,
+        predecessor_ids: torch.LongTensor,
+        candidate_ids: torch.LongTensor,
+        draft_hidden_states: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        projection_input = draft_hidden_states.to(self.hidden_projection.weight.dtype)
+        projected_hidden = self.hidden_projection(projection_input).to(torch.float32)
+        gated_predecessors = self.predecessor_lookup(predecessor_ids).to(torch.float32) * projected_hidden.unsqueeze(1)
+        successor_codes = self.successor_lookup(candidate_ids).to(torch.float32)
+        return torch.matmul(gated_predecessors, successor_codes.transpose(-1, -2))
+
+    def forward(
+        self,
+        draft_logits: torch.Tensor,
+        draft_hidden_states: torch.Tensor,
+        anchor_token_ids: torch.LongTensor,
+        subsequence_begins: torch.LongTensor,
+    ) -> ModelOutput:
+        edge_scores, candidate_ids = self.score_candidates(
+            draft_logits, anchor_token_ids, subsequence_begins, self.top_k, draft_hidden_states
+        )
+        return ModelOutput(edge_scores=edge_scores, candidate_ids=candidate_ids)
 
 
 # Patched implementation of the gated delta rule in recurrent form.
