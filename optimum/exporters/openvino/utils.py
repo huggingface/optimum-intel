@@ -133,19 +133,12 @@ def is_auto_compression_disabled(model: Any) -> bool:
         return False
 
     try:
-        from diffusers import LTX2ImageToVideoPipeline, LTX2Pipeline
+        from diffusers import LTX2ConditionPipeline, LTX2ImageToVideoPipeline, LTX2Pipeline
     except ImportError:
         # LTX-2 was added in diffusers 0.38.0.
         return False
-    ltx2_pipelines = (LTX2Pipeline, LTX2ImageToVideoPipeline)
-    try:
-        from diffusers import LTX2ConditionPipeline
 
-        ltx2_pipelines += (LTX2ConditionPipeline,)
-    except ImportError:
-        pass
-
-    return isinstance(model, ltx2_pipelines)
+    return isinstance(model, (LTX2Pipeline, LTX2ImageToVideoPipeline, LTX2ConditionPipeline))
 
 
 def has_ltx2_extended_guidance_inputs(config: Any) -> bool:
