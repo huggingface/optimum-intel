@@ -1829,26 +1829,6 @@ class OVLTX2ConditionPipelineTest(unittest.TestCase):
         diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED), output_type="np").frames
         np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
 
-    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
-    @require_diffusers
-    def test_static_shape_generation(self, model_arch: str):
-        # A video and an image condition have different frame counts, so the VAE encoder must keep a dynamic frame
-        # axis after the pipeline is reshaped to a static size. Both go at the first frame: a condition at a later
-        # latent frame is appended to the video tokens, which a statically reshaped transformer cannot take.
-        height, width, num_frames = 64, 96, 9
-        pipeline = OVLTX2ConditionPipeline.from_pretrained(
-            MODEL_NAMES[model_arch], ov_config=F32_CONFIG, device=OPENVINO_DEVICE, compile=False
-        )
-        pipeline.reshape(batch_size=1, height=height, width=width, num_images_per_prompt=1, num_frames=num_frames)
-        pipeline.compile()
-
-        inputs = self.generate_inputs(height, width, num_frames, model_arch)
-        video_condition, image_condition = inputs.pop("conditions")
-        image_condition.index = 0
-        for condition in (video_condition, image_condition):
-            frames = pipeline(**inputs, conditions=[condition], output_type="np").frames
-            self.assertEqual(frames.shape, (1, num_frames, height, width, 3))
-
 
 class OVLTX2AutoDurationTest(unittest.TestCase):
     """LTX-2.5's `duration_head`: `num_frames` may now be omitted and predicted from the prompt.

@@ -125,9 +125,9 @@ def is_auto_compression_disabled(model: Any) -> bool:
     model in `_DEFAULT_8BIT_WQ_CONFIGS` (e.g. LTX-2.3, LTX-2.5), which is tuned to keep the quality,
     if the installed NNCF version supports it.
 
-    Both supported pipelines are listed explicitly: `LTX2ImageToVideoPipeline` does not subclass
-    `LTX2Pipeline`, and they are the only two LTX-2 classes this exporter registers (see
-    `_DIFFUSERS_TASKS_TO_MODEL_MAPPINGS` in `model_configs.py`).
+    Every LTX-2 pipeline this exporter registers (see `_DIFFUSERS_TASKS_TO_MODEL_MAPPINGS` in
+    `model_configs.py`) is listed explicitly: `LTX2ImageToVideoPipeline` and `LTX2ConditionPipeline`
+    do not subclass `LTX2Pipeline`.
     """
     if not is_diffusers_available():
         return False
@@ -137,8 +137,15 @@ def is_auto_compression_disabled(model: Any) -> bool:
     except ImportError:
         # LTX-2 was added in diffusers 0.38.0.
         return False
+    ltx2_pipelines = (LTX2Pipeline, LTX2ImageToVideoPipeline)
+    try:
+        from diffusers import LTX2ConditionPipeline
 
-    return isinstance(model, (LTX2Pipeline, LTX2ImageToVideoPipeline))
+        ltx2_pipelines += (LTX2ConditionPipeline,)
+    except ImportError:
+        pass
+
+    return isinstance(model, ltx2_pipelines)
 
 
 def has_ltx2_extended_guidance_inputs(config: Any) -> bool:
