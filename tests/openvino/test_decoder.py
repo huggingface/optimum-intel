@@ -612,6 +612,36 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         del model_stateful
         gc.collect()
 
+    def test_phi3_generation_with_past_key_values(self):
+        model_id = MODEL_NAMES["phi3"]
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        tokens = tokenizer("Hello", return_tensors="pt")
+        model = OVModelForCausalLM.from_pretrained(
+            model_id, export=True, stateful=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+
+        output_with_marker = model.generate(
+            **tokens, past_key_values=[None], min_new_tokens=4, max_new_tokens=4, do_sample=False
+        )
+        output = model.generate(**tokens, min_new_tokens=4, max_new_tokens=4, do_sample=False)
+        self.assertTrue(torch.equal(output_with_marker, output))
+
+        first_output = model.generate(
+            **tokens, min_new_tokens=2, max_new_tokens=2, do_sample=False, return_dict_in_generate=True
+        )
+        resumed_output = model.generate(
+            input_ids=first_output.sequences,
+            attention_mask=torch.ones_like(first_output.sequences),
+            past_key_values=first_output.past_key_values,
+            min_new_tokens=2,
+            max_new_tokens=2,
+            do_sample=False,
+        )
+        self.assertTrue(torch.equal(resumed_output, output))
+        self.assertEqual(output.shape[1], tokens["input_ids"].shape[1] + 4)
+        del model
+        gc.collect()
+
     def test_print_model_properties(self):
         # test setting OPENVINO_LOG_LEVEL to 3, which calls _print_compiled_model_properties
         openvino_log_level = os.environ.get("OPENVINO_LOG_LEVEL", None)
