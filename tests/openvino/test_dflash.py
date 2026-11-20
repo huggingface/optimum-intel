@@ -888,7 +888,7 @@ class DFlashPagedAttentionTest(unittest.TestCase):
                 output = model(**inputs, past_key_values=cache, use_cache=True)
                 outputs.append(output.last_hidden_state)
                 cache = output.past_key_values
-                cache.crop(cache.get_seq_length() - int(inputs["token_type_ids"].sum()))
+                cache.crop(-int(inputs["token_type_ids"].sum()))
         return outputs
 
     @staticmethod
