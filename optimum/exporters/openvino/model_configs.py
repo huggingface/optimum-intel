@@ -243,7 +243,7 @@ from optimum.exporters.openvino.model_patcher import (
     Qwen3OmniMoeLanguageModelPatcher,
     Qwen3OmniMoeTalkerLanguageModelPatcher,
     Qwen3OmniMoeVisionMergerPatcher,
-    Qwen3TTSCodecDecoderStreamingPatcher,
+    Qwen3TTSCodecDecoderStatefulPatcher,
     Qwen3TTSCodecPatcher,
     Qwen3TTSDecoderStackPatcher,
     Qwen3TTSEmbeddingPatcher,
@@ -8969,17 +8969,17 @@ class Qwen3TTSCodecDecoderOpenVINOConfig(Qwen3TTSComponentOpenVINOConfig):
         return {"waveform": {0: "batch_size", 2: "audio_length"}}
 
 
-class Qwen3TTSCodecDecoderStreamingOpenVINOConfig(Qwen3TTSComponentOpenVINOConfig):
-    """OpenVINO export configuration for the explicit-state streaming Qwen3-TTS codec decoder.
+class Qwen3TTSCodecDecoderStatefulOpenVINOConfig(Qwen3TTSComponentOpenVINOConfig):
+    """OpenVINO export configuration for the stateful Qwen3-TTS codec decoder.
 
     Unlike :class:`Qwen3TTSCodecDecoderOpenVINOConfig`, which decodes a whole code sequence, the graph decodes a
     few new frames per call and carries the decoder's causal state (convolution histories, transposed-convolution
     tails and the attention key / value cache) in ``state.<name>`` inputs and ``new_state.<name>`` outputs, so
     no left context has to be re-decoded. The number of frames per call is dynamic in the IR and is meant to be
-    reshaped to a fixed value at load time. See :class:`Qwen3TTSStreamingCodecDecoder`.
+    reshaped to a fixed value at load time. See :class:`Qwen3TTSStatefulCodecDecoder`.
     """
 
-    _MODEL_PATCHER = Qwen3TTSCodecDecoderStreamingPatcher
+    _MODEL_PATCHER = Qwen3TTSCodecDecoderStatefulPatcher
 
     def __init__(self, config, state_specs: Dict[str, Tuple[int, ...]], task: str = "feature-extraction", **kwargs):
         super().__init__(config, task=task, **kwargs)

@@ -556,17 +556,17 @@ def _get_qwen3_tts_submodels_fn_and_export_configs(
     #   speaker_encoder        ECAPA-TDNN, once per reference audio (voice clone)
     #   codec_encoder          reference waveform -> residual codes (ICL)
     #   codec_decoder          generated codes -> 24 kHz waveform
-    #   codec_decoder_stream   same decoder with explicit causal state, a few frames per call (audio streaming)
+    #   codec_decoder_stateful   same decoder with explicit causal state, a few frames per call (audio streaming)
     #
     # Each output head is folded into the stack it follows, because it is applied to that
     # stack's hidden states on the same call path. The embedding tables cannot be folded the
     # same way - they are looked up all over prompt assembly, far from any stack call, and one
     # OpenVINO graph computes all of its outputs on every call - so each kind of table gets its
     # own graph, with the code predictor's per-depth tables stacked into one.
-    from optimum.exporters.openvino.model_patcher import Qwen3TTSStreamingCodecDecoder
+    from optimum.exporters.openvino.model_patcher import Qwen3TTSStatefulCodecDecoder
     from optimum.exporters.openvino.model_configs import (
         Qwen3TTSCodecDecoderOpenVINOConfig,
-        Qwen3TTSCodecDecoderStreamingOpenVINOConfig,
+        Qwen3TTSCodecDecoderStatefulOpenVINOConfig,
         Qwen3TTSCodecEncoderOpenVINOConfig,
         Qwen3TTSDecoderStackOpenVINOConfig,
         Qwen3TTSEmbeddingOpenVINOConfig,
@@ -596,9 +596,9 @@ def _get_qwen3_tts_submodels_fn_and_export_configs(
         "codec_decoder": Qwen3TTSCodecDecoderOpenVINOConfig(
             codec_model.config.decoder_config, task="feature-extraction"
         ),
-        "codec_decoder_stream": Qwen3TTSCodecDecoderStreamingOpenVINOConfig(
+        "codec_decoder_stateful": Qwen3TTSCodecDecoderStatefulOpenVINOConfig(
             codec_model.config.decoder_config,
-            state_specs=Qwen3TTSStreamingCodecDecoder(codec_model.decoder).state_specs,
+            state_specs=Qwen3TTSStatefulCodecDecoder(codec_model.decoder).state_specs,
             task="feature-extraction",
         ),
     }
@@ -616,7 +616,7 @@ def _get_qwen3_tts_submodels_fn_and_export_configs(
             "code_predictor_embeddings": talker.code_predictor.model,
             "codec_encoder": codec_model,
             "codec_decoder": codec_model.decoder,
-            "codec_decoder_stream": codec_model.decoder,
+            "codec_decoder_stateful": codec_model.decoder,
         }
         if model.speaker_encoder is not None:
             submodels["speaker_encoder"] = model.speaker_encoder

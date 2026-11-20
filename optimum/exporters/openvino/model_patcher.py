@@ -14187,8 +14187,8 @@ def _qwen3_tts_rotate_half(x):
     return torch.cat((-x2, x1), dim=-1)
 
 
-class Qwen3TTSStreamingCodecDecoder(nn.Module):
-    """Explicit-state streaming forward of the Qwen3-TTS codec (``speech_tokenizer``) decoder.
+class Qwen3TTSStatefulCodecDecoder(nn.Module):
+    """Stateful forward of the Qwen3-TTS codec (``speech_tokenizer``) decoder.
 
     The decoder is fully causal, so everything that looks backwards can carry a small explicit state instead of
     re-decoding left context for every chunk:
@@ -14245,7 +14245,7 @@ class Qwen3TTSStreamingCodecDecoder(nn.Module):
     @staticmethod
     def _causal_conv(mod, x, state):
         if mod.stride != 1:
-            raise ValueError("Streaming expects stride-1 causal convolutions")
+            raise ValueError("Stateful decoder expects stride-1 causal convolutions")
         pad = mod.padding
         x_cat = torch.cat([state, x], dim=-1) if pad > 0 else x
         return mod.conv(x_cat), (x_cat[..., x_cat.shape[-1] - pad :] if pad > 0 else state)
@@ -14331,18 +14331,18 @@ class Qwen3TTSStreamingCodecDecoder(nn.Module):
         return (wav.clamp(min=-1, max=1), *[new[name] for name in self.state_specs])
 
 
-class Qwen3TTSCodecDecoderStreamingPatcher(OVDecoderModelPatcher):
-    """Exports the Qwen3-TTS codec decoder as an explicit-state streaming graph, see
-    :class:`Qwen3TTSStreamingCodecDecoder`. The state tensors are graph inputs / outputs (``state.<name>`` /
+class Qwen3TTSCodecDecoderStatefulPatcher(OVDecoderModelPatcher):
+    """Exports the Qwen3-TTS codec decoder as a stateful graph, see
+    :class:`Qwen3TTSStatefulCodecDecoder`. The state tensors are graph inputs / outputs (``state.<name>`` /
     ``new_state.<name>``); a runtime may fold them into variables with ``MakeStateful`` (CPU / GPU) or carry them
     itself (NPU)."""
 
     def __enter__(self):
         super().__enter__()
-        streaming = Qwen3TTSStreamingCodecDecoder(self._model)
+        stateful = Qwen3TTSStatefulCodecDecoder(self._model)
 
         def forward(self_model, audio_codes, position, state):
-            return streaming(audio_codes, position, *state)
+            return stateful(audio_codes, position, *state)
 
         self._model.forward = types.MethodType(forward, self._model)
 
