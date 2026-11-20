@@ -17,7 +17,7 @@ import enum
 import functools
 import logging
 from collections import OrderedDict
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
@@ -243,6 +243,7 @@ from optimum.exporters.openvino.model_patcher import (
     Qwen3OmniMoeLanguageModelPatcher,
     Qwen3OmniMoeTalkerLanguageModelPatcher,
     Qwen3OmniMoeVisionMergerPatcher,
+    Qwen3TTSCodecDecoderStreamingPatcher,
     Qwen3TTSCodecPatcher,
     Qwen3TTSDecoderStackPatcher,
     Qwen3TTSEmbeddingPatcher,
@@ -8966,3 +8967,47 @@ class Qwen3TTSCodecDecoderOpenVINOConfig(Qwen3TTSComponentOpenVINOConfig):
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
         return {"waveform": {0: "batch_size", 2: "audio_length"}}
+
+
+class Qwen3TTSCodecDecoderStreamingOpenVINOConfig(Qwen3TTSComponentOpenVINOConfig):
+    """OpenVINO export configuration for the explicit-state streaming Qwen3-TTS codec decoder.
+
+    Unlike :class:`Qwen3TTSCodecDecoderOpenVINOConfig`, which decodes a whole code sequence, the graph decodes a
+    few new frames per call and carries the decoder's causal state (convolution histories, transposed-convolution
+    tails and the attention key / value cache) in ``state.<name>`` inputs and ``new_state.<name>`` outputs, so
+    no left context has to be re-decoded. The number of frames per call is dynamic in the IR and is meant to be
+    reshaped to a fixed value at load time. See :class:`Qwen3TTSStreamingCodecDecoder`.
+    """
+
+    _MODEL_PATCHER = Qwen3TTSCodecDecoderStreamingPatcher
+
+    def __init__(self, config, state_specs: Dict[str, Tuple[int, ...]], task: str = "feature-extraction", **kwargs):
+        super().__init__(config, task=task, **kwargs)
+        # Shapes of the state tensors by name (batch 1), in the order the graph consumes them.
+        self.state_specs = dict(state_specs)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        inputs = {"audio_codes": {2: "code_frames"}, "position": {}}
+        inputs.update({f"state.{name}": {} for name in self.state_specs})
+        return inputs
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        outputs = {"waveform": {2: "audio_length"}}
+        outputs.update({f"new_state.{name}": {} for name in self.state_specs})
+        return outputs
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        # The carried state is batch 1, whatever batch size the exporter defaults to.
+        kwargs["batch_size"] = 1
+        generator = self.DUMMY_INPUT_GENERATOR_CLASSES[0](self.task, self._normalized_config, **kwargs)
+        dummy_inputs = {
+            name: generator.generate(name, framework=framework, int_dtype=self.int_dtype, float_dtype=self.float_dtype)
+            for name in ("audio_codes", "position")
+        }
+        # One list input: the forward takes the whole state as a single ``state`` argument.
+        dummy_inputs["state"] = [
+            torch.zeros(shape, dtype=torch.float32) for shape in self.state_specs.values()
+        ]
+        return dummy_inputs
