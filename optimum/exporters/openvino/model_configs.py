@@ -8987,7 +8987,9 @@ class BagelOpenVINOConfig(OpenVINOConfig):
     """
     BAGEL in the layout of OpenVINO GenAI's `BagelPipeline`. One stateless language model with the KV cache as ports
     serves text generation and image denoising. Text/vision embeddings and the VAE encoder/decoder are separate models.
-    All models run on a single sample, so they have no batch dimension (VAE inputs keep a batch of 1).
+    All models run on a single sample, so they have no batch dimension (the VAE encoder input keeps a batch of 1).
+    The VAE decoder has a dynamic batch: the frames generated one after another, e.g. by a world model, decode in one
+    call.
     """
 
     SUPPORTED_BEHAVIORS = [behavior.value for behavior in BagelConfigBehavior]
@@ -9001,6 +9003,8 @@ class BagelOpenVINOConfig(OpenVINOConfig):
     DUMMY_NUM_LATENT_TOKENS = 4
     DUMMY_NUM_PATCHES = 16
     DUMMY_LATENT_SIZE = 4
+    # more than one so that no batch-dependent shape is folded into the VAE decoder
+    DUMMY_DECODE_BATCH = 2
 
     def __init__(
         self,
@@ -9065,7 +9069,7 @@ class BagelOpenVINOConfig(OpenVINOConfig):
             return {"pixel_values": {0: "num_patches"}, "position_ids": {0: "num_patches"}}
         if self._behavior == BagelConfigBehavior.VAE_ENCODER:
             return {"pixel_values": {2: "height", 3: "width"}}
-        return {"latents": {2: "latent_height", 3: "latent_width"}}
+        return {"latents": {0: "batch_size", 2: "latent_height", 3: "latent_width"}}
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
@@ -9081,7 +9085,7 @@ class BagelOpenVINOConfig(OpenVINOConfig):
             return {"image_embeds": {0: "num_patches"}}
         if self._behavior == BagelConfigBehavior.VAE_ENCODER:
             return {"latent": {2: "latent_height", 3: "latent_width"}}
-        return {"image": {2: "height", 3: "width"}}
+        return {"image": {0: "batch_size", 2: "height", 3: "width"}}
 
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
         config = self._orig_config
@@ -9115,7 +9119,11 @@ class BagelOpenVINOConfig(OpenVINOConfig):
         if self._behavior == BagelConfigBehavior.VAE_ENCODER:
             image_size = latent_size * 2 ** (len(config.vae_config.channel_multiplier) - 1)
             return {"pixel_values": torch.rand(1, config.vae_config.in_channels, image_size, image_size) * 2 - 1}
-        return {"latents": torch.randn(1, config.vae_config.latent_channels, latent_size, latent_size)}
+        return {
+            "latents": torch.randn(
+                self.DUMMY_DECODE_BATCH, config.vae_config.latent_channels, latent_size, latent_size
+            )
+        }
 
     def patch_model_for_export(self, model, model_kwargs: Optional[Dict[str, Any]] = None):
         if self._behavior == BagelConfigBehavior.LANGUAGE:

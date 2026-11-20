@@ -1295,6 +1295,18 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
                 torch.allclose(ov_image, transformers_image, atol=1e-3),
                 f"Max abs diff {(ov_image - transformers_image).abs().max()}",
             )
+
+        # the VAE decoder has a dynamic batch: several generated frames decode in one call
+        latent_size = 32 // ov_model.latent_downsample * transformers_model.config.latent_patch_size
+        latents = torch.randn(3, transformers_model.config.vae_config.latent_channels, latent_size, latent_size)
+        ov_images = torch.from_numpy(ov_model.vae_decoder({"latents": latents.numpy()})["image"])
+        with torch.no_grad():
+            transformers_images = transformers_model.model.vae.decode(latents)
+        self.assertEqual(ov_images.shape, (3, 3, 32, 32))
+        self.assertTrue(
+            torch.allclose(ov_images, transformers_images, atol=1e-3),
+            f"Max abs diff {(ov_images - transformers_images).abs().max()}",
+        )
         del transformers_model
         del ov_model
         gc.collect()
