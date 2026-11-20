@@ -882,6 +882,9 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
             isinstance(model_kwargs.get("past_key_values"), (tuple, list))
             and generation_config.prefill_chunk_size is None
         ):
+            # The parent method was removed in Transformers 5.4.0.
+            if hasattr(super(), "_get_initial_cache_position"):
+                model_kwargs = self._get_initial_cache_position(input_ids.shape[1], input_ids.device, model_kwargs)
             # OV input preparation already slices the input according to its legacy cache representation.
             model_inputs = self.prepare_inputs_for_generation(input_ids, **model_kwargs, **kwargs)
             return self(**model_inputs, return_dict=True)
