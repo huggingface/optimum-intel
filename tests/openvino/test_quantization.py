@@ -1208,6 +1208,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForVisualCausalLM, "minicpmv4_7", False),
         (OVModelForVisualCausalLM, "minicpm_ocr", False),
         (OVModelForCausalLM, "lfm3", True),
+        (OVModelForVisualCausalLM, "lfm2_vl", False),
         (OVModelForVisualCausalLM, "lfm3_vl", True),
         (OVModelForVisualCausalLM, "lfm3_omni", True),
     ]

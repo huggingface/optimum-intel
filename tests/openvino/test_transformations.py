@@ -115,6 +115,28 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "Tokenization",
         ],
     },
+    # same language model as lfm2, plus the Siglip2 vision tower and projector
+    "lfm2_vl": {
+        "convert": [
+            "SDPAFusion",
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "MakeStateful",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "RoPEFusion",
+            "DecompressionHandling",
+            "TransposeMatMul",
+            "TSShapeOfForward",
+        ],
+        "compile": [
+            "ConvertMatMulToFC",
+            "ConvertToCPUSpecificOpset",
+            "ConvertToSwishCPU",
+            "Snippets",
+            "Tokenization",
+        ],
+    },
     "afmoe": {
         "convert": [
             "SDPAFusion",
