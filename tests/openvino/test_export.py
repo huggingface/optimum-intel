@@ -14,6 +14,7 @@
 
 
 import json
+import os
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -52,6 +53,7 @@ from optimum.intel import (
     OVLTXPipeline,
     OVModelForAudioClassification,
     OVModelForCausalLM,
+    OVModelForCTC,
     OVModelForCustomTasks,
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
@@ -189,6 +191,9 @@ class ExportModelTest(unittest.TestCase):
             or (is_transformers_version(">=", "5.10.0") and is_diffusers_version(">=", "0.40.0"))
         )
     }
+
+    if os.environ.get("RUN_SLOW_EXPORT_TESTS") == "1" and is_transformers_version(">=", "5.0"):
+        SUPPORTED_ARCHITECTURES.update({"lasr_ctc": OVModelForCTC})
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
         "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},
