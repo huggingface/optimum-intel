@@ -318,6 +318,11 @@ class ExportModelTest(unittest.TestCase):
                         ov_model.model.get_rt_info()["optimum"]["transformers_version"], _transformers_version
                     )
                     self.assertTrue(ov_model.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"]))
+                    expected_asf = "4.0" if model_type == "granitemoehybrid" else "8.0"
+                    self.assertEqual(
+                        ov_model.model.get_rt_info()["runtime_options"]["ACTIVATIONS_SCALE_FACTOR"].value,
+                        expected_asf,
+                    )
                     self.assertTrue(ov_model.model.has_rt_info(["runtime_options", "KV_CACHE_PRECISION"]))
 
                 if task == "image-text-to-text":
