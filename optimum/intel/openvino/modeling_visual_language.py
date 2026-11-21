@@ -98,6 +98,9 @@ if is_transformers_version(">=", "5.18"):
     from transformers.models.minicpmv4_7.modeling_minicpmv4_7 import MiniCPMV4_7Model
     from transformers.vision_utils import get_vision_nearest_position_ids, get_vision_window_index
 
+if is_transformers_version(">=", "5.23.0.dev0"):
+    from transformers.models.bagel.modeling_bagel import BagelForConditionalGeneration
+
 
 if TYPE_CHECKING:
     from PIL.Image import Image
@@ -9143,6 +9146,437 @@ class _OVLfm3OmniForCausalLM(_OVLfm3VlForCausalLM):
         )
 
 
+class OVBagelModelPart(OVModelPart):
+    """A stateless BAGEL model: numpy inputs and outputs through one reused infer request."""
+
+    _infer_request = None
+
+    def compile(self):
+        if self.request is None and "NPU" in self._device:
+            # NPUW_BAGEL compiles static-shape variants of the dynamic models (openvinotoolkit/openvino#39661)
+            self.ov_config = {"NPU_USE_NPUW": "YES", "NPUW_BAGEL": "YES", **self.ov_config}
+        super().compile()
+
+    def forward(self, inputs: Dict[str, np.ndarray], outputs: Optional[List[str]] = None) -> Dict[str, np.ndarray]:
+        self.compile()
+        if self._infer_request is None:
+            self._infer_request = self.request.create_infer_request()
+        self._infer_request.infer(inputs)
+        # copies: the request reuses its output buffers, while KV caches outlive the call
+        return {name: self._infer_request.get_tensor(name).data.copy() for name in outputs or self.output_names}
+
+    def clear_requests(self):
+        super().clear_requests()
+        self._infer_request = None
+
+
+class _BagelContext:
+    """A cached multimodal prefix: KV cache plus the next RoPE position."""
+
+    def __init__(self, num_layers: int, kv_heads: int, head_dim: int):
+        empty = np.zeros((1, kv_heads, 0, head_dim), np.float32)
+        self.past = {f"past_key_values.{i}.{kv}": empty for i in range(num_layers) for kv in ("key", "value")}
+        self.rope = 0
+
+    @property
+    def length(self) -> int:
+        return self.past["past_key_values.0.key"].shape[2]
+
+
+class _OVBagelForCausalLM(OVModelForVisualCausalLM):
+    """
+    BAGEL: visual question answering, text-to-image generation and image editing. The stateless language model serves
+    both experts: text generation reads `logits`, image denoising reads `v_t`. The KV cache stays on the host so that
+    one prompt context is reused across the classifier-free-guidance branches and denoising steps.
+    OpenVINO counterpart of `BagelForConditionalGeneration` (same `generate` / `generate_image` arguments):
+    https://github.com/huggingface/transformers/blob/main/src/transformers/models/bagel/modeling_bagel.py
+    """
+
+    additional_parts = ["vae_encoder", "vae_decoder"]
+
+    def __init__(
+        self,
+        language_model: ov.Model,
+        text_embeddings: ov.Model,
+        vision_embeddings: ov.Model,
+        config: PretrainedConfig = None,
+        device: str = "CPU",
+        dynamic_shapes: bool = None,
+        ov_config: Optional[Dict[str, str]] = None,
+        model_save_dir: Optional[Union[str, Path, TemporaryDirectory]] = None,
+        quantization_config: Union[OVWeightQuantizationConfig, Dict] = None,
+        **kwargs,
+    ):
+        self.is_dynamic = True
+        self.config = config
+        self.model_save_dir = model_save_dir
+        self._device = device.upper()
+        self.ov_config = {} if ov_config is None else {**ov_config}
+        self.preprocessors = kwargs.get("preprocessors", [])
+        self.main_input_name = "input_ids"
+        self._compile_only = kwargs.get("compile_only", False)
+        self._supports_cache_class = False
+        self.use_cache = True
+        self.generation_config = kwargs.get("generation_config", GenerationConfig.from_model_config(config))
+        self._openvino_config = None
+        if quantization_config:
+            self._openvino_config = OVConfig(quantization_config=quantization_config)
+        self._set_ov_config_parameters()
+
+        self.language_model = OVBagelModelPart(language_model, self, model_name="language_model")
+        self.text_embeddings = OVBagelModelPart(text_embeddings, self, model_name="text_embeddings")
+        self.vision_embeddings = OVBagelModelPart(vision_embeddings, self, model_name="vision_embeddings")
+        self.vae_encoder = OVBagelModelPart(kwargs["vae_encoder"], self, model_name="vae_encoder")
+        self.vae_decoder = OVBagelModelPart(kwargs["vae_decoder"], self, model_name="vae_decoder")
+
+        text = config.text_config
+        self._num_layers = text.num_hidden_layers
+        self._kv_heads = text.num_key_value_heads
+        self._head_dim = getattr(text, "head_dim", None) or text.hidden_size // text.num_attention_heads
+        vae = config.vae_config
+        self._patch_dim = config.latent_patch_size**2 * vae.latent_channels
+        self.latent_downsample = 2 ** (len(vae.channel_multiplier) - 1) * config.latent_patch_size
+
+        if kwargs.get("compile", True) and not self._compile_only:
+            self.compile()
+
+    @property
+    def _component_names(self) -> List[str]:
+        return ["language_model", "text_embeddings", "vision_embeddings", "vae_encoder", "vae_decoder"]
+
+    @property
+    def ov_models(self) -> Dict[str, Union[ov.Model, ov.CompiledModel]]:
+        # the text embeddings are a separate part, not a model of the language model part
+        return {name: getattr(self, part).model for name, part in zip(self._ov_model_names, self._component_names)}
+
+    def to(self, device: str):
+        # the parts have no `to()`, unlike the language model part of the other VLMs
+        return OVBaseModel.to(self, device)
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if video is not None or audio is not None:
+            raise ValueError("Bagel only supports text and image inputs.")
+        content = ([{"type": "image"}] if image is not None else []) + [{"type": "text", "text": text}]
+        prompt = processor.apply_chat_template([{"role": "user", "content": content}], add_generation_prompt=True)
+        return processor(text=prompt, images=image, return_tensors="pt")
+
+    def _new_context(self) -> _BagelContext:
+        return _BagelContext(self._num_layers, self._kv_heads, self._head_dim)
+
+    def _embed(self, input_ids) -> np.ndarray:
+        return self.text_embeddings({"input_ids": np.asarray(input_ids, np.int64).reshape(-1)})["inputs_embeds"]
+
+    def _run(
+        self,
+        context: _BagelContext,
+        inputs_embeds: np.ndarray,
+        mask: np.ndarray,
+        position_ids: np.ndarray,
+        gen_index: Optional[np.ndarray] = None,
+        x_t: Optional[np.ndarray] = None,
+        timestep: float = 0.0,
+        vae_position_ids: Optional[np.ndarray] = None,
+        keep: bool = True,
+    ) -> Dict[str, np.ndarray]:
+        seq_len = inputs_embeds.shape[0]
+        gen_index = np.zeros(0, np.int64) if gen_index is None else np.asarray(gen_index, np.int64)
+        und_index = np.setdiff1d(np.arange(seq_len), gen_index).astype(np.int64)
+        outputs = self.language_model(
+            {
+                "inputs_embeds": inputs_embeds.astype(np.float32),
+                "und_index": und_index,
+                "gen_index": gen_index,
+                "x_t": np.zeros((0, self._patch_dim), np.float32) if x_t is None else x_t.astype(np.float32),
+                "timestep": np.array([timestep], np.float32),
+                "vae_position_ids": np.zeros(0, np.int64)
+                if vae_position_ids is None
+                else np.asarray(vae_position_ids, np.int64),
+                "attention_mask": mask[None, None].astype(np.float32),
+                "position_ids": np.asarray(position_ids, np.int64),
+                **context.past,
+            },
+            # denoising steps discard the KV cache, so it is not read
+            None if keep else ["v_t"],
+        )
+        if keep:
+            context.past = {
+                name.replace("present.", "past_key_values."): value
+                for name, value in outputs.items()
+                if name.startswith("present.")
+            }
+        return outputs
+
+    @staticmethod
+    def _mask(past_length: int, block_ids: np.ndarray) -> np.ndarray:
+        """Causal over the new tokens, bidirectional inside image blocks (equal non-negative block ids)."""
+        seq_len = block_ids.shape[0]
+        allowed = np.tril(np.ones((seq_len, seq_len), bool))
+        allowed |= (block_ids[:, None] == block_ids[None, :]) & (block_ids[:, None] >= 0)
+        new = np.where(allowed, 0.0, -np.inf).astype(np.float32)
+        return np.concatenate([np.zeros((seq_len, past_length), np.float32), new], 1)
+
+    def _add_text(self, context: _BagelContext, input_ids) -> Dict[str, np.ndarray]:
+        embeds = self._embed(input_ids)
+        seq_len = embeds.shape[0]
+        outputs = self._run(
+            context,
+            embeds,
+            self._mask(context.length, np.full(seq_len, -1)),
+            np.arange(context.rope, context.rope + seq_len),
+        )
+        context.rope += seq_len
+        return outputs
+
+    def _image_block(self, inner: np.ndarray) -> np.ndarray:
+        soi, eoi = self._embed([self.config.start_of_image_token_id, self.config.end_of_image_token_id])
+        return np.concatenate([soi[None], inner, eoi[None]], 0)
+
+    def _add_image_block(self, context, embeds, keep=True, **latent_inputs) -> Dict[str, np.ndarray]:
+        # an image block attends bidirectionally and shares a single RoPE position
+        seq_len = embeds.shape[0]
+        outputs = self._run(
+            context,
+            embeds,
+            np.zeros((seq_len, context.length + seq_len), np.float32),
+            np.full(seq_len, context.rope),
+            keep=keep,
+            **latent_inputs,
+        )
+        if keep:
+            context.rope += 1
+        return outputs
+
+    def _add_vit_image(self, context, pixel_values, image_position_ids) -> Dict[str, np.ndarray]:
+        image_embeds = self.vision_embeddings(
+            {
+                "pixel_values": np.asarray(pixel_values, np.float32),
+                "position_ids": np.asarray(image_position_ids, np.int64),
+            }
+        )["image_embeds"]
+        return self._add_image_block(context, self._image_block(image_embeds))
+
+    # the transformers helpers only read `config` and `latent_downsample`
+    def _latent_position_ids(self, height: int, width: int) -> np.ndarray:
+        return BagelForConditionalGeneration._latent_position_ids(self, height, width, "cpu").numpy()
+
+    def _patchify(self, latents: np.ndarray) -> np.ndarray:
+        return BagelForConditionalGeneration.patchify_latents(self, torch.from_numpy(latents)).numpy()
+
+    def _unpatchify(self, tokens: np.ndarray, height: int, width: int) -> np.ndarray:
+        return BagelForConditionalGeneration.unpatchify_latents(self, torch.from_numpy(tokens), height, width).numpy()
+
+    def _latent_block(self, context, x_t, timestep, latent_position_ids, keep):
+        num_tokens = x_t.shape[0]
+        embeds = self._image_block(np.zeros((num_tokens, self.config.text_config.hidden_size), np.float32))
+        return self._add_image_block(
+            context,
+            embeds,
+            keep=keep,
+            gen_index=np.arange(1, num_tokens + 1),
+            x_t=x_t,
+            timestep=timestep,
+            vae_position_ids=latent_position_ids,
+        )
+
+    def _add_vae_image(self, context, vae_pixel_values):
+        latents = self.vae_encoder({"pixel_values": np.asarray(vae_pixel_values, np.float32)})["latent"]
+        height, width = vae_pixel_values.shape[-2:]
+        self._latent_block(context, self._patchify(latents), 0.0, self._latent_position_ids(height, width), True)
+
+    def _velocity(self, context, x_t, timestep, latent_position_ids) -> np.ndarray:
+        return self._latent_block(context, x_t, timestep, latent_position_ids, keep=False)["v_t"]
+
+    def _add_prompt(
+        self, context, input_ids, pixel_values=None, image_position_ids=None, image_num_patches=None
+    ) -> np.ndarray:
+        """
+        Runs a processor prompt and returns the logits of all its tokens: text segments are causal, each
+        <|vision_start|>...<|vision_end|> span is one image block.
+        """
+        ids = np.asarray(input_ids).reshape(-1)
+        starts = np.flatnonzero(ids == self.config.start_of_image_token_id)
+        ends = np.flatnonzero(ids == self.config.end_of_image_token_id)
+        if len(starts) != len(ends):
+            raise ValueError("Unbalanced image start/end tokens in `input_ids`.")
+        if len(starts):
+            if pixel_values is None or image_position_ids is None:
+                raise ValueError("`input_ids` contains images, `pixel_values` and `image_position_ids` are required.")
+            pixel_values, image_position_ids = np.asarray(pixel_values), np.asarray(image_position_ids)
+            num_patches = (
+                np.asarray(image_num_patches).reshape(-1)
+                if image_num_patches is not None
+                else np.array([pixel_values.shape[0]])
+            )
+            offsets = np.concatenate([[0], np.cumsum(num_patches)])
+        cursor, logits = 0, []
+        for idx, (start, end) in enumerate(zip(starts, ends)):
+            if start > cursor:
+                logits.append(self._add_text(context, ids[cursor:start])["logits"])
+            patches = slice(offsets[idx], offsets[idx + 1])
+            logits.append(self._add_vit_image(context, pixel_values[patches], image_position_ids[patches])["logits"])
+            cursor = end + 1
+        if cursor < len(ids):
+            logits.append(self._add_text(context, ids[cursor:])["logits"])
+        return np.concatenate(logits, 0)
+
+    def forward(self, input_ids, pixel_values=None, image_position_ids=None, image_num_patches=None, **kwargs):
+        """Logits of all the prompt tokens, as `BagelForConditionalGeneration.forward` without a cache."""
+        if input_ids.ndim == 2 and input_ids.shape[0] != 1:
+            raise ValueError("Bagel handles one prompt at a time.")
+        logits = self._add_prompt(self._new_context(), input_ids, pixel_values, image_position_ids, image_num_patches)
+        return CausalLMOutputWithPast(logits=torch.from_numpy(logits)[None])
+
+    def generate(
+        self,
+        input_ids: Optional[torch.LongTensor] = None,
+        generation_config: Optional[GenerationConfig] = None,
+        generation_mode: str = "text",
+        **kwargs,
+    ):
+        r"""
+        `generation_mode="text"` (default) answers about the prompt and its images and returns the prompt followed by
+        the generated tokens. `generation_mode="image"` runs [`~_OVBagelForCausalLM.generate_image`].
+        """
+        if generation_mode == "image":
+            return self.generate_image(input_ids, **kwargs)
+        generation_config = copy.deepcopy(self.generation_config if generation_config is None else generation_config)
+        model_kwargs = generation_config.update(**kwargs)
+        return self._generate_text(input_ids, generation_config, **model_kwargs)
+
+    def _generate_text(
+        self,
+        input_ids: torch.LongTensor,
+        generation_config: GenerationConfig,
+        pixel_values=None,
+        image_position_ids=None,
+        image_num_patches=None,
+        generator: Optional[torch.Generator] = None,
+        **kwargs,
+    ) -> torch.LongTensor:
+        input_ids = torch.as_tensor(input_ids)
+        if input_ids.ndim == 2 and input_ids.shape[0] != 1:
+            raise ValueError("Bagel handles one prompt at a time.")
+        sequence = input_ids.reshape(1, -1)
+        max_new_tokens = generation_config.max_new_tokens
+        if max_new_tokens is None:
+            max_new_tokens = generation_config.max_length - sequence.shape[1]
+        min_new_tokens = generation_config.min_new_tokens or 0
+        eos = generation_config.eos_token_id
+        eos = [] if eos is None else [eos] if isinstance(eos, int) else list(eos)
+        processors = []
+        if generation_config.repetition_penalty not in (None, 1.0):
+            processors.append(RepetitionPenaltyLogitsProcessor(generation_config.repetition_penalty))
+        if generation_config.do_sample:
+            if generation_config.temperature not in (None, 1.0):
+                processors.append(TemperatureLogitsWarper(generation_config.temperature))
+            if generation_config.top_k:
+                processors.append(TopKLogitsWarper(generation_config.top_k))
+            if generation_config.top_p not in (None, 1.0):
+                processors.append(TopPLogitsWarper(generation_config.top_p))
+
+        context = self._new_context()
+        # the last prompt token runs as a decode step: NPUW_BAGEL only computes logits for decode-sized calls
+        if sequence.shape[1] > 1:
+            self._add_prompt(context, sequence[:, :-1], pixel_values, image_position_ids, image_num_patches)
+        logits = self._add_text(context, sequence[:, -1:])["logits"]
+        for step in range(max_new_tokens):
+            scores = torch.from_numpy(logits[-1:]).float()
+            if step < min_new_tokens and eos:
+                scores[:, eos] = -float("inf")
+            for processor in processors:
+                scores = processor(sequence, scores)
+            if generation_config.do_sample:
+                token = torch.multinomial(torch.softmax(scores, -1), 1, generator=generator)
+            else:
+                token = scores.argmax(-1, keepdim=True)
+            sequence = torch.cat([sequence, token.to(sequence.dtype)], 1)
+            if int(token) in eos or step == max_new_tokens - 1:
+                break
+            logits = self._add_text(context, token)["logits"]
+        return sequence
+
+    @torch.no_grad()
+    def generate_image(
+        self,
+        input_ids,
+        pixel_values=None,
+        image_position_ids=None,
+        vae_pixel_values=None,
+        height: int = 1024,
+        width: int = 1024,
+        num_inference_steps: int = 50,
+        guidance_scale: float = 4.0,
+        image_guidance_scale: float = 2.0,
+        cfg_interval: Tuple[float, float] = (0.4, 1.0),
+        cfg_renorm_min: float = 0.0,
+        cfg_renorm_type: str = "global",
+        timestep_shift: float = 3.0,
+        latents: Optional[torch.Tensor] = None,
+        generator: Optional[torch.Generator] = None,
+        output_type: str = "pt",
+        **kwargs,
+    ) -> torch.Tensor:
+        r"""
+        Same arguments and outputs as `BagelForConditionalGeneration.generate_image`: text-to-image, or editing of
+        `vae_pixel_values`. The VAE encoder of an edited image uses the posterior mean.
+        """
+        editing = vae_pixel_values is not None
+        if editing:
+            height, width = vae_pixel_values.shape[-2:]
+        if height % self.latent_downsample or width % self.latent_downsample:
+            raise ValueError(f"height and width must be multiples of {self.latent_downsample}")
+
+        cond, cfg_text, cfg_img = self._new_context(), self._new_context(), self._new_context()
+        if editing:
+            for context in (cond, cfg_text):
+                self._add_vae_image(context, vae_pixel_values)
+                if pixel_values is not None:
+                    self._add_vit_image(context, pixel_values, image_position_ids)
+        self._add_text(cond, input_ids)
+        self._add_text(cfg_img, input_ids)
+        use_img_cfg = editing and image_guidance_scale > 1.0
+
+        latent_position_ids = self._latent_position_ids(height, width)
+        if latents is None:
+            latents = torch.randn(latent_position_ids.shape[0], self._patch_dim, generator=generator)
+        x_t = latents.float()
+
+        timesteps = torch.linspace(1, 0, num_inference_steps)
+        timesteps = timestep_shift * timesteps / (1 + (timestep_shift - 1) * timesteps)
+        for t, dt in zip(timesteps[:-1], timesteps[:-1] - timesteps[1:]):
+            use_cfg = cfg_interval[0] < t <= cfg_interval[1]
+            text_scale = guidance_scale if use_cfg else 1.0
+            img_scale = image_guidance_scale if (use_cfg and use_img_cfg) else 1.0
+            v_t = torch.from_numpy(self._velocity(cond, x_t.numpy(), float(t), latent_position_ids))
+            if text_scale > 1.0:
+                v_text = torch.from_numpy(self._velocity(cfg_text, x_t.numpy(), float(t), latent_position_ids))
+                v_img = (
+                    torch.from_numpy(self._velocity(cfg_img, x_t.numpy(), float(t), latent_position_ids))
+                    if img_scale > 1.0
+                    else None
+                )
+                v_t = BagelForConditionalGeneration._combine_guidance(
+                    v_t, v_text, v_img, text_scale, img_scale, cfg_renorm_min, cfg_renorm_type
+                )
+            x_t = x_t - v_t * dt
+
+        if output_type == "latent":
+            return x_t
+        image = self.vae_decoder({"latents": self._unpatchify(x_t.numpy(), height, width)})["image"]
+        return torch.from_numpy(image).float()
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "muse_glimmer": _OVMuseGlimmerForCausalLM,
     "llava": _OVLlavaForCausalLM,
@@ -9181,6 +9615,7 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "deepseek_ocr2": _OVDeepseekOCR2ForCausalLM,
     "lfm3_vl": _OVLfm3VlForCausalLM,
     "lfm3_omni": _OVLfm3OmniForCausalLM,
+    "bagel": _OVBagelForCausalLM,
 }
 
 SEQUENCE_CLASSIFICATION_MODEL_TYPE_TO_CLS_MAPPING = {

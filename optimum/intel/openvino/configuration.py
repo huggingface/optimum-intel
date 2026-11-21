@@ -395,6 +395,14 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "ratio": 1.0,
         "group_size_fallback": "adjust",
     },
+    "ByteDance-Seed/BAGEL-7B-MoT": {
+        "bits": 4,
+        "sym": True,
+        "group_size": 128,
+        "ratio": 1.0,
+        "backup_precision": "int8_sym",
+        "group_size_fallback": "adjust",
+    },
     "HuggingFaceTB/SmolVLM2-256M-Video-Instruct": {
         "bits": 4,
         "sym": False,
