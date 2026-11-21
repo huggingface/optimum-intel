@@ -1545,8 +1545,8 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
             elif model_kwargs.get("cache_params") is not None:
                 model_kwargs["cache_position"] = torch.tensor([num_new_tokens], dtype=torch.long)
 
-        if model_kwargs.get("attention_mask") is not None:
-            attention_mask = model_kwargs["attention_mask"]
+        attention_mask = model_kwargs.get("attention_mask")
+        if attention_mask is not None:
             model_kwargs["attention_mask"] = torch.cat(
                 [attention_mask, attention_mask.new_ones((attention_mask.shape[0], 1))], dim=-1
             )
@@ -1580,6 +1580,10 @@ class OVModelWithMambaForCausalLM(OVModelForCausalLM):
                     cache_position = torch.tensor([self._past_length], device=input_ids.device)
 
             if cache_position[0] > 0:
+                if attention_mask is None:
+                    # recent transformers drop the attention mask in `generate` when it is all ones (no padding),
+                    # restore it at the full context length before keeping only the last token
+                    attention_mask = torch.ones_like(input_ids, dtype=torch.int64)
                 # decoding stage so it takes the last token
                 input_ids = input_ids[:, -1].unsqueeze(-1)
 

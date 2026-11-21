@@ -368,6 +368,8 @@ if not (is_transformers_version(">=", "5.5") and is_transformers_version("<", "5
     _GENAI_VLM_UNSUPPORTED_ARCHITECTURES += ("gemma4", "gemma4_moe")
 if not (is_transformers_version(">=", "5.10") and is_transformers_version("<", "5.11")):
     _GENAI_VLM_UNSUPPORTED_ARCHITECTURES += ("gemma4_unified",)
+if is_openvino_version("<", "2026.5"):
+    _GENAI_VLM_UNSUPPORTED_ARCHITECTURES += ("minicpmv4_7", "minicpm_ocr")
 
 
 class VLMPipelineTestCase(unittest.TestCase):
