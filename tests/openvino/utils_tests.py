@@ -269,6 +269,7 @@ HUB_MODEL_NAMES = {
     "minicpm": "optimum-intel-internal-testing/tiny-random-minicpm",
     "minicpm3": "optimum-intel-internal-testing/tiny-random-minicpm3",
     "minicpmv": "optimum-intel-internal-testing/tiny-random-minicpmv-2_6",
+    "minicpmv4_6": "optimum-intel-internal-testing/tiny-random-minicpm-v-4_6",
     "minicpmv4_7": "optimum-intel-internal-testing/tiny-random-minicpmv47",
     "minicpmv4_7_dspark": "optimum-intel-internal-testing/tiny-random-minicpmv47-dspark",
     "minicpm_ocr": "optimum-intel-internal-testing/tiny-random-minicpm-ocr",
@@ -573,6 +574,11 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_embeddings_model": 1,
         "vision_embeddings_model": 26,
         "resampler_model": 6,
+    },
+    "minicpmv4_6": {
+        "lm_model": 36,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 22,
     },
     "llava_next_video": {
         "lm_model": 30,
@@ -891,6 +897,7 @@ ARCH_TO_MODEL_CLASS = {
     "gemma4_moe": "OVModelForVisualCausalLM",
     "gemma4_unified": "OVModelForVisualCausalLM",
     "muse_glimmer": "OVModelForVisualCausalLM",
+    "minicpmv4_6": "OVModelForVisualCausalLM",
     "minicpmv4_7": "OVModelForVisualCausalLM",
     "minicpm_ocr": "OVModelForVisualCausalLM",
     "qwen3_omni_moe": "OVModelForMultimodalLM",
