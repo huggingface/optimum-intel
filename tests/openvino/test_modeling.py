@@ -805,6 +805,9 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
         "squeezebert",
     )
 
+    if is_model_type_transformers_compatible("eurobert"):
+        SUPPORTED_ARCHITECTURES += ("eurobert-sequence-classification",)
+
     # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
     if is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES += ("flaubert", "xlm")
@@ -987,6 +990,9 @@ class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
         "roberta",
     )
 
+    if is_model_type_transformers_compatible("eurobert"):
+        SUPPORTED_ARCHITECTURES += ("eurobert-token-classification",)
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
@@ -1062,6 +1068,8 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         "sentence-transformers-bert",
         "qwen3",
     )
+    if is_model_type_transformers_compatible("eurobert"):
+        SUPPORTED_ARCHITECTURES += ("eurobert",)
     if is_model_type_transformers_compatible("qwen3_vl"):
         SUPPORTED_ARCHITECTURES += ("qwen3_vl_embedding",)
 
@@ -1162,6 +1170,9 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         "squeezebert",
         "xlm-roberta",
     )
+
+    if is_model_type_transformers_compatible("eurobert"):
+        SUPPORTED_ARCHITECTURES += ("eurobert",)
 
     # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
     if is_transformers_version("<", "5"):
