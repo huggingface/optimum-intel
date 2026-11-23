@@ -254,13 +254,19 @@ _NATIVE_DRAFT_MODEL_CLASSES = {
 }
 
 
-def load_native_draft_model(architecture: str, model_name_or_path: str, **kwargs):
+def load_native_draft_model(architecture: str, model_name_or_path: str, config=None, **kwargs):
     from optimum.exporters.openvino import model_patcher
 
     model_class = getattr(model_patcher, _NATIVE_DRAFT_MODEL_CLASSES[architecture])
     # The MuseGlimmer drafter class is built lazily because it needs transformers >= 5.15.
     if not isinstance(model_class, type):
         model_class = model_class()
+    # Drafts saved by transformers >= 5 keep rope_theta only in rope_parameters, which transformers < 5
+    # ignores, so their rotary embedding would silently fall back to the default theta.
+    rope_parameters = getattr(config, "rope_parameters", None)
+    if is_transformers_version("<", "5") and isinstance(rope_parameters, dict) and "rope_theta" in rope_parameters:
+        config.rope_theta = rope_parameters["rope_theta"]
+        kwargs["config"] = config
     return model_class.from_pretrained(model_name_or_path, **kwargs)
 
 
@@ -704,6 +710,7 @@ def main_export(
             model = load_native_draft_model(
                 architecture,
                 model_name_or_path,
+                config=config,
                 subfolder=subfolder,
                 revision=revision,
                 cache_dir=cache_dir,
