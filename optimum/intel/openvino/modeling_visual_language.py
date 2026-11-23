@@ -282,6 +282,9 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
                 self.next_beam_idx if self.next_beam_idx is not None else np.arange(batch_size, dtype=int)
             )
 
+        if "lora_mode" in self.input_names:
+            inputs["lora_mode"] = np.array([getattr(self, "lora_mode", 0)], dtype=np.int64)
+
         if "per_layer_inputs" in self.input_names:
             per_layer_inputs = kwargs.pop("per_layer_inputs", None)
             if per_layer_inputs is None:
@@ -7050,6 +7053,19 @@ class _OVPhi4MMForCausalLM(OVModelForVisualCausalLM):
     ):
         if pixel_values is not None and input_image_embeds is None:
             input_image_embeds = pixel_values
+        if kwargs.get("past_key_values") is None:
+            # select the LoRA adapter of the language model for the whole generation, as the original model does
+            if input_mode is not None:
+                lora_mode = input_mode[0].item() if isinstance(input_mode, torch.Tensor) else int(input_mode)
+            elif input_image_embeds is not None and input_audio_embeds is not None:
+                lora_mode = InputMode.VISION_SPEECH.value
+            elif input_image_embeds is not None:
+                lora_mode = InputMode.VISION.value
+            elif input_audio_embeds is not None:
+                lora_mode = InputMode.SPEECH.value
+            else:
+                lora_mode = InputMode.LANGUAGE.value
+            self.language_model.lora_mode = lora_mode
         audio_projection_mode = None
         if input_audio_embeds is not None:
             if isinstance(input_mode, torch.Tensor):

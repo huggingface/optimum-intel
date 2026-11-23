@@ -6753,14 +6753,55 @@ class Phi4MMLanguageModelPatcher(OVDecoderModelPatcher):
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        if hasattr(model.config, "vision_lora") and model.config.vision_lora is not None:
-            model.set_lora_adapter("vision")
-        if hasattr(model.config, "speech_lora") and model.config.speech_lora is not None:
-            model.set_lora_adapter("speech")
+        # The remote-code model holds "vision" and "speech" LoRA adapters and activates one of them per call
+        # depending on `input_mode`. Activating them statically bakes a single adapter into the exported model,
+        # so instead the adapter is selected at runtime by the `lora_mode` input (values of `InputMode`):
+        # 0 - language (no adapter), 1 - vision, 2 - speech, 3 - vision + speech (vision adapter).
+        lora_state = {"mode": None}
+        self._lora_layers = []
+        try:
+            from peft.tuners.lora.layer import LoraLayer
+        except ImportError:
+            LoraLayer = None
+
+        # Adopted from https://github.com/huggingface/peft/blob/v0.21.3/src/peft/tuners/lora/layer.py#L1074-L1115
+        # The original forward selects adapters by iterating over the Python list `self.active_adapters`, so tracing
+        # freezes whichever adapter is active at export time into the graph. Here every adapter delta is computed and
+        # masked by a coefficient derived from the `lora_mode` tensor input, making the selection a runtime decision.
+        def lora_linear_forward(module, x, *args, **kwargs):
+            result = module.base_layer(x, *args, **kwargs)
+            mode = lora_state["mode"]
+            if mode is None:
+                return result
+            torch_result_dtype = result.dtype
+            for adapter_name in module.lora_A.keys():
+                if adapter_name == "vision":
+                    coef = (mode == 1) | (mode == 3)
+                elif adapter_name == "speech":
+                    coef = mode == 2
+                else:
+                    continue
+                lora_A = module.lora_A[adapter_name]
+                lora_B = module.lora_B[adapter_name]
+                x_cast = x.to(lora_A.weight.dtype)
+                delta = lora_B(lora_A(x_cast)) * module.scaling[adapter_name]
+                result = result + delta * coef.reshape(-1, *([1] * (delta.dim() - 1))).to(delta.dtype)
+            return result.to(torch_result_dtype)
+
+        if LoraLayer is not None:
+            for module in model.modules():
+                if isinstance(module, LoraLayer) and isinstance(module, nn.Module) and hasattr(module, "base_layer"):
+                    if getattr(module, "merged", False):
+                        module.unmerge()
+                    self._lora_layers.append((module, module.forward))
+                    module.forward = types.MethodType(lora_linear_forward, module)
 
         # Adopted from https://github.com/huggingface/transformers/blob/v4.51.3/src/transformers/models/phi4_multimodal/modeling_phi4_multimodal.py#L2156-L2178
         # moved audio and vision features processing outside model
-        def lm_forward(self, inputs_embeds, attention_mask, position_ids, past_key_values, use_cache=True):
+        def lm_forward(
+            self, inputs_embeds, attention_mask, position_ids, past_key_values, lora_mode=None, use_cache=True
+        ):
+            lora_state["mode"] = lora_mode
             if is_transformers_version("<", "5"):
                 pkv = DynamicCache.from_legacy_cache(past_key_values)
             else:
@@ -6785,6 +6826,8 @@ class Phi4MMLanguageModelPatcher(OVDecoderModelPatcher):
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
         self._model.forward = self._model.__orig_forward
+        for module, orig_forward in self._lora_layers:
+            module.forward = orig_forward
 
 
 class Phi4MMAudioForwardEmbeddingsPatcher(ModelPatcher):

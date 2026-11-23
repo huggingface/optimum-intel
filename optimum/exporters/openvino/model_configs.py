@@ -1961,6 +1961,8 @@ class LMInputEmbedsConfigHelper(TextDecoderWithPositionIdsOpenVINOConfig):
             dummy_inputs["per_layer_inputs"] = self.orig_export_config.DUMMY_INPUT_GENERATOR_CLASSES[
                 0
             ].random_float_tensor(per_layer_inputs_shape)
+        if "lora_mode" in self.inputs:
+            dummy_inputs["lora_mode"] = torch.tensor([1], dtype=torch.int64)
         return dummy_inputs
 
 
@@ -4242,12 +4244,17 @@ class Phi4MMOpenVINOConfig(BaseVLMOpenVINOConfig):
             )
 
         if behavior == Phi4MMConfigBehavior.LANGUAGE:
+            has_lora = (
+                getattr(self._orig_config, "vision_lora", None) is not None
+                or getattr(self._orig_config, "speech_lora", None) is not None
+            )
             return get_vlm_text_generation_config(
                 "phi3",
                 self._orig_config,
                 self.int_dtype,
                 self.float_dtype,
                 model_patcher=Phi4MMLanguageModelPatcher,
+                inputs_update={"lora_mode": {}} if has_lora else None,
                 min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
                 max_transformers_version=self.MAX_TRANSFORMERS_VERSION,
             )
