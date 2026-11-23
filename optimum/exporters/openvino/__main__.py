@@ -67,7 +67,7 @@ from .utils import (
 if is_transformers_version(">=", "4.55"):
     from transformers import Mxfp4Config
 
-FORCE_ATTN_MODEL_CLASSES = {"phi3_v": "eager", "gemma2": "sdpa", "llama4": "sdpa"}
+FORCE_ATTN_MODEL_CLASSES = {"phi3_v": "eager", "gemma2": "sdpa", "gemma4": "sdpa", "llama4": "sdpa"}
 
 if TYPE_CHECKING:
     from optimum.intel.openvino.configuration import OVConfig
