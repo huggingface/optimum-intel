@@ -179,6 +179,28 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "ConvertToSwishCPU",
         ],
     },
+    # gated attention, sigmoid + bias router, packed experts in the tiled 3-GEMM form fused to GatherMatmul on CPU
+    "minicpm5_moe": {
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+            "TransposeMatMul",
+        ],
+        "compile": [
+            "TSShapeOfForward",
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "CommonDecompositions",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "ConvertTiledMoeBlockToGatherMatmuls",
+            "ConvertMatMulToFC",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+        ],
+    },
     # hybrid short conv + full / sliding window attention, sandwich RMSNorm, per-layer-type RoPE
     "lfm3": {
         "convert": [

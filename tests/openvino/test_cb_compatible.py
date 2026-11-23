@@ -63,6 +63,11 @@ ARCH_TO_CB_COMPATIBLE_SUBMODELS = {
         # one of each per Mamba2 layer of the tiny model
         "paged_ops": {"PagedSelectiveSSM": 2, "PagedCausalConv1D": 2},
     },
+    # full attention MoE with gated attention, remote code only
+    "minicpm5_moe": {
+        "task": "text-generation-with-past",
+        "submodels": ("model",),
+    },
     # hybrid short conv + full / sliding window attention: besides SDPA -> PagedAttention (with the sliding window
     # extracted from the attention mask), the conv layers become PagedCausalConv1D
     "lfm3": {
