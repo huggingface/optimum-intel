@@ -24,7 +24,7 @@ from utils_tests import MODEL_NAMES, OPENVINO_DEVICE, REMOTE_CODE_MODELS, get_su
 
 from optimum.exporters.openvino import main_export
 from optimum.intel.openvino.utils import TemporaryDirectory
-from optimum.intel.utils.import_utils import is_qwen_tts_available
+from optimum.intel.utils.import_utils import is_qwen_tts_available, is_transformers_version
 
 
 # The submodels of each architecture that continuous batching can serve, i.e. whose stateful
@@ -95,6 +95,15 @@ ARCH_TO_CB_COMPATIBLE_SUBMODELS = {
     for arch, expected in ARCH_TO_CB_COMPATIBLE_SUBMODELS.items()
     if arch in get_supported_model_for_library("transformers") or _NON_TRANSFORMERS_ARCHS.get(arch, False)
 }
+
+# DFlash and DSpark drafts have the model type of their backbone decoder (qwen3), so they are added after the
+# transformers filter above. The Markov head model of DFlash v2 and DSpark drafts has no key/value cache.
+_DFLASH_DRAFT_SUBMODELS = {"task": "text-generation-with-past", "submodels": ("model",)}
+ARCH_TO_CB_COMPATIBLE_SUBMODELS["qwen3_dflash"] = _DFLASH_DRAFT_SUBMODELS
+ARCH_TO_CB_COMPATIBLE_SUBMODELS["qwen3_dflash2"] = _DFLASH_DRAFT_SUBMODELS
+# DSpark drafts describe their RoPE in the rope_parameters of transformers 5, which earlier versions misread.
+if is_transformers_version(">=", "5"):
+    ARCH_TO_CB_COMPATIBLE_SUBMODELS["minicpmv4_7_dspark"] = _DFLASH_DRAFT_SUBMODELS
 
 # The inputs through which a PagedAttention graph receives the paged cache and its layout.
 _PAGED_ATTENTION_INPUTS = (
