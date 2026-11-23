@@ -1424,6 +1424,48 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "--lora-correction" not in option or b"with correction of low-rank adapters" in result.stdout
             )
 
+    def test_exporters_cli_bagel_reference_weights_and_frames(self):
+        import openvino as ov
+
+        model_kwargs = json.dumps({"num_frames": 3, "reference_weights": True})
+        with TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                f"optimum-cli export openvino --model {MODEL_NAMES['bagel']} --task image-text-to-text "
+                f"--weight-format int4 --sym --group-size -1 --model-kwargs '{model_kwargs}' {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            model = OVModelForVisualCausalLM.from_pretrained(tmpdir)
+            # INT4 on the 14 decoder layer projections of the 4 layers only; the LM head, latent position embedding and
+            # timestep / latent projections stay floating point
+            check_compression_state_per_model(
+                self,
+                model.ov_models,
+                {
+                    "lm_model": {"int4": 56},
+                    "text_embeddings_model": {},
+                    "vision_embeddings_model": {},
+                    "vae_encoder_model": {},
+                    "vae_decoder_model": {},
+                },
+            )
+            core = ov.Core()
+            ports = {
+                "vision_embeddings_3img": (["pixel_values", "position_ids"], ["image_embeds"]),
+                "vae_encoder_3img": (["image"], ["latent"]),
+                "vae_decoder_3img": (["latent"], ["image"]),
+            }
+            for name, (inputs, outputs) in ports.items():
+                frames_model = core.read_model(Path(tmpdir) / f"openvino_{name}_model.xml")
+                self.assertEqual(
+                    [port.get_any_name() for port in frames_model.inputs],
+                    [f"{p}_{i}" for p in inputs for i in range(3)],
+                )
+                self.assertEqual(
+                    [port.get_any_name() for port in frames_model.outputs],
+                    [f"{p}_{i}" for p in outputs for i in range(3)],
+                )
+
     def test_exporters_cli_4bit_with_statistics_path(self):
         with TemporaryDirectory() as tmpdir:
             statistics_path = f"{tmpdir}/statistics"

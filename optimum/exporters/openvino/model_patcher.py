@@ -14581,6 +14581,95 @@ class BagelVAEDecoderForExport(nn.Module):
         return self.vae.decode(latents)
 
 
+class _BagelFramesForExport(nn.Module):
+    """
+    One input and one output port per frame, as the N-frame models of the original OpenVINO BAGEL demo
+    (`convert_bagel_openvino.py --num-frames`); the frames of a call have the same size and run as one batch.
+    """
+
+    def __init__(self, model: "PreTrainedModel", num_frames: int, input_prefixes: List[str]):
+        super().__init__()
+        self.bagel = model.model
+        self.config = model.config
+        self.num_frames = num_frames
+        names = [f"{prefix}_{i}" for prefix in input_prefixes for i in range(num_frames)]
+
+        def forward(*args, **kwargs):
+            kwargs.update(zip(names, args))
+            return self._forward(*(kwargs[name] for name in names))
+
+        # the export orders the example inputs by the forward signature
+        forward.__signature__ = inspect.Signature(
+            [inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in names]
+        )
+        self.forward = forward
+
+
+class BagelVisionEmbeddingsFramesForExport(_BagelFramesForExport):
+    def __init__(self, model: "PreTrainedModel", num_frames: int):
+        super().__init__(model, num_frames, ["pixel_values", "position_ids"])
+
+    def _forward(self, *inputs):
+        vision, n = self.bagel.vision_model, self.num_frames
+        position_ids = torch.cat(inputs[n:])
+        hidden = vision.embeddings(torch.cat(inputs[:n]), position_ids).unflatten(0, (n, -1))
+        hidden = vision.post_layernorm(vision.encoder(hidden, None)).flatten(0, 1)
+        embeds = self.bagel.connector(hidden) + self.bagel.vit_pos_embed[position_ids].to(hidden.dtype)
+        return {f"image_embeds_{i}": e for i, e in enumerate(embeds.chunk(n))}
+
+
+class BagelVAEEncoderFramesForExport(_BagelFramesForExport):
+    def __init__(self, model: "PreTrainedModel", num_frames: int):
+        super().__init__(model, num_frames, ["image"])
+
+    def _forward(self, *images):
+        latents = self.bagel.vae.encode(torch.cat(images), sample=False)
+        return {f"latent_{i}": latent for i, latent in enumerate(latents.chunk(self.num_frames))}
+
+
+class BagelVAEDecoderFramesForExport(_BagelFramesForExport):
+    def __init__(self, model: "PreTrainedModel", num_frames: int):
+        super().__init__(model, num_frames, ["latent"])
+
+    def _forward(self, *latents):
+        images = self.bagel.vae.decode(torch.cat(latents))
+        return {f"image_{i}": image for i, image in enumerate(images.chunk(self.num_frames))}
+
+
+def bagel_reference_weights(model: "PreTrainedModel"):
+    """
+    Weights as the original OpenVINO BAGEL demo export, which loads the checkpoint in FP32 and saves FP16: the parts
+    outside the language model decoder layers go to FP32 (saved as FP16 instead of BF16), and the VAE is reloaded from
+    the checkpoint, where it is stored in FP32, since loading the model in BF16 rounds it.
+    """
+    bagel = model.model
+    for module in (
+        bagel.language_model.embed_tokens,
+        bagel.language_model.norm,
+        bagel.language_model.norm_moe_gen,
+        bagel.vision_model,
+        bagel.connector,
+        bagel.time_embedder,
+        bagel.vae2llm,
+        bagel.llm2vae,
+        model.lm_head,
+    ):
+        module.float()
+    for name in ("vit_pos_embed", "latent_pos_embed"):
+        setattr(bagel, name, nn.Parameter(getattr(bagel, name).float(), requires_grad=False))
+
+    path = model.name_or_path
+    if not os.path.isdir(path):
+        from huggingface_hub import snapshot_download
+
+        path = snapshot_download(path, allow_patterns=["*.safetensors"])
+    prefix, state = "model.vae.", {}
+    for file in sorted(f for f in os.listdir(path) if f.endswith(".safetensors")):
+        with safe_open(os.path.join(path, file), framework="pt") as f:
+            state.update({k[len(prefix) :]: f.get_tensor(k).float() for k in f.keys() if k.startswith(prefix)})
+    bagel.vae.float().load_state_dict(state)
+
+
 class BagelLanguageModelPatcher(ModelPatcher):
     """
     Passes the KV cache through as a list and carries the understanding residual stream at 1/16 from layer

@@ -1311,6 +1311,85 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         del ov_model
         gc.collect()
 
+    def test_bagel_generate_frames(self):
+        model_arch = "bagel"
+        if model_arch not in self.SUPPORTED_ARCHITECTURES:
+            self.skipTest("bagel is not supported by the installed transformers version")
+        ov_model = self.OVMODEL_CLASS.from_pretrained(
+            MODEL_NAMES[model_arch], export=True, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
+        )
+        processor = self.get_preprocessors(model_arch)["processor"]
+        image = self.IMAGE.resize((600, 600))
+        frames = [image, image.rotate(90), image.transpose(Image.FLIP_LEFT_RIGHT)]
+        prompt = "Generate the next frame"
+        inputs = processor(text=prompt, images=frames, generation_mode="image", return_tensors="pt")
+        per_frame = [processor(text=prompt, images=[f], generation_mode="image", return_tensors="pt") for f in frames]
+        height, width = inputs["vae_pixel_values"].shape[-2:]
+        num_frames, steps = 2, 3
+
+        def reference(model, guidance_scale, image_guidance_scale):
+            # editing of the last frame, with the window of VAE + ViT blocks in place of the edited image
+            window = []
+            for frame in per_frame:
+                latent = model.vae_encoder({"pixel_values": frame["vae_pixel_values"].numpy()})["latent"]
+                window.append((model._patchify(latent), frame))
+            add_vit_image = model._add_vit_image
+
+            def add_window(context, _):
+                for tokens, frame in window:
+                    model._latent_block(context, tokens, 0.0, model._latent_position_ids(height, width), True)
+                    if frame is not None:
+                        add_vit_image(context, frame["pixel_values"], frame["image_position_ids"])
+
+            num_tokens = (height // model.latent_downsample) * (width // model.latent_downsample)
+            generated = []
+            with (
+                patch.object(model, "_add_vae_image", add_window),
+                patch.object(model, "_add_vit_image", lambda *args: None),
+            ):
+                for k in range(num_frames):
+                    noise = np.random.RandomState(SEED + k).randn(num_tokens, model._patch_dim)
+                    tokens = model.generate(
+                        **per_frame[-1],
+                        generation_mode="image",
+                        num_inference_steps=steps,
+                        guidance_scale=guidance_scale,
+                        image_guidance_scale=image_guidance_scale,
+                        cfg_interval=(0.0, 1.0),
+                        latents=torch.from_numpy(noise.astype(np.float32)),
+                        output_type="latent",
+                    ).numpy()
+                    generated.append(tokens)
+                    window = window[1:] + [(tokens, None)]
+            latents = np.concatenate([model._unpatchify(t, height, width) for t in generated], 0)
+            return torch.from_numpy(model.vae_decoder({"latents": latents})["image"])
+
+        outputs = {}
+        # guidance off, text guidance only, text and image guidance
+        for scales in ((1.0, 1.0), (4.0, 1.0), (4.0, 2.0)):
+            ov_frames = ov_model.generate_frames(
+                **inputs,
+                num_frames=num_frames,
+                num_inference_steps=steps,
+                guidance_scale=scales[0],
+                image_guidance_scale=scales[1],
+                seed=SEED,
+            )
+            expected = reference(ov_model, *scales)
+            self.assertEqual(ov_frames.shape, (num_frames, 3, height, width))
+            self.assertTrue(
+                torch.allclose(ov_frames, expected, atol=1e-4),
+                f"{scales}: max abs diff {(ov_frames - expected).abs().max()}",
+            )
+            outputs[scales] = ov_frames
+        self.assertFalse(torch.equal(outputs[(1.0, 1.0)], outputs[(4.0, 1.0)]), "guidance_scale has no effect")
+        self.assertFalse(torch.equal(outputs[(4.0, 1.0)], outputs[(4.0, 2.0)]), "image_guidance_scale has no effect")
+
+        with self.assertRaises(ValueError):
+            ov_model.generate_frames(**inputs, num_frames=0)
+        del ov_model
+        gc.collect()
+
     @pytest.mark.skipif(is_transformers_version("<", "5.0"), reason="qwen3_omni_moe requires transformers >= 5.0")
     def test_qwen3_omni_moe_video_not_supported(self):
         model_id = MODEL_NAMES["qwen3_omni_moe"]

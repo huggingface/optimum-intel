@@ -16,6 +16,7 @@ import copy
 import enum
 import functools
 import logging
+import re
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Union
 
@@ -141,8 +142,11 @@ from optimum.exporters.openvino.model_patcher import (
     BagelLanguageModelPatcher,
     BagelTextEmbeddingsForExport,
     BagelVAEDecoderForExport,
+    BagelVAEDecoderFramesForExport,
     BagelVAEEncoderForExport,
+    BagelVAEEncoderFramesForExport,
     BagelVisionEmbeddingsForExport,
+    BagelVisionEmbeddingsFramesForExport,
     BaichuanModelPatcher,
     BigBirdPegasusModelPatcher,
     BloomModelPatcher,
@@ -274,6 +278,7 @@ from optimum.exporters.openvino.model_patcher import (
     ZImageTextEncoderModelPatcher,
     ZImageTransformerModelPatcher,
     _get_model_attribute,
+    bagel_reference_weights,
 )
 from optimum.exporters.openvino.utils import (
     GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE,
@@ -8990,9 +8995,23 @@ class BagelOpenVINOConfig(OpenVINOConfig):
     All models run on a single sample, so they have no batch dimension (the VAE encoder input keeps a batch of 1).
     The VAE decoder has a dynamic batch: the frames generated one after another, e.g. by a world model, decode in one
     call.
+
+    Export options, passed with `--model-kwargs` (see `set_export_options`):
+    - `num_frames`: also export `vision_embeddings_{N}img`, `vae_encoder_{N}img` and `vae_decoder_{N}img`, which take
+      N same-size frames in one call with one port per frame, as the N-frame models of the original OpenVINO BAGEL
+      demo (`convert_bagel_openvino.py --num-frames`).
+    - `reference_weights`: the weights of that demo's INT4 export. Its FP32-loaded parts are kept in FP16 instead of
+      the BF16 of the checkpoint, the VAE keeps its FP32 checkpoint weights, and `--weight-format int4` compresses
+      the decoder layers only: the LM head, the latent position embedding and the timestep / latent projections stay
+      in FP16.
     """
 
     SUPPORTED_BEHAVIORS = [behavior.value for behavior in BagelConfigBehavior]
+    FRAMES_BEHAVIORS = [
+        BagelConfigBehavior.VISION_EMBEDDINGS,
+        BagelConfigBehavior.VAE_ENCODER,
+        BagelConfigBehavior.VAE_DECODER,
+    ]
     NORMALIZED_CONFIG_CLASS = NormalizedConfig
     MIN_TRANSFORMERS_VERSION = "5.23.0.dev0"
     # the parts left uncompressed by `--weight-format int4/int8` (all but the language model) are kept in FP16
@@ -9014,13 +9033,43 @@ class BagelOpenVINOConfig(OpenVINOConfig):
         float_dtype: str = "fp32",
         behavior: BagelConfigBehavior = BagelConfigBehavior.LANGUAGE,
         preprocessors: Optional[List[Any]] = None,
+        num_frames: int = 0,
         **kwargs,
     ):
         super().__init__(
             config=config, task=task, int_dtype=int_dtype, float_dtype=float_dtype, preprocessors=preprocessors
         )
         self._orig_config = config
-        self._behavior = BagelConfigBehavior(behavior)
+        # an N-frame model is `<behavior>_<N>img`
+        frames = re.fullmatch(r"(.+)_(\d+)img", str(getattr(behavior, "value", behavior)))
+        self._behavior = BagelConfigBehavior(frames[1] if frames else behavior)
+        self._frames = int(frames[2]) if frames else 0
+        self.num_frames = num_frames
+        if num_frames:
+            self.SUPPORTED_BEHAVIORS = BagelOpenVINOConfig.SUPPORTED_BEHAVIORS + [
+                f"{b.value}_{num_frames}img" for b in self.FRAMES_BEHAVIORS
+            ]
+
+    def set_export_options(self, model, model_kwargs: Optional[Dict[str, Any]]):
+        """Applies the export options of `--model-kwargs`: `num_frames` (int) and `reference_weights` (bool)."""
+        options = dict(model_kwargs or {})
+        num_frames = int(options.pop("num_frames", 0) or 0)
+        reference_weights = bool(options.pop("reference_weights", False))
+        if options:
+            raise ValueError(f"Unknown BAGEL export options {sorted(options)}, expected num_frames, reference_weights")
+        if num_frames < 0 or num_frames == 1:
+            raise ValueError(f"num_frames must be at least 2, got {num_frames}")
+        if reference_weights:
+            bagel_reference_weights(model)
+        return self.__class__(
+            self._orig_config,
+            task=self.task,
+            int_dtype=self.int_dtype,
+            float_dtype=self.float_dtype,
+            behavior=self._behavior,
+            preprocessors=self._preprocessors,
+            num_frames=num_frames,
+        )
 
     def with_behavior(self, behavior: Union[str, BagelConfigBehavior]):
         return self.__class__(
@@ -9030,9 +9079,18 @@ class BagelOpenVINOConfig(OpenVINOConfig):
             float_dtype=self.float_dtype,
             behavior=behavior,
             preprocessors=self._preprocessors,
+            num_frames=self.num_frames,
         )
 
     def get_model_for_behavior(self, model, behavior: Union[str, BagelConfigBehavior]):
+        frames = re.fullmatch(r"(.+)_(\d+)img", str(getattr(behavior, "value", behavior)))
+        if frames:
+            module = {
+                BagelConfigBehavior.VISION_EMBEDDINGS: BagelVisionEmbeddingsFramesForExport,
+                BagelConfigBehavior.VAE_ENCODER: BagelVAEEncoderFramesForExport,
+                BagelConfigBehavior.VAE_DECODER: BagelVAEDecoderFramesForExport,
+            }[BagelConfigBehavior(frames[1])]
+            return module(model, int(frames[2])).eval()
         module = {
             BagelConfigBehavior.LANGUAGE: BagelLanguageModelForExport,
             BagelConfigBehavior.TEXT_EMBEDDINGS: BagelTextEmbeddingsForExport,
@@ -9048,6 +9106,16 @@ class BagelOpenVINOConfig(OpenVINOConfig):
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._frames:
+            frames = range(self._frames)
+            if self._behavior == BagelConfigBehavior.VISION_EMBEDDINGS:
+                return {
+                    **{f"pixel_values_{i}": {0: "num_patches"} for i in frames},
+                    **{f"position_ids_{i}": {0: "num_patches"} for i in frames},
+                }
+            if self._behavior == BagelConfigBehavior.VAE_ENCODER:
+                return {f"image_{i}": {2: "height", 3: "width"} for i in frames}
+            return {f"latent_{i}": {2: "latent_height", 3: "latent_width"} for i in frames}
         if self._behavior == BagelConfigBehavior.LANGUAGE:
             inputs = {
                 "inputs_embeds": {0: "sequence_length"},
@@ -9073,6 +9141,13 @@ class BagelOpenVINOConfig(OpenVINOConfig):
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._frames:
+            frames = range(self._frames)
+            if self._behavior == BagelConfigBehavior.VISION_EMBEDDINGS:
+                return {f"image_embeds_{i}": {0: "num_patches"} for i in frames}
+            if self._behavior == BagelConfigBehavior.VAE_ENCODER:
+                return {f"latent_{i}": {2: "latent_height", 3: "latent_width"} for i in frames}
+            return {f"image_{i}": {2: "height", 3: "width"} for i in frames}
         if self._behavior == BagelConfigBehavior.LANGUAGE:
             outputs = {"logits": {0: "und_length"}, "v_t": {0: "gen_length"}}
             for i in range(self._num_layers):
@@ -9090,6 +9165,18 @@ class BagelOpenVINOConfig(OpenVINOConfig):
     def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
         config = self._orig_config
         text = config.text_config
+        if self._frames:
+            single = self.with_behavior(self._behavior).generate_dummy_inputs(framework, **kwargs)
+            if self._behavior == BagelConfigBehavior.VAE_DECODER:
+                single = {"latents": single["latents"][:1]}
+            names = {"pixel_values": "image", "latents": "latent"}
+            if self._behavior == BagelConfigBehavior.VISION_EMBEDDINGS:
+                names = {}
+            return {
+                f"{names.get(name, name)}_{i}": value.clone()
+                for name, value in single.items()
+                for i in range(self._frames)
+            }
         if self._behavior == BagelConfigBehavior.LANGUAGE:
             num_latents, past_len = self.DUMMY_NUM_LATENT_TOKENS, self.DUMMY_PAST_LENGTH
             seq_len = num_latents + 2
@@ -9126,6 +9213,7 @@ class BagelOpenVINOConfig(OpenVINOConfig):
         }
 
     def patch_model_for_export(self, model, model_kwargs: Optional[Dict[str, Any]] = None):
+        # the BAGEL `--model-kwargs` are export options (`set_export_options`), not forward arguments
         if self._behavior == BagelConfigBehavior.LANGUAGE:
-            return BagelLanguageModelPatcher(self, model, model_kwargs=model_kwargs)
-        return super().patch_model_for_export(model, model_kwargs)
+            return BagelLanguageModelPatcher(self, model)
+        return super().patch_model_for_export(model)

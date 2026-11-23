@@ -1220,6 +1220,8 @@ def _get_multi_modal_submodels_and_export_configs(
     main_config = main_config_cls(
         model.config, int_dtype=int_dtype, float_dtype=float_dtype, preprocessors=preprocessors
     )
+    if model_type == "bagel":
+        main_config = main_config.set_export_options(model, model_kwargs)
     for behavior in main_config.SUPPORTED_BEHAVIORS:
         model_id = f"{behavior}_model"
         model_part_config = main_config.with_behavior(behavior)

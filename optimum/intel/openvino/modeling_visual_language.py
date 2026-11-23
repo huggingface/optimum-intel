@@ -9236,6 +9236,8 @@ class _OVBagelForCausalLM(OVModelForVisualCausalLM):
         vae = config.vae_config
         self._patch_dim = config.latent_patch_size**2 * vae.latent_channels
         self.latent_downsample = 2 ** (len(vae.channel_multiplier) - 1) * config.latent_patch_size
+        # export option (`--model-kwargs`), read by the INT4 weight compression
+        self._reference_weights = bool(kwargs.get("reference_weights", False))
 
         if kwargs.get("compile", True) and not self._compile_only:
             self.compile()
@@ -9545,19 +9547,51 @@ class _OVBagelForCausalLM(OVModelForVisualCausalLM):
                     self._add_vit_image(context, pixel_values, image_position_ids)
         self._add_text(cond, input_ids)
         self._add_text(cfg_img, input_ids)
-        use_img_cfg = editing and image_guidance_scale > 1.0
 
         latent_position_ids = self._latent_position_ids(height, width)
         if latents is None:
             latents = torch.randn(latent_position_ids.shape[0], self._patch_dim, generator=generator)
-        x_t = latents.float()
+        x_t = self._denoise(
+            latents.float(),
+            latent_position_ids,
+            cond,
+            cfg_text,
+            cfg_img if editing and image_guidance_scale > 1.0 else None,
+            num_inference_steps,
+            guidance_scale,
+            image_guidance_scale,
+            cfg_interval,
+            cfg_renorm_min,
+            cfg_renorm_type,
+            timestep_shift,
+        )
 
+        if output_type == "latent":
+            return x_t
+        image = self.vae_decoder({"latents": self._unpatchify(x_t.numpy(), height, width)})["image"]
+        return torch.from_numpy(image).float()
+
+    def _denoise(
+        self,
+        x_t: torch.Tensor,
+        latent_position_ids: np.ndarray,
+        cond: _BagelContext,
+        cfg_text: Optional[_BagelContext],
+        cfg_img: Optional[_BagelContext],
+        num_inference_steps: int,
+        guidance_scale: float,
+        image_guidance_scale: float,
+        cfg_interval: Tuple[float, float],
+        cfg_renorm_min: float,
+        cfg_renorm_type: str,
+        timestep_shift: float,
+    ) -> torch.Tensor:
         timesteps = torch.linspace(1, 0, num_inference_steps)
         timesteps = timestep_shift * timesteps / (1 + (timestep_shift - 1) * timesteps)
         for t, dt in zip(timesteps[:-1], timesteps[:-1] - timesteps[1:]):
             use_cfg = cfg_interval[0] < t <= cfg_interval[1]
-            text_scale = guidance_scale if use_cfg else 1.0
-            img_scale = image_guidance_scale if (use_cfg and use_img_cfg) else 1.0
+            text_scale = guidance_scale if (use_cfg and cfg_text is not None) else 1.0
+            img_scale = image_guidance_scale if (use_cfg and cfg_img is not None) else 1.0
             v_t = torch.from_numpy(self._velocity(cond, x_t.numpy(), float(t), latent_position_ids))
             if text_scale > 1.0:
                 v_text = torch.from_numpy(self._velocity(cfg_text, x_t.numpy(), float(t), latent_position_ids))
@@ -9570,11 +9604,108 @@ class _OVBagelForCausalLM(OVModelForVisualCausalLM):
                     v_t, v_text, v_img, text_scale, img_scale, cfg_renorm_min, cfg_renorm_type
                 )
             x_t = x_t - v_t * dt
+        return x_t
+
+    @torch.no_grad()
+    def generate_frames(
+        self,
+        input_ids,
+        pixel_values,
+        image_position_ids,
+        vae_pixel_values,
+        image_num_patches=None,
+        num_frames: int = 3,
+        num_inference_steps: int = 50,
+        guidance_scale: float = 4.0,
+        image_guidance_scale: float = 2.0,
+        cfg_interval: Tuple[float, float] = (0.0, 1.0),
+        cfg_renorm_min: float = 0.0,
+        cfg_renorm_type: str = "global",
+        timestep_shift: float = 3.0,
+        seed: int = 0,
+        output_type: str = "pt",
+        **kwargs,
+    ) -> torch.Tensor:
+        r"""
+        Predicts the frames that follow the input frames of a video, as a world model. Each frame is generated from a
+        window of the input frames' count and then replaces the oldest frame of the window: input frames are a VAE and
+        a ViT block, generated frames join as their clean latent tokens only, without a decode / re-encode. All
+        generated frames are decoded at the end, in one VAE decoder call when the decoder has a dynamic batch (one
+        call per frame on NPU, where a batched decoder returns NaN for all but the first image).
+
+        Takes the processor outputs for the frames, oldest first, in `generation_mode="image"`. `guidance_scale` and
+        `image_guidance_scale` of 1.0 disable the text and image guidance. Frame k starts from
+        `numpy.random.RandomState(seed + k).randn` noise, as `openvino_genai.BagelPipeline.generate_frames`.
+
+        Returns `[num_frames, 3, height, width]` images at the VAE resolution of the frames (`output_type="pt"`), or
+        `[num_frames, num_tokens, patch_dim]` latent tokens (`output_type="latent"`).
+        """
+        if num_frames < 1:
+            raise ValueError("num_frames must be positive")
+        vae_pixel_values = np.asarray(vae_pixel_values, np.float32)
+        pixel_values, image_position_ids = np.asarray(pixel_values), np.asarray(image_position_ids)
+        num_patches = (
+            np.asarray(image_num_patches).reshape(-1)
+            if image_num_patches is not None
+            else np.array([pixel_values.shape[0]])
+        )
+        if len(num_patches) != vae_pixel_values.shape[0]:
+            raise ValueError(f"Got {vae_pixel_values.shape[0]} VAE frames but {len(num_patches)} ViT frames.")
+        height, width = vae_pixel_values.shape[-2:]
+        if height % self.latent_downsample or width % self.latent_downsample:
+            raise ValueError(f"height and width must be multiples of {self.latent_downsample}")
+        latent_position_ids = self._latent_position_ids(height, width)
+
+        # the input frames are encoded once; a generated frame has no ViT block
+        offsets = np.concatenate([[0], np.cumsum(num_patches)])
+        window = []
+        for idx in range(vae_pixel_values.shape[0]):
+            latents = self.vae_encoder({"pixel_values": vae_pixel_values[idx : idx + 1]})["latent"]
+            patches = slice(offsets[idx], offsets[idx + 1])
+            window.append((self._patchify(latents), (pixel_values[patches], image_position_ids[patches])))
+
+        use_text_cfg = guidance_scale > 1.0
+        cfg_img = None
+        if use_text_cfg and image_guidance_scale > 1.0:
+            cfg_img = self._new_context()
+            self._add_text(cfg_img, input_ids)
+
+        generated = []
+        for k in range(num_frames):
+            cond = self._new_context()
+            for tokens, vit in window:
+                self._latent_block(cond, tokens, 0.0, latent_position_ids, True)
+                if vit is not None:
+                    self._add_vit_image(cond, *vit)
+            cfg_text = copy.copy(cond) if use_text_cfg else None
+            self._add_text(cond, input_ids)
+            noise = np.random.RandomState(seed + k).randn(latent_position_ids.shape[0], self._patch_dim)
+            x_t = self._denoise(
+                torch.from_numpy(noise.astype(np.float32)),
+                latent_position_ids,
+                cond,
+                cfg_text,
+                cfg_img,
+                num_inference_steps,
+                guidance_scale,
+                image_guidance_scale,
+                cfg_interval,
+                cfg_renorm_min,
+                cfg_renorm_type,
+                timestep_shift,
+            )
+            generated.append(x_t.numpy())
+            window = window[1:] + [(generated[-1], None)]
 
         if output_type == "latent":
-            return x_t
-        image = self.vae_decoder({"latents": self._unpatchify(x_t.numpy(), height, width)})["image"]
-        return torch.from_numpy(image).float()
+            return torch.from_numpy(np.stack(generated))
+        latents = np.concatenate([self._unpatchify(tokens, height, width) for tokens in generated], 0)
+        batched = "NPU" not in self._device and self.vae_decoder.model.input(0).get_partial_shape()[0].is_dynamic
+        if batched:
+            images = self.vae_decoder({"latents": latents})["image"]
+        else:
+            images = np.concatenate([self.vae_decoder({"latents": lat[None]})["image"] for lat in latents], 0)
+        return torch.from_numpy(images).float()
 
 
 MODEL_TYPE_TO_CLS_MAPPING = {
