@@ -230,6 +230,141 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
         del ov_model
         gc.collect()
 
+    @unittest.skipUnless(is_qwen_tts_available(), "qwen_tts package is not installed")
+    def test_qwen3_tts_stateful_codec_decoder(self):
+        """The export carries an explicit-state codec decoder that streams audio block by block.
+
+        ``openvino_codec_decoder_stateful.xml`` takes a fixed-size block of code frames plus the carried state
+        (convolution histories, transposed-convolution tails, attention key/value cache) and returns that block's
+        samples plus the updated state, so nothing is re-decoded. Run block after block from a zero state it has to
+        reproduce the one-shot ``openvino_codec_decoder.xml`` decode, and weight compression must leave it alone
+        like the other codec IRs.
+        """
+        import json
+
+        from openvino.passes import MakeStateful, Manager
+
+        from optimum.exporters.openvino import export_from_model
+        from optimum.intel.openvino.configuration import OVWeightQuantizationConfig
+        from optimum.intel.openvino.modeling_text2speech import _OVModelForQwen3TTS
+        from optimum.intel.utils.modeling_utils import _Qwen3TTSForTextToSpeech
+
+        set_seed(SEED)
+        ref_model = _Qwen3TTSForTextToSpeech.from_pretrained(MODEL_NAMES["qwen3_tts"])
+
+        block_frames = 4
+        num_blocks = 6
+        core = openvino.Core()
+
+        with TemporaryDirectory() as tmpdir:
+            export_from_model(
+                model=ref_model, output=tmpdir, task="text-to-audio", stateful=True, patch_16bit_model=True
+            )
+
+            stateful_xml = Path(tmpdir, "openvino_codec_decoder_stateful.xml")
+            self.assertTrue(stateful_xml.is_file(), "missing IR for the stateful codec decoder")
+            self.assertTrue(stateful_xml.with_suffix(".bin").is_file())
+
+            # Interface: codes and the frame position in, the waveform out, and every state input has a
+            # matching `new_<name>` output (the runtime folds the pairs into variables, or carries them itself).
+            stateful_model = core.read_model(stateful_xml)
+            input_names = [port.get_any_name() for port in stateful_model.inputs]
+            output_names = [port.get_any_name() for port in stateful_model.outputs]
+            state_names = [name for name in input_names if name.startswith("state.")]
+            self.assertEqual(set(input_names), {"audio_codes", "position", *state_names})
+            self.assertEqual(set(output_names), {"waveform", *(f"new_{name}" for name in state_names)})
+            self.assertGreater(len(state_names), 0)
+
+            # Streamed blocks reproduce the one-shot decode.
+            with open(Path(tmpdir, "speech_tokenizer", "config.json"), encoding="utf-8") as config_file:
+                decoder_config = json.load(config_file)["decoder_config"]
+            num_quantizers = decoder_config["num_quantizers"]
+            codebook_size = decoder_config["codebook_size"]
+            num_frames = block_frames * num_blocks
+            codes = np.random.default_rng(SEED).integers(0, codebook_size, (1, num_quantizers, num_frames)).astype(
+                np.int64
+            )
+
+            one_shot = core.read_model(Path(tmpdir, "openvino_codec_decoder.xml"))
+            one_shot_request = core.compile_model(one_shot, "CPU", F32_CONFIG).create_infer_request()
+            one_shot_request.infer({0: codes})
+            reference = one_shot_request.get_output_tensor(0).data.copy().reshape(-1)
+            samples_per_frame = reference.size // num_frames
+            self.assertEqual(reference.size, num_frames * samples_per_frame)
+
+            reference_rms = float(np.sqrt(np.mean(reference**2)))
+            self.assertGreater(reference_rms, 1e-6, "the one-shot decode is silent, the comparison would be vacuous")
+
+            def stream(request, carried_state):
+                """Decode `codes` block by block; `carried_state` is None when the request keeps the state itself."""
+                pieces = []
+                for block in range(num_blocks):
+                    start = block * block_frames
+                    request.set_tensor("audio_codes", openvino.Tensor(codes[:, :, start : start + block_frames]))
+                    request.set_tensor("position", openvino.Tensor(np.array(start, dtype=np.int64)))
+                    if carried_state is not None:
+                        for name in state_names:
+                            request.set_tensor(name, openvino.Tensor(carried_state[name]))
+                    request.infer()
+                    piece = request.get_tensor("waveform").data.copy().reshape(-1)
+                    self.assertEqual(piece.size, block_frames * samples_per_frame)
+                    pieces.append(piece)
+                    if carried_state is not None:
+                        carried_state = {
+                            name: request.get_tensor(f"new_{name}").data.copy() for name in state_names
+                        }
+                streamed = np.concatenate(pieces)
+                self.assertTrue(np.isfinite(streamed).all())
+                return float(np.mean(np.abs(streamed - reference))) / reference_rms
+
+            # Both ways GenAI runs it: with the state as explicit inputs / outputs carried by the caller (NPU), and
+            # with the state pairs folded into variables by `MakeStateful` so the runtime keeps it (CPU / GPU).
+            for make_stateful in (False, True):
+                mode = "MakeStateful" if make_stateful else "explicit state"
+                model = core.read_model(stateful_xml)
+                model.reshape({"audio_codes": [1, num_quantizers, block_frames]})
+                if make_stateful:
+                    manager = Manager()
+                    manager.register_pass(MakeStateful({name: f"new_{name}" for name in state_names}))
+                    manager.run_passes(model)
+                    self.assertEqual({port.get_any_name() for port in model.inputs}, {"audio_codes", "position"})
+                    self.assertEqual({port.get_any_name() for port in model.outputs}, {"waveform"})
+                request = core.compile_model(model, "CPU", F32_CONFIG).create_infer_request()
+                if make_stateful:
+                    self.assertEqual(len(request.query_state()), len(state_names))
+                    carried = None
+                else:
+                    carried = {name: np.zeros(request.get_tensor(name).shape, dtype=np.float32) for name in state_names}
+                error = stream(request, carried)
+                self.assertLess(error, 1e-3, f"{mode}: streamed blocks diverged from the one-shot decode")
+                if make_stateful:
+                    # A new utterance starts from a reset state and reproduces the same audio.
+                    request.reset_state()
+                    self.assertLess(stream(request, None), 1e-3, f"{mode}: reset_state did not restart the stream")
+
+            # The Python runtime does not load it, but saving a model must not lose it.
+            ov_model = self.OVMODEL_CLASS.from_pretrained(tmpdir, ov_config=F32_CONFIG, device=OPENVINO_DEVICE)
+            self.assertNotIn("codec_decoder_stateful", ov_model.components)
+            with TemporaryDirectory() as saved_dir:
+                ov_model.save_pretrained(saved_dir)
+                for suffix in (".xml", ".bin"):
+                    name = f"openvino_codec_decoder_stateful{suffix}"
+                    self.assertTrue(Path(saved_dir, name).is_file(), f"save_pretrained dropped {name}")
+                    self.assertEqual(Path(saved_dir, name).read_bytes(), Path(tmpdir, name).read_bytes())
+            del ov_model
+
+            # Weight compression leaves the codec IRs, this one included, untouched.
+            before = {path.name: path.read_bytes() for path in Path(tmpdir).glob("openvino_codec_decoder*")}
+            self.assertEqual(set(before), {f"openvino_codec_decoder{ext}" for ext in (".xml", ".bin")} | {
+                f"openvino_codec_decoder_stateful{ext}" for ext in (".xml", ".bin")
+            })
+            _OVModelForQwen3TTS.compress_irs(tmpdir, OVWeightQuantizationConfig(bits=8))
+            after = {path.name: path.read_bytes() for path in Path(tmpdir).glob("openvino_codec_decoder*")}
+            self.assertEqual(before, after, "weight compression must not touch the codec decoder IRs")
+
+        del ref_model
+        gc.collect()
+
     def test_compare_to_kokoro(self):
         from optimum.exporters.openvino import export_from_model
         from optimum.intel.openvino.modeling_text2speech import _OVModelForKokoroTextToSpeech
