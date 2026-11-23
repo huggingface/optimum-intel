@@ -12,6 +12,8 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+import dataclasses
+import inspect
 import json
 import logging
 import unittest
@@ -28,10 +30,12 @@ from diffusers import (
 from diffusers.pipelines.stable_diffusion import StableDiffusionSafetyChecker
 from diffusers.utils import load_image
 from parameterized import parameterized
+from PIL import Image
 from utils_tests import F32_CONFIG, HUB_MODEL_NAMES, MODEL_NAMES, OPENVINO_DEVICE, SEED
 
 from optimum.intel.openvino import (
     OVDiffusionPipeline,
+    OVLTX2ConditionPipeline,
     OVPipelineForImage2Image,
     OVPipelineForImage2Video,
     OVPipelineForInpainting,
@@ -88,6 +92,18 @@ def _ltx2_modality_isolation_off(model_arch):
     if model_arch != "ltx2" or is_diffusers_version("<", "0.40.0"):
         return {}
     return {"modality_scale": 1.0, "audio_modality_scale": 1.0}
+
+
+def _ltx2_cross_timestep(pipeline_class):
+    """Ask the reference pipeline for `use_cross_timestep=True`, which the LTX-2 export always applies.
+
+    It is the default from diffusers 0.41.0; diffusers 0.38.0 - 0.40.x default to False. The two only differ when the
+    video timestep varies across tokens (image-to-video, conditions), where they modulate the audio<->video
+    cross-attention by a different timestep.
+    """
+    if "use_cross_timestep" not in inspect.signature(pipeline_class.__call__).parameters:
+        return {}
+    return {"use_cross_timestep": True}
 
 
 def _record_ltx2_timestep_shapes(pipeline):
@@ -1574,6 +1590,10 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
         if model_arch in ["ltx2", "ltx2.3", "ltx2.5"] and is_diffusers_version(">=", "0.40.0"):
             inputs["image_crf"] = 0
         inputs.update(_ltx2_modality_isolation_off(model_arch))
+        if model_arch in ["ltx2", "ltx2.3", "ltx2.5"]:
+            from diffusers import LTX2ImageToVideoPipeline
+
+            inputs.update(_ltx2_cross_timestep(LTX2ImageToVideoPipeline))
 
         return inputs
 
@@ -1794,6 +1814,66 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
         # num_frames is floored to the nearest latent frame count, not rejected
         invalid_inputs = self.generate_inputs(height=64, width=96, batch_size=1, num_frames=10, model_arch=model_arch)
         self.assertEqual(len(np.array(pipeline(**invalid_inputs).frames[0])), 9)
+
+
+class OVLTX2ConditionPipelineTest(unittest.TestCase):
+    """`OVLTX2ConditionPipeline`: LTX-2 generation conditioned on videos and images placed at given frames.
+
+    Every condition is VAE-encoded on its own and the conditioned tokens get their own timestep, so this covers the
+    multi-frame VAE encoder and the per-token audio-video cross-attention modulation that text-to-video never reaches.
+    """
+
+    SUPPORTED_ARCHITECTURES = []
+    if is_diffusers_version(">=", "0.38.0"):
+        SUPPORTED_ARCHITECTURES.append("ltx2")
+    if is_diffusers_version(">=", "0.40.0"):
+        SUPPORTED_ARCHITECTURES.append("ltx2.3")
+    if is_transformers_version(">=", "5.10.0") and is_diffusers_version(">=", "0.40.0"):
+        SUPPORTED_ARCHITECTURES.append("ltx2.5")
+
+    def generate_inputs(self, height=64, width=96, num_frames=9, model_arch=""):
+        from diffusers.pipelines.ltx2.pipeline_ltx2_condition import LTX2VideoCondition
+
+        rng = np.random.default_rng(SEED)
+        video = [Image.fromarray(frame) for frame in rng.integers(0, 255, (num_frames, height, width, 3), np.uint8)]
+        # Image conditions are H.264 re-compressed by default (diffusers>=0.40.0), which would tie the result to the codec.
+        image_kwargs = {"crf": 0} if "crf" in {field.name for field in dataclasses.fields(LTX2VideoCondition)} else {}
+        inputs = {
+            "conditions": [
+                # Video-to-video: the input video from the first frame, partly kept.
+                LTX2VideoCondition(frames=video, index=0, strength=0.6),
+                # A keyframe on the last frame, appended to the sequence. `index` counts latent frames (8 video
+                # frames each), so the last frame is -1: a video frame number past the latent count is skipped.
+                LTX2VideoCondition(frames=video[-1], index=-1, strength=1.0, **image_kwargs),
+            ],
+            "prompt": "a dog running in a field",
+            "negative_prompt": "static, motionless",
+            "height": height,
+            "width": width,
+            "num_frames": num_frames,
+            "num_inference_steps": 2,
+            "guidance_scale": 4.5,
+        }
+        inputs.update(_ltx2_modality_isolation_off(model_arch))
+        from diffusers import LTX2ConditionPipeline
+
+        inputs.update(_ltx2_cross_timestep(LTX2ConditionPipeline))
+        return inputs
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
+    @require_diffusers
+    def test_compare_to_diffusers_pipeline(self, model_arch: str):
+        from diffusers import LTX2ConditionPipeline
+
+        ov_pipeline = OVLTX2ConditionPipeline.from_pretrained(
+            MODEL_NAMES[model_arch], ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+        diffusers_pipeline = LTX2ConditionPipeline.from_pretrained(MODEL_NAMES[model_arch])
+        inputs = self.generate_inputs(model_arch=model_arch)
+
+        ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED), output_type="np").frames
+        diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED), output_type="np").frames
+        np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
 
 
 class OVLTX2AutoDurationTest(unittest.TestCase):
