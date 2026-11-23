@@ -251,7 +251,7 @@ def eager_mask_without_vmap(**kwargs):
 
 
 def patched_dynamic_layer_update(
-    self, key_states: torch.Tensor, value_states: torch.Tensor, cache_kwargs: dict[str, Any] | None = None
+    self, key_states: torch.Tensor, value_states: torch.Tensor, *args, **kwargs
 ) -> tuple[torch.Tensor, torch.Tensor]:
     if self.keys is None:
         self.keys = key_states
