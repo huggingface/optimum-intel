@@ -1208,6 +1208,11 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
     # ``{"KV_CACHE_PRECISION": "f32"}`` for the two stacks. A setting the device does not advertise
     # is dropped rather than failing the compile.
 
+    # IRs the export writes for other runtimes (OpenVINO GenAI) and that this class neither loads nor
+    # compresses: the explicit-state codec decoder that streams audio block by block. ``save_pretrained``
+    # copies them along, otherwise a saved model would silently lose its stateful streaming decoder.
+    _PASSTHROUGH_IRS = ("openvino_codec_decoder_stateful",)
+
     # The components every export carries, whatever the variant, and so the ones a directory has
     # to hold before a previous conversion may be reused instead of repeated. The speaker encoder
     # is left out because only the voice-clone (``base``) checkpoints have one.
@@ -2004,6 +2009,11 @@ class _OVModelForQwen3TTS(OVModelForTextToSpeechSeq2Seq):
                 "speech_tokenizer": "neural codec (speech tokenizer) configuration",
             }
             self._copy_assets(source, save_directory, set(asset_files), set(asset_dirs))
+            for stem in self._PASSTHROUGH_IRS:
+                for suffix in (".xml", ".bin"):
+                    ir_file = source / f"{stem}{suffix}"
+                    if ir_file.is_file() and (save_directory / ir_file.name).resolve() != ir_file.resolve():
+                        shutil.copy2(ir_file, save_directory / ir_file.name)
         elif not self._is_complete_export(save_directory):
             # Fallback to main_export when there is no complete export to copy from.
             # This happens when an instance is loaded with `export=False`.
