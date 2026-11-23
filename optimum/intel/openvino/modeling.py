@@ -753,6 +753,8 @@ class OVModelForCTC(OVModel):
         attention_mask: Optional[Union[torch.Tensor, np.ndarray]] = None,
         **kwargs,
     ):
+        self.compile()
+
         np_inputs = isinstance(input_values, np.ndarray)
 
         input_values = ensure_numpy(input_values)
@@ -833,6 +835,8 @@ class OVModelForAudioXVector(OVModel):
         attention_mask: Optional[torch.Tensor] = None,
         **kwargs,
     ):
+        self.compile()
+
         np_inputs = isinstance(input_values, np.ndarray)
 
         input_values = ensure_numpy(input_values)
@@ -909,6 +913,8 @@ class OVModelForAudioFrameClassification(OVModel):
         attention_mask: Optional[torch.Tensor] = None,
         **kwargs,
     ):
+        self.compile()
+
         np_inputs = isinstance(input_values, np.ndarray)
 
         input_values = ensure_numpy(input_values)
@@ -962,6 +968,8 @@ class OVModelForCustomTasks(OVModel):
         )
     )
     def forward(self, **kwargs):
+        self.compile()
+
         expected_inputs_names = set(self.input_names)
         inputs_names = set(kwargs)
 
