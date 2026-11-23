@@ -2926,9 +2926,14 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
         self.transformer.model = self._reshape_transformer(
             self.transformer.model, batch_size, height, width, num_images_per_prompt, num_frames=num_frames
         )
-        # Reshape vae_decoder with proper height/width
+        known_batch = batch_size > 0 and num_images_per_prompt > 0
+        # The VAE decoder runs on all `batch_size * num_images_per_prompt` videos at once
         self.vae_decoder.model = self._reshape_vae_decoder(
-            self.vae_decoder.model, height, width, num_images_per_prompt, num_frames=num_frames
+            self.vae_decoder.model,
+            height,
+            width,
+            batch_size * num_images_per_prompt if known_batch else -1,
+            num_frames=num_frames,
         )
         # Reshape vae_encoder (image-to-video only) with pixel-space height/width; the encoder
         # treats the conditioning image as a single frame (num_frames handled inside).
@@ -2939,7 +2944,6 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
         # Reshape text_encoder with batch_size only (tokenizer_max_length stays dynamic for Gemma)
         if self.text_encoder is not None:
             self.text_encoder.model = self._reshape_text_encoder(self.text_encoder.model, batch_size, -1)
-        known_batch = batch_size > 0 and num_images_per_prompt > 0
         # The connectors run on the concatenated negative+positive prompts, so they see twice the
         # batch under classifier-free guidance. The audio VAE and the vocoder run after the
         # denoising loop, where the guidance halves have already been merged back, so they see the
@@ -3065,9 +3069,9 @@ class OVLTX2ConditionPipeline(_OVLTX2Base, LTX2ConditionPipeline):
         return models_paths
 
     def _reshape_vae_encoder(self, model, batch_size=-1, height=-1, width=-1, num_frames=-1):
-        # Every condition is encoded on its own, with its own frame count -- one for an image, its length for a
-        # video -- so the frame axis stays dynamic.
-        return super()._reshape_vae_encoder(model, batch_size, height, width, num_frames=-1)
+        # Every condition is encoded on its own, at batch 1 (its latents are expanded to the batch afterwards) and
+        # with its own frame count -- one for an image, its length for a video -- so the frame axis stays dynamic.
+        return super()._reshape_vae_encoder(model, 1, height, width, num_frames=-1)
 
 
 class OVQwenImagePipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, QwenImagePipeline):

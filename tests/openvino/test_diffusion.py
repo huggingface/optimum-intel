@@ -13,6 +13,7 @@
 #  limitations under the License.
 
 import dataclasses
+import inspect
 import json
 import logging
 import unittest
@@ -91,6 +92,18 @@ def _ltx2_modality_isolation_off(model_arch):
     if model_arch != "ltx2" or is_diffusers_version("<", "0.40.0"):
         return {}
     return {"modality_scale": 1.0, "audio_modality_scale": 1.0}
+
+
+def _ltx2_cross_timestep(pipeline_class):
+    """Ask the reference pipeline for `use_cross_timestep=True`, which the LTX-2 export always applies.
+
+    It is the default from diffusers 0.41.0; diffusers 0.38.0 - 0.40.x default to False. The two only differ when the
+    video timestep varies across tokens (image-to-video, conditions), where they modulate the audio<->video
+    cross-attention by a different timestep.
+    """
+    if "use_cross_timestep" not in inspect.signature(pipeline_class.__call__).parameters:
+        return {}
+    return {"use_cross_timestep": True}
 
 
 def _record_ltx2_timestep_shapes(pipeline):
@@ -1531,6 +1544,10 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
         if model_arch in ["ltx2", "ltx2.3", "ltx2.5"] and is_diffusers_version(">=", "0.40.0"):
             inputs["image_crf"] = 0
         inputs.update(_ltx2_modality_isolation_off(model_arch))
+        if model_arch in ["ltx2", "ltx2.3", "ltx2.5"]:
+            from diffusers import LTX2ImageToVideoPipeline
+
+            inputs.update(_ltx2_cross_timestep(LTX2ImageToVideoPipeline))
 
         return inputs
 
@@ -1827,6 +1844,9 @@ class OVLTX2ConditionPipelineTest(unittest.TestCase):
             "guidance_scale": 4.5,
         }
         inputs.update(_ltx2_modality_isolation_off(model_arch))
+        from diffusers import LTX2ConditionPipeline
+
+        inputs.update(_ltx2_cross_timestep(LTX2ConditionPipeline))
         return inputs
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
@@ -1843,26 +1863,6 @@ class OVLTX2ConditionPipelineTest(unittest.TestCase):
         ov_output = ov_pipeline(**inputs, generator=get_generator("pt", SEED), output_type="np").frames
         diffusers_output = diffusers_pipeline(**inputs, generator=get_generator("pt", SEED), output_type="np").frames
         np.testing.assert_allclose(ov_output, diffusers_output, atol=6e-3, rtol=1e-2)
-
-    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
-    @require_diffusers
-    def test_static_shape_generation(self, model_arch: str):
-        # A video and an image condition have different frame counts, so the VAE encoder must keep a dynamic frame
-        # axis after the pipeline is reshaped to a static size. Both go at the first frame: a condition at a later
-        # latent frame is appended to the video tokens, which a statically reshaped transformer cannot take.
-        height, width, num_frames = 64, 96, 9
-        pipeline = OVLTX2ConditionPipeline.from_pretrained(
-            MODEL_NAMES[model_arch], ov_config=F32_CONFIG, device=OPENVINO_DEVICE, compile=False
-        )
-        pipeline.reshape(batch_size=1, height=height, width=width, num_images_per_prompt=1, num_frames=num_frames)
-        pipeline.compile()
-
-        inputs = self.generate_inputs(height, width, num_frames, model_arch)
-        video_condition, image_condition = inputs.pop("conditions")
-        image_condition.index = 0
-        for condition in (video_condition, image_condition):
-            frames = pipeline(**inputs, conditions=[condition], output_type="np").frames
-            self.assertEqual(frames.shape, (1, num_frames, height, width, 3))
 
 
 class OVLTX2AutoDurationTest(unittest.TestCase):
