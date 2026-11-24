@@ -70,8 +70,8 @@ _LTX2_5_INT4_CONFIGS = {
         "ratio": 1.0,
         "weight_only": True,
         "scoped_configs": [
-            # The video self-attention, the largest source of error at int4: the query and key at group size 32, the
-            # value and output at int8
+            # The video self-attention, the most sensitive layers per weight at int4 (at half the size of the video
+            # feed-forward, nearly as much error): the query and key at group size 32, the value and output at int8
             {"patterns": [_LTX2_5_BLOCK + r"attn1\.to_(q|k)/"], "bits": 4, "sym": False, "group_size": 32},
             {"patterns": [_LTX2_5_BLOCK + r"attn1\.to_(v|out\.0)/"], **_LTX2_5_INT8},
             # The video feed-forward at group size 32
