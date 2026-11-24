@@ -13,6 +13,7 @@ from transformers.models.voxtral_realtime.modeling_voxtral_realtime import (
     VoxtralRealtimeForConditionalGeneration,
 )
 
+from optimum.exporters.openvino.convert import export_from_model
 from optimum.exporters.openvino.voxtral_realtime import (
     VoxtralRealtimeStreamingEncoder,
     VoxtralRealtimeStreamingTextDecoder,
@@ -78,7 +79,8 @@ def test_streaming_encoder_export_carries_state(tmp_path):
                 feed[f"past_key_values.{layer_index}.{kind}"] = torch.from_numpy(actual[output_names[output_name]])
 
 
-def test_streaming_submodel_exports_carry_state(tmp_path):
+@pytest.fixture
+def voxtral_model():
     torch.manual_seed(10)
     config = VoxtralRealtimeConfig(
         audio_config={
@@ -105,25 +107,38 @@ def test_streaming_submodel_exports_carry_state(tmp_path):
             "sliding_window": 32,
         },
     )
-    model = VoxtralRealtimeForConditionalGeneration(config).eval()
+    return VoxtralRealtimeForConditionalGeneration(config).eval()
+
+
+def test_streaming_submodel_exports_carry_state(tmp_path, voxtral_model):
+    model = voxtral_model
+    config = model.config
     audio_wrapper = VoxtralRealtimeStreamingEncoder(
-        model.audio_tower,
-        projector=model.multi_modal_projector,
+        model.model.audio_tower,
+        projector=model.model.multi_modal_projector,
         downsample_factor=config.downsample_factor,
     ).eval()
-    text_wrapper = VoxtralRealtimeStreamingTextDecoder(model.language_model, model.time_embedding).eval()
+    text_wrapper = VoxtralRealtimeStreamingTextDecoder(
+        model.model.language_model, model.model.time_embedding, model.lm_head
+    ).eval()
     export_voxtral_realtime_submodels(model, tmp_path)
 
     core = ov.Core()
     audio = core.compile_model(core.read_model(str(tmp_path / "audio_encoder/openvino_model.xml")), "CPU")
     text = core.compile_model(core.read_model(str(tmp_path / "text_decoder/openvino_model.xml")), "CPU")
+    text_request = text.create_infer_request()
+    assert len(text_request.query_state()) == 2 * config.text_config.num_hidden_layers
+    assert not any("past_key_values" in name for port in text.inputs for name in port.get_names())
+    assert not any("present" in name for port in text.outputs for name in port.get_names())
     audio_feed = {
         "conv1_cache": torch.zeros(1, config.audio_config.num_mel_bins, 2),
         "conv2_cache": torch.zeros(1, config.audio_config.hidden_size, 1),
     }
     audio_past = tuple((torch.zeros(1, 4, 8, 8), torch.zeros(1, 4, 8, 8)) for _ in range(2))
-    text_past = tuple((torch.zeros(1, 2, 8, 8), torch.zeros(1, 2, 8, 8)) for _ in range(2))
+    text_past = tuple((torch.zeros(1, 2, 0, 8), torch.zeros(1, 2, 0, 8)) for _ in range(2))
 
+    first_text_inputs = None
+    first_logits = None
     for _ in range(2):
         for layer_index, (key, value) in enumerate(audio_past):
             audio_feed[f"past_key_values.{layer_index}.key"] = key
@@ -148,7 +163,10 @@ def test_streaming_submodel_exports_carry_state(tmp_path):
         audio_feed["conv1_cache"] = torch.from_numpy(actual_audio["conv1_cache_1"])
         audio_feed["conv2_cache"] = torch.from_numpy(actual_audio["conv2_cache_1"])
         audio_past = tuple(
-            (torch.from_numpy(actual_audio[f"present.{layer}.key"]), torch.from_numpy(actual_audio[f"present.{layer}.value"]))
+            (
+                torch.from_numpy(actual_audio[f"present.{layer}.key"]),
+                torch.from_numpy(actual_audio[f"present.{layer}.value"]),
+            )
             for layer in range(2)
         )
 
@@ -174,13 +192,57 @@ def test_streaming_submodel_exports_carry_state(tmp_path):
             "attention_mask": attention_mask.numpy(),
             "position_ids": position_ids.numpy(),
             "num_delay_tokens": num_delay_tokens.numpy(),
+            "beam_idx": np.arange(input_ids.shape[0], dtype=np.int32),
         }
-        for layer_index, (key, value) in enumerate(text_past):
-            text_inputs[f"past_key_values.{layer_index}.key"] = key.numpy()
-            text_inputs[f"past_key_values.{layer_index}.value"] = value.numpy()
-        actual_text = text(text_inputs)
+        actual_text = text_request.infer(text_inputs)
         np.testing.assert_allclose(actual_text["logits"], expected_text["logits"].numpy(), rtol=1e-2, atol=1.5e-2)
+        if first_text_inputs is None:
+            first_text_inputs = text_inputs
+            first_logits = actual_text["logits"].copy()
         text_past = tuple(
-            (torch.from_numpy(actual_text[f"present.{layer}.key"]), torch.from_numpy(actual_text[f"present.{layer}.value"]))
-            for layer in range(2)
+            (expected_text[f"present.{layer}.key"], expected_text[f"present.{layer}.value"]) for layer in range(2)
         )
+
+    text_request.reset_state()
+    reset_logits = text_request.infer(first_text_inputs)["logits"]
+    np.testing.assert_allclose(reset_logits, first_logits, rtol=1e-5, atol=1e-5)
+
+
+def test_streaming_text_decoder_matches_transformers(voxtral_model):
+    model = voxtral_model
+    config = model.config.text_config
+    wrapper = VoxtralRealtimeStreamingTextDecoder(
+        model.model.language_model, model.model.time_embedding, model.lm_head
+    ).eval()
+    features = torch.randn(1, model.config.audio_config.num_mel_bins, 16)
+    with torch.no_grad():
+        audio_embeddings = model.model.get_audio_features(input_features=features).pooler_output
+        input_ids = torch.zeros(audio_embeddings.shape[:2], dtype=torch.long)
+        attention_mask = torch.ones_like(input_ids)
+        position_ids = torch.arange(input_ids.shape[1]).unsqueeze(0)
+        past = tuple(
+            (
+                torch.zeros(1, config.num_key_value_heads, 0, config.head_dim),
+                torch.zeros(1, config.num_key_value_heads, 0, config.head_dim),
+            )
+            for _ in range(config.num_hidden_layers)
+        )
+        actual = wrapper(input_ids, audio_embeddings, attention_mask, position_ids, torch.tensor([6.0]), past)
+        expected = model(
+            input_ids=input_ids,
+            input_features=features,
+            attention_mask=attention_mask,
+            position_ids=position_ids,
+            num_delay_tokens=6,
+        )
+    torch.testing.assert_close(actual["logits"], expected.logits)
+
+
+@pytest.mark.parametrize("stateful", [False, True])
+def test_export_from_model_selects_text_state(tmp_path, voxtral_model, stateful):
+    export_from_model(voxtral_model, tmp_path, task="automatic-speech-recognition", stateful=stateful)
+    core = ov.Core()
+    audio = core.read_model(str(tmp_path / "openvino_audio_encoder.xml"))
+    text = core.read_model(str(tmp_path / "openvino_text_decoder.xml"))
+    assert not audio.get_sinks()
+    assert bool(text.get_sinks()) is stateful

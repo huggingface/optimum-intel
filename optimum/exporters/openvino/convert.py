@@ -1296,6 +1296,9 @@ def _get_submodels_and_export_configs(
     )
     stateful_per_model = [stateful] * len(models_for_export)
 
+    if getattr(getattr(model, "config", None), "model_type", None) == "voxtral_realtime":
+        stateful_per_model = [stateful and name == "text_decoder" for name in models_for_export]
+
     # The Markov head of a DFlash-2 or DSpark draft is exported next to the draft backbone.
     if "markov_head" in getattr(export_config, "SUPPORTED_BEHAVIORS", []):
         models_for_export["markov_head_model"] = (
