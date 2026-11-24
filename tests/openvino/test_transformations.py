@@ -290,6 +290,12 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "ConvertToSwishCPU",
         ],
     },
+    "gemma4": {
+        "convert": [
+            "SDPAFusion",
+        ],
+        "compile": [],
+    },
     "gemma4_moe": {
         "convert": [
             "SDPAFusion",
