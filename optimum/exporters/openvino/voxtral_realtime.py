@@ -302,9 +302,9 @@ def export_voxtral_realtime_submodels(model: nn.Module, output: str | Path, devi
     output_path = Path(output)
     configs, get_submodels = _get_voxtral_realtime_submodels_fn_and_export_configs(model)
     submodels = get_submodels(model)
-    audio_config = configs["audio_encoder"]
+    audio_config = configs["audio_encoder_model"]
     audio_result = export(
-        submodels["audio_encoder"],
+        submodels["audio_encoder_model"],
         audio_config,
         output_path / "audio_encoder" / "openvino_model.xml",
         device=device,
@@ -351,19 +351,19 @@ def _get_voxtral_realtime_submodels_fn_and_export_configs(
     text_embeddings = model.model.language_model.get_input_embeddings()
     text_embeddings.config = model.config.text_config
     configs = {
-        "audio_encoder": VoxtralRealtimeStreamingEncoderOpenVINOConfig(
+        "audio_encoder_model": VoxtralRealtimeStreamingEncoderOpenVINOConfig(
             model.model.audio_tower.config,
             projected=True,
         ),
         "text_embeddings_model": InputEmbedOpenVINOConfig(model.config.text_config, task="feature-extraction"),
-        "text_decoder": VoxtralRealtimeStreamingTextDecoderOpenVINOConfig(model.model.language_model.config),
+        "language_model": VoxtralRealtimeStreamingTextDecoderOpenVINOConfig(model.model.language_model.config),
     }
 
     def get_submodels(_model):
         return {
-            "audio_encoder": audio_encoder,
+            "audio_encoder_model": audio_encoder,
             "text_embeddings_model": text_embeddings,
-            "text_decoder": text_decoder,
+            "language_model": text_decoder,
         }
 
     return configs, get_submodels

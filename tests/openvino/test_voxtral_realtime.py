@@ -21,6 +21,11 @@ from optimum.exporters.openvino.voxtral_realtime import (
     export_voxtral_streaming_text_decoder,
     export_voxtral_realtime_submodels,
 )
+from optimum.intel.openvino.utils import (
+    OV_AUDIO_ENCODER_MODEL_NAME,
+    OV_LANGUAGE_MODEL_NAME,
+    OV_TEXT_EMBEDDINGS_MODEL_NAME,
+)
 
 
 def test_streaming_encoder_export_carries_state(tmp_path):
@@ -307,11 +312,17 @@ def test_streaming_text_decoder_matches_transformers(voxtral_model, delay):
 
 @pytest.mark.parametrize("stateful", [False, True])
 def test_export_from_model_selects_text_state(tmp_path, voxtral_model, stateful):
-    export_from_model(voxtral_model, tmp_path, task="automatic-speech-recognition", stateful=stateful)
+    paths = export_from_model(voxtral_model, tmp_path, task="automatic-speech-recognition", stateful=stateful)
+    expected_names = {OV_AUDIO_ENCODER_MODEL_NAME, OV_TEXT_EMBEDDINGS_MODEL_NAME, OV_LANGUAGE_MODEL_NAME}
+    assert set(paths) == expected_names
+    assert {path.name for path in tmp_path.glob("*.xml")} == expected_names
+    assert {path.name for path in tmp_path.glob("*.bin")} == {
+        (tmp_path / name).with_suffix(".bin").name for name in expected_names
+    }
     core = ov.Core()
-    audio = core.read_model(str(tmp_path / "openvino_audio_encoder.xml"))
-    text = core.read_model(str(tmp_path / "openvino_text_decoder.xml"))
-    embeddings = core.compile_model(core.read_model(str(tmp_path / "openvino_text_embeddings_model.xml")), "CPU")
+    audio = core.read_model(str(tmp_path / OV_AUDIO_ENCODER_MODEL_NAME))
+    text = core.read_model(str(tmp_path / OV_LANGUAGE_MODEL_NAME))
+    embeddings = core.compile_model(core.read_model(str(tmp_path / OV_TEXT_EMBEDDINGS_MODEL_NAME)), "CPU")
     input_ids = torch.tensor([[1, 4], [3, 5]], dtype=torch.long)
     with torch.no_grad():
         expected_embeddings = voxtral_model.model.language_model.get_input_embeddings()(input_ids).numpy()
