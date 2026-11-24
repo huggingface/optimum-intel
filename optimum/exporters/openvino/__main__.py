@@ -1110,6 +1110,26 @@ def _get_better_quality_config(model_name_or_path: str, skip_auto_compression: b
     return better_quality_config
 
 
+def _get_submodel_config(pipeline_config: Dict[str, Any], submodel_subpath: Path) -> Optional[Dict[str, Any]]:
+    """
+    Returns the entry of a pipeline config for the OpenVINO model at `submodel_subpath`, relative to the pipeline
+    directory, or `None` if it has none. A component of a diffusers pipeline is matched by its directory name. A
+    directory with several OpenVINO models, e.g. the prompt enhancer of LTX-2.5, has a config per model instead, keyed
+    by the model name in `OVModelForVisualCausalLM`: `lm_model` for `openvino_language_model.xml` and `<name>` for
+    `openvino_<name>.xml`.
+    """
+    from optimum.intel.openvino.utils import OV_LANGUAGE_MODEL_NAME
+
+    config = pipeline_config.get("quantization_configs", {}).get(submodel_subpath.parent.name)
+    if config is None or "quantization_configs" not in config:
+        return config
+    for ov_model_name, ov_model_config in config["quantization_configs"].items():
+        file_name = OV_LANGUAGE_MODEL_NAME if ov_model_name == "lm_model" else f"openvino_{ov_model_name}.xml"
+        if submodel_subpath.name == file_name:
+            return ov_model_config
+    return config.get("default_config")
+
+
 def _apply_model_size_based_quantization(
     submodel_paths: List[str],
     ov_config: "OVConfig",
@@ -1123,8 +1143,8 @@ def _apply_model_size_based_quantization(
     Models for which `is_auto_compression_disabled` holds are left uncompressed: they are large
     enough to always cross the threshold, but lose too much quality at int8 for that to be a silent
     default. If such a model has an int8 config registered in `_DEFAULT_8BIT_WQ_CONFIGS`, given as
-    `better_quality_config`, its submodels larger than 1B parameters that have an entry in it, matched by the
-    submodel directory name, are quantized with that entry, which is tuned to keep the quality.
+    `better_quality_config`, its submodels that have an entry in it (see `_get_submodel_config`) are quantized
+    with that entry, which is tuned to keep the quality, whatever their size.
     An explicitly requested weight format is unaffected -- it does not reach this branch.
     """
     if skip_auto_compression and ov_config is None and better_quality_config is None:
@@ -1139,9 +1159,8 @@ def _apply_model_size_based_quantization(
     #   2. Run _main_quantize() with the created quantization config
     # TODO: Apply default int8 and ignored scope configs from configuration.py if matches
     #       (not only for skip_auto_compressed models)
-    for submodel_path in submodel_paths:
-        submodel_name = Path(submodel_path).parent.name  # the submodel directory of a diffusers pipeline
-        submodel_path = Path(output) / submodel_path
+    for submodel_subpath in submodel_paths:
+        submodel_path = Path(output) / submodel_subpath
 
         if (not submodel_path.is_file()) or (submodel_path.stat().st_size == 0):
             raise RuntimeError(
@@ -1153,20 +1172,21 @@ def _apply_model_size_based_quantization(
         quantization_config = None
         if ov_config is None:
             num_parameters = 0
-            for op in submodel.get_ops():
-                if op.get_type_name() == "Constant" and op.get_element_type() in [Type.f16, Type.f32, Type.bf16]:
-                    num_parameters += reduce(operator.mul, op.shape, 1)
-                del op
-            if num_parameters >= _MAX_UNCOMPRESSED_SIZE:
+            if better_quality_config is None:
+                for op in submodel.get_ops():
+                    if op.get_type_name() == "Constant" and op.get_element_type() in [Type.f16, Type.f32, Type.bf16]:
+                        num_parameters += reduce(operator.mul, op.shape, 1)
+                    del op
+            if better_quality_config is not None or num_parameters >= _MAX_UNCOMPRESSED_SIZE:
                 if is_nncf_available():
                     if better_quality_config is None:
                         quantization_config = {"bits": 8, "sym": False}
                         logger.info("The model weights will be quantized to int8_asym.")
                     else:
-                        quantization_config = better_quality_config.get("quantization_configs", {}).get(submodel_name)
+                        quantization_config = _get_submodel_config(better_quality_config, Path(submodel_subpath))
                         if quantization_config is not None:
                             logger.info(
-                                f"The {submodel_name} weights will be quantized to int8 with config {quantization_config}."
+                                f"The {submodel_subpath} weights will be quantized with config {quantization_config}."
                             )
                 else:
                     logger.warning(

@@ -53,6 +53,92 @@ class OVQuantizationMethod(str, Enum):
     AWQ = "awq"
 
 
+# The parts of the LTX-2.5 configs below. They are tuned for the video quality with scoped configs: a scoped config
+# gives the layers it matches its own precision, and when several match a layer, the last one wins.
+_LTX2_5_BLOCK = r"__module\.model\.transformer_blocks\.\d+\."
+_LTX2_5_INT8 = {"bits": 8, "sym": False, "group_size": -1}
+
+# The transformer, connectors and text encoder at int4_asym with group size 128, except for the layers that cost the
+# most video quality at it: 18.37 GiB instead of 17.00 GiB, and a wwb similarity of 0.891 instead of 0.831 for the plain
+# int4_asym config (0.857 for int4_sym with group size 32, at 17.89 GiB). NNCF keeps the embeddings and the last layer
+# of each submodel at int8.
+_LTX2_5_INT4_CONFIGS = {
+    "transformer": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "ratio": 1.0,
+        "weight_only": True,
+        "scoped_configs": [
+            # The video self-attention, the largest source of error at int4: the query and key at group size 32, the
+            # value and output at int8
+            {"patterns": [_LTX2_5_BLOCK + r"attn1\.to_(q|k)/"], "bits": 4, "sym": False, "group_size": 32},
+            {"patterns": [_LTX2_5_BLOCK + r"attn1\.to_(v|out\.0)/"], **_LTX2_5_INT8},
+            # The video feed-forward at group size 32
+            {"patterns": [_LTX2_5_BLOCK + r"ff\.net\.(0\.proj|2)/"], "bits": 4, "sym": False, "group_size": 32},
+            # The small layers every block depends on, 1.3% of the weights, at int8: the timestep and prompt
+            # modulation, the audio-video cross-attention conditioning, the input and output projections and the
+            # attention gates
+            {
+                "patterns": [
+                    r"__module\.model\.(audio_)?(time_embed|prompt_adaln)\.",
+                    r"__module\.model\.av_cross_attn_",
+                    r"__module\.model\.(audio_)?proj_(in|out)/",
+                    r".*to_gate_logits/",
+                ],
+                **_LTX2_5_INT8,
+            },
+        ],
+    },
+    "connectors": {
+        "bits": 4,
+        "sym": False,
+        "group_size": 128,
+        "ratio": 1.0,
+        "weight_only": True,
+        "scoped_configs": [{"patterns": [r".*to_gate_logits/"], **_LTX2_5_INT8}],
+    },
+    "text_encoder": {"bits": 4, "sym": False, "group_size": 128, "ratio": 1.0, "weight_only": True},
+}
+
+# The prompt enhancer of LTX-2.5, used only with `enable_prompt_enhancement=True`: a Gemma 4 E2B model whose OpenVINO
+# models are keyed by their names in `OVModelForVisualCausalLM`. Its language model loses accuracy even at per-channel
+# int8, so its MLPs and lm_head are int8 with group size 32, and its attention and per-layer input projections and
+# gates keep their original precision. The embedding tables, 12 GB of its 17 GB, are lossless at per-channel int8. The
+# enhancer takes 5.9 GB instead of 17.3 GB, and its enhanced prompts stay close to the original model's.
+_LTX2_5_PROMPT_ENHANCER_CONFIG = {
+    "quantization_configs": {
+        "lm_model": {
+            **_LTX2_5_INT8,
+            "weight_only": True,
+            "scoped_configs": [
+                {
+                    "patterns": [
+                        r"__module\.model\.language_model\.layers\.\d+\.mlp\.(gate|up|down)_proj/",
+                        r"__module\.lm_head/",
+                    ],
+                    "bits": 8,
+                    "sym": False,
+                    "group_size": 32,
+                }
+            ],
+            "ignored_scope": {
+                "patterns": [
+                    r"__module\.model\.language_model\.layers\.\d+\.per_layer_(input_gate|projection)/",
+                    r"__module\.model\.language_model\.per_layer_model_projection/",
+                    r"__module\.model\.language_model\.layers\.\d+\.self_attn\.(q|k|v|o)_proj/",
+                ],
+            },
+        },
+        "text_embeddings_model": {**_LTX2_5_INT8, "weight_only": True},
+        "text_embeddings_per_layer_model": {**_LTX2_5_INT8, "weight_only": True},
+        # Used only to enhance the prompts of image-to-video generation
+        "vision_embeddings_model": {"bits": 8, "sym": False, "group_size": 128, "weight_only": True},
+        # Not used by the pipeline
+        "audio_embeddings_model": {"bits": 4, "sym": False, "group_size": 64, "weight_only": True},
+    },
+}
+
 # Default configs for {2,3,4}-bit weight quantization
 _DEFAULT_2BIT_WQ_CONFIGS = {}
 
@@ -636,6 +722,13 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         },
     },
     "Lightricks/LTX-2.5-Diffusers": {
+        "quantization_configs": {**_LTX2_5_INT4_CONFIGS, "prompt_enhancer": _LTX2_5_PROMPT_ENHANCER_CONFIG},
+    },
+}
+
+# The int4 configs used instead of the ones above that need a newer NNCF version than the installed one
+_DEFAULT_4BIT_WQ_CONFIGS_FOR_OLDER_NNCF = {
+    "Lightricks/LTX-2.5-Diffusers": {
         "quantization_configs": {
             "transformer": {"bits": 4, "sym": True, "group_size": 32, "weight_only": True},
             "connectors": {"bits": 4, "sym": True, "group_size": 32, "weight_only": True},
@@ -698,6 +791,7 @@ _DEFAULT_8BIT_WQ_CONFIGS = {
                 "ignored_scope": {"patterns": [r".*text_proj_in"]},
             },
             "text_encoder": {"bits": 8, "sym": False, "weight_only": True},
+            "prompt_enhancer": _LTX2_5_PROMPT_ENHANCER_CONFIG,
         },
     },
 }
@@ -924,6 +1018,7 @@ def get_default_quantization_config(
         default_configs_dict = _DEFAULT_3BIT_WQ_CONFIGS
     elif weight_format == "int4":
         default_configs_dict = _DEFAULT_4BIT_WQ_CONFIGS
+        configs_for_older_nncf = _DEFAULT_4BIT_WQ_CONFIGS_FOR_OLDER_NNCF
     elif weight_format == "int8":
         default_configs_dict = _DEFAULT_8BIT_WQ_CONFIGS
         configs_for_older_nncf = _DEFAULT_8BIT_WQ_CONFIGS_FOR_OLDER_NNCF
@@ -968,23 +1063,26 @@ def _find_model_config(model_id_or_path: str, default_configs_dict: Dict[str, An
 def _get_missing_nncf_version(quantization_config: Optional[Dict[str, Any]]) -> Optional[str]:
     """
     Returns the NNCF version that the given quantization config needs if the installed NNCF version is older, and
-    `None` otherwise. So far, only group-wise int8 weight compression needs a newer NNCF version: NNCF supports it
-    since 3.5.0.
+    `None` otherwise. So far, only group-wise int8 weight compression and scoped configs need a newer NNCF version:
+    NNCF supports both since 3.5.0.
     """
     if quantization_config is None:
         return None
 
     if "quantization_configs" in quantization_config:  # a config per submodel
-        configs = quantization_config["quantization_configs"].values()
-    else:
-        configs = [quantization_config]
-    for config in configs:
-        # The data type of the weights is given either by `dtype` or by `bits`, which is 8 by default
-        is_int8 = (config.get("dtype") or f"int{config.get('bits', 8)}") == "int8"
-        # Only the release counts: a development build of NNCF 3.5.0 (3.5.0.dev0+<commit>) supports group-wise int8
-        # weight compression only if it includes the commit that added it, which its version does not tell
-        if is_int8 and config.get("group_size") not in (None, -1) and not is_nncf_version(">=", "3.5.0"):
-            return "3.5.0"
+        # A submodel can hold several OpenVINO models with a config each, e.g. the prompt enhancer of LTX-2.5
+        configs = list(quantization_config["quantization_configs"].values())
+        if quantization_config.get("default_config") is not None:
+            configs.append(quantization_config["default_config"])
+        return next(filter(None, map(_get_missing_nncf_version, configs)), None)
+
+    # The data type of the weights is given either by `dtype` or by `bits`, which is 8 by default
+    is_int8 = (quantization_config.get("dtype") or f"int{quantization_config.get('bits', 8)}") == "int8"
+    is_group_wise_int8 = is_int8 and quantization_config.get("group_size") not in (None, -1)
+    # Only the release counts: a development build of NNCF 3.5.0 (3.5.0.dev0+<commit>) supports these only if it
+    # includes the commits that added them, which its version does not tell
+    if (is_group_wise_int8 or quantization_config.get("scoped_configs")) and not is_nncf_version(">=", "3.5.0"):
+        return "3.5.0"
     return None
 
 

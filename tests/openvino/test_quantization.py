@@ -24,7 +24,7 @@ import unittest
 from collections import defaultdict
 from collections.abc import Iterable
 from functools import partial
-from typing import Union, Type
+from typing import Optional, Union, Type
 
 import pytest
 import numpy as np
@@ -77,6 +77,7 @@ from optimum.intel.openvino.configuration import (
     OVQuantizationMethod,
     OVQuantizationConfigBase,
     _DEFAULT_4BIT_WQ_CONFIGS,
+    _DEFAULT_4BIT_WQ_CONFIGS_FOR_OLDER_NNCF,
     _DEFAULT_4BIT_WQ_CONFIG,
     _DEFAULT_8BIT_WQ_CONFIGS,
     _DEFAULT_8BIT_WQ_CONFIGS_FOR_OLDER_NNCF,
@@ -140,6 +141,13 @@ _TASK_TO_DATASET = {
 }
 
 pattern_prefix = "^__module.model"
+
+
+def _has_scoped_configs(config: Optional[dict]) -> bool:
+    """Whether a quantization config dict has scoped configs, in itself or in any of its nested configs."""
+    if not isinstance(config, dict):
+        return False
+    return "scoped_configs" in config or any(_has_scoped_configs(value) for value in config.values())
 
 
 class OVQuantizerTest(unittest.TestCase):
@@ -1915,27 +1923,36 @@ class OVWeightCompressionTest(unittest.TestCase):
             # The configs registered for the model: the int4 one, the default int8 one, tuned to keep the video
             # quality, and the int8 one used instead with an NNCF version that does not support it
             int4_config = _DEFAULT_4BIT_WQ_CONFIGS[hub_model_id]
+            int4_config_for_older_nncf = _DEFAULT_4BIT_WQ_CONFIGS_FOR_OLDER_NNCF.get(hub_model_id)
             int8_config = _DEFAULT_8BIT_WQ_CONFIGS[hub_model_id]
             int8_config_for_older_nncf = _DEFAULT_8BIT_WQ_CONFIGS_FOR_OLDER_NNCF[hub_model_id]
-            cases.extend(
-                [
-                    # The tuned config is applied without a weight format, to the large transformer, connectors and
-                    # text encoder, and with an int8 weight format
-                    (model_type, "3.5.0", None, int8_config, int8_config, False),
-                    (model_type, "3.5.0", {"bits": 8}, int8_config, int8_config, False),
-                    # An older NNCF version does not support it: nothing is compressed by default, and the config for
-                    # older NNCF versions is applied with an int8 weight format
-                    (model_type, "3.4.0", None, int8_config, None, True),
-                    (model_type, "3.4.0", {"bits": 8}, int8_config, int8_config_for_older_nncf, True),
-                    # A registered config that any NNCF version supports, e.g. a per-channel one, is applied by
-                    # default too
-                    (model_type, "3.4.0", None, int8_config_for_older_nncf, int8_config_for_older_nncf, False),
-                    # The int4 config is applied with an int4 weight format, whatever the NNCF version: group-wise
-                    # int4 weight compression does not need a newer one
-                    (model_type, "3.5.0", {"bits": 4}, int8_config, int4_config, False),
-                    (model_type, "3.4.0", {"bits": 4}, int8_config, int4_config, False),
-                ]
-            )
+            model_cases = [
+                # The tuned config is applied without a weight format, to the transformer, connectors and text
+                # encoder, and to the prompt enhancer of LTX-2.5, and with an int8 weight format
+                (model_type, "3.5.0", None, int8_config, int8_config, False),
+                (model_type, "3.5.0", {"bits": 8}, int8_config, int8_config, False),
+                # An older NNCF version does not support it: nothing is compressed by default, and the config for
+                # older NNCF versions is applied with an int8 weight format
+                (model_type, "3.4.0", None, int8_config, None, True),
+                (model_type, "3.4.0", {"bits": 8}, int8_config, int8_config_for_older_nncf, True),
+                # A registered config that any NNCF version supports, e.g. a per-channel one, is applied by
+                # default too
+                (model_type, "3.4.0", None, int8_config_for_older_nncf, int8_config_for_older_nncf, False),
+                # The int4 config is applied with an int4 weight format
+                (model_type, "3.5.0", {"bits": 4}, int8_config, int4_config, False),
+            ]
+            if int4_config_for_older_nncf is None:
+                # Whatever the NNCF version, if the int4 config needs no newer one: group-wise int4 weight compression
+                # does not
+                model_cases.append((model_type, "3.4.0", {"bits": 4}, int8_config, int4_config, False))
+            else:
+                # The int4 config needs a newer NNCF version, e.g. for its scoped configs: with an older one, the config
+                # for older NNCF versions is applied
+                model_cases.append((model_type, "3.4.0", {"bits": 4}, int8_config, int4_config_for_older_nncf, True))
+            # Whatever NNCF version a case sets, applying scoped configs needs an installed NNCF version that has them
+            if is_nncf_version("<", "3.5.0.dev0"):
+                model_cases = [case for case in model_cases if not _has_scoped_configs(case[4])]
+            cases.extend(model_cases)
         return cases
 
     @parameterized.expand(
@@ -1951,6 +1968,10 @@ class OVWeightCompressionTest(unittest.TestCase):
                 "mode": kwargs["mode"].value,
                 "group_size": kwargs["group_size"],
                 "ignored_patterns": sorted(kwargs["ignored_scope"].patterns),
+                "scoped_configs": [
+                    [config.mode.value, config.group_size, sorted(config.patterns)]
+                    for config in kwargs.get("scoped_configs") or []
+                ],
             }
             model.set_rt_info(json.dumps(arguments), ["test", "compress_weights"])
             return model
@@ -1965,6 +1986,16 @@ class OVWeightCompressionTest(unittest.TestCase):
                 unittest.mock.patch.dict(
                     "optimum.intel.openvino.configuration._DEFAULT_4BIT_WQ_CONFIGS",
                     {model_id: _DEFAULT_4BIT_WQ_CONFIGS[hub_model_id]},
+                )
+            )
+            stack.enter_context(
+                unittest.mock.patch.dict(
+                    "optimum.intel.openvino.configuration._DEFAULT_4BIT_WQ_CONFIGS_FOR_OLDER_NNCF",
+                    {
+                        model_id: config
+                        for config in [_DEFAULT_4BIT_WQ_CONFIGS_FOR_OLDER_NNCF.get(hub_model_id)]
+                        if config is not None
+                    },
                 )
             )
             stack.enter_context(
@@ -1992,17 +2023,36 @@ class OVWeightCompressionTest(unittest.TestCase):
                 model_id, export=True, compile=False, device=OPENVINO_DEVICE, quantization_config=quantization_config
             )
 
+        # The prompt enhancer of LTX-2.5 holds several OpenVINO models, with a config each
+        ov_models = dict(model.ov_models)
+        if model_type == "ltx2.5":
+            self.assertIsNotNone(model.prompt_enhancer)
+            ov_models.update({f"prompt_enhancer/{name}": m for name, m in model.prompt_enhancer.ov_models.items()})
         actual_arguments = {
             ov_model_name: json.loads(ov_model.get_rt_info(["test", "compress_weights"]).value)
-            for ov_model_name, ov_model in model.ov_models.items()
+            for ov_model_name, ov_model in ov_models.items()
             if ov_model.has_rt_info(["test", "compress_weights"])
         }
-        expected_configs = {} if applied_config is None else applied_config["quantization_configs"]
+
+        def get_mode(config):
+            return f"int{config.get('bits', 8)}_{'sym' if config.get('sym') else 'asym'}"
+
+        applied_configs = {} if applied_config is None else applied_config["quantization_configs"]
+        expected_configs = {}
+        for ov_model_name, config in applied_configs.items():
+            if "quantization_configs" in config:
+                expected_configs.update({f"{ov_model_name}/{k}": v for k, v in config["quantization_configs"].items()})
+            else:
+                expected_configs[ov_model_name] = config
         expected_arguments = {
             ov_model_name: {
-                "mode": f"int{config['bits']}_{'sym' if config.get('sym') else 'asym'}",
+                "mode": get_mode(config),
                 "group_size": config.get("group_size"),
                 "ignored_patterns": sorted(config.get("ignored_scope", {}).get("patterns", [])),
+                "scoped_configs": [
+                    [get_mode(scoped_config), scoped_config.get("group_size"), sorted(scoped_config["patterns"])]
+                    for scoped_config in config.get("scoped_configs", [])
+                ],
             }
             for ov_model_name, config in expected_configs.items()
         }
@@ -2698,12 +2748,16 @@ class OVQuantizationConfigTest(unittest.TestCase):
     @parameterized.expand(DEFAULT_CONFIGURATIONS)
     def test_named_default_configurations(self, config_id: str):
         custom_configuration = self.DEFAULT_CONFIGURATIONS[config_id]
+        if _has_scoped_configs(custom_configuration) and is_nncf_version("<", "3.5.0.dev0"):
+            self.skipTest("NNCF version does not support scoped configs")
         prepared_config = _quantization_config_from_dict(custom_configuration)
         self.compare_config_dict_to_config_object(custom_configuration, prepared_config)
 
     @parameterized.expand(_DEFAULT_8BIT_WQ_CONFIGS)
     def test_named_default_8bit_configurations(self, config_id: str):
         custom_configuration = _DEFAULT_8BIT_WQ_CONFIGS[config_id]
+        if _has_scoped_configs(custom_configuration) and is_nncf_version("<", "3.5.0.dev0"):
+            self.skipTest("NNCF version does not support scoped configs")
         prepared_config = _quantization_config_from_dict(custom_configuration)
         self.compare_config_dict_to_config_object(custom_configuration, prepared_config)
 
@@ -2717,6 +2771,22 @@ class OVQuantizationConfigTest(unittest.TestCase):
             # Per-channel int8 and group-wise int4 weight compression do not need it
             ("3.4.0", {"bits": 8, "group_size": -1}, None),
             ("3.4.0", {"bits": 4, "group_size": 128}, None),
+            # Scoped configs need it too
+            ("3.4.0", {"bits": 4, "scoped_configs": [{"patterns": [".*"], "bits": 8, "group_size": -1}]}, "3.5.0"),
+            ("3.5.0", {"bits": 4, "scoped_configs": [{"patterns": [".*"], "bits": 8, "group_size": -1}]}, None),
+            # A pipeline config needs it if any of its configs does, including the nested ones and the default one
+            ("3.4.0", {"quantization_configs": {"a": {"bits": 4}, "b": {"bits": 8, "group_size": 32}}}, "3.5.0"),
+            (
+                "3.4.0",
+                {"quantization_configs": {"a": {"quantization_configs": {"b": {"bits": 8, "group_size": 32}}}}},
+                "3.5.0",
+            ),
+            (
+                "3.4.0",
+                {"quantization_configs": {"a": {"bits": 4}}, "default_config": {"bits": 8, "group_size": 32}},
+                "3.5.0",
+            ),
+            ("3.4.0", {"quantization_configs": {"a": {"bits": 4}, "b": {"bits": 8}}}, None),
         ]
     )
     def test_missing_nncf_version(self, nncf_version, quantization_config, expected_version):
