@@ -18,6 +18,7 @@ from optimum.exporters.openvino.voxtral_realtime import (
     VoxtralRealtimeStreamingEncoder,
     VoxtralRealtimeStreamingTextDecoder,
     export_voxtral_streaming_encoder,
+    export_voxtral_streaming_text_decoder,
     export_voxtral_realtime_submodels,
 )
 
@@ -215,6 +216,61 @@ def test_streaming_submodel_exports_carry_state(tmp_path, voxtral_model):
     text_request.reset_state()
     reset_logits = text_request.infer(first_text_inputs)["logits"]
     np.testing.assert_allclose(reset_logits, first_logits, rtol=1e-5, atol=1e-5)
+
+
+def test_streaming_text_decoder_crosses_sliding_window(tmp_path, voxtral_model, monkeypatch):
+    model = voxtral_model
+    config = model.config.text_config
+    wrapper = VoxtralRealtimeStreamingTextDecoder(
+        model.model.language_model, model.model.time_embedding, model.lm_head
+    ).eval()
+    export_voxtral_streaming_text_decoder(
+        model.model.language_model, model.model.time_embedding, model.lm_head, tmp_path
+    )
+    request = (
+        ov.Core()
+        .compile_model(str(tmp_path / "openvino_model.xml"), "CPU", {"INFERENCE_PRECISION_HINT": "f32"})
+        .create_infer_request()
+    )
+    past = tuple(
+        (
+            torch.zeros(1, config.num_key_value_heads, 0, config.head_dim),
+            torch.zeros(1, config.num_key_value_heads, 0, config.head_dim),
+        )
+        for _ in range(config.num_hidden_layers)
+    )
+    delay = torch.tensor([float(model.config.default_num_delay_tokens)])
+    past_length = 0
+    for sequence_length in (config.sliding_window - 1, 1, 1, 2):
+        inputs_embeds = torch.randn(1, sequence_length, config.hidden_size)
+        position_ids = torch.arange(past_length, past_length + sequence_length).unsqueeze(0)
+        attention_mask = torch.ones(1, past_length + sequence_length, dtype=torch.long)
+        with torch.no_grad():
+            expected = wrapper(inputs_embeds, attention_mask, position_ids, delay, past)
+        actual = request.infer(
+            {
+                "inputs_embeds": inputs_embeds.numpy(),
+                "attention_mask": attention_mask.numpy(),
+                "position_ids": position_ids.numpy(),
+                "num_delay_tokens": delay.numpy(),
+                "beam_idx": np.array([0], dtype=np.int32),
+            }
+        )
+        expected_logits = expected["logits"].numpy()
+        np.testing.assert_allclose(actual["logits"], expected_logits, rtol=1e-4, atol=1e-5)
+        if past_length == config.sliding_window:
+            with monkeypatch.context() as patch, torch.no_grad():
+                patch.setattr(config, "sliding_window", None)
+                unwindowed_logits = wrapper(inputs_embeds, attention_mask, position_ids, delay, past)["logits"].numpy()
+            window_error = np.max(np.abs(actual["logits"] - expected_logits))
+            unwindowed_error = np.max(np.abs(actual["logits"] - unwindowed_logits))
+            assert unwindowed_error > 2 * window_error
+        past = tuple(
+            (expected[f"present.{layer}.key"], expected[f"present.{layer}.value"])
+            for layer in range(config.num_hidden_layers)
+        )
+        past_length += sequence_length
+    assert past_length > config.sliding_window
 
 
 @pytest.mark.parametrize("delay", [2, 6])
