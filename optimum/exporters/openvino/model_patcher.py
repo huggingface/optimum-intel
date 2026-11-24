@@ -13339,7 +13339,7 @@ def _ltx2_grouped_mod_params(block, orig_get_mod_params, group_state):
 def _ltx2_grouped_norm_out_forward(orig_forward, group_state):
     """
     Final video norm returning `[S / G, B, G, D]`, so that the output modulation the model computes from the
-    per-group timestep embedding, `[B, G, D]`, broadcasts against it. `_ltx2_grouped_proj_out_forward` restores
+    per-group timestep embedding, `[B, G, D]`, broadcasts against it. `_ltx2_grouped_proj_out_pre_hook` restores
     `[B, S, D]` before the output projection.
     """
 
@@ -13355,14 +13355,17 @@ def _ltx2_grouped_norm_out_forward(orig_forward, group_state):
     return forward
 
 
-def _ltx2_grouped_proj_out_forward(orig_forward):
-    @functools.wraps(orig_forward)
-    def forward(hidden_states):
-        if hidden_states.ndim == 4:
-            hidden_states = hidden_states.permute(1, 2, 0, 3).flatten(1, 2)
-        return orig_forward(hidden_states)
-
-    return forward
+def _ltx2_grouped_proj_out_pre_hook(module, args):
+    """
+    Forward pre-hook of the video `proj_out` restoring `[B, S, D]` from the `[S / G, B, G, D]` layout of
+    `_ltx2_grouped_norm_out_forward`. A hook rather than a `forward` wrapper: `proj_out` is an `nn.Linear`, whose
+    `forward` the 16-bit tracing patch (`__make_16bit_traceable`) replaces after the patcher is entered, while
+    pre-hooks still run.
+    """
+    hidden_states = args[0]
+    if hidden_states.ndim == 4:
+        return (hidden_states.permute(1, 2, 0, 3).flatten(1, 2),) + tuple(args[1:])
+    return None
 
 
 class LTX2TransformerPatcher(ModelPatcher):
@@ -13436,15 +13439,13 @@ class LTX2TransformerPatcher(ModelPatcher):
             block.forward = _ltx2_grouped_block_forward(block.forward, self._group_state)
             block.get_mod_params = _ltx2_grouped_mod_params(block, block.get_mod_params, self._group_state)
         self._orig_output_forwards = []
+        self._proj_out_hook = None
         if getattr(self._model, "norm_out", None) is not None and getattr(self._model, "proj_out", None) is not None:
-            self._orig_output_forwards = [
-                (self._model.norm_out, self._model.norm_out.forward),
-                (self._model.proj_out, self._model.proj_out.forward),
-            ]
+            self._orig_output_forwards = [(self._model.norm_out, self._model.norm_out.forward)]
             self._model.norm_out.forward = _ltx2_grouped_norm_out_forward(
                 self._model.norm_out.forward, self._group_state
             )
-            self._model.proj_out.forward = _ltx2_grouped_proj_out_forward(self._model.proj_out.forward)
+            self._proj_out_hook = self._model.proj_out.register_forward_pre_hook(_ltx2_grouped_proj_out_pre_hook)
 
         # Wrap forward to return dict (needed for output naming) and force return_dict=False internally
         self._orig_model_forward = self._model.forward
@@ -13583,6 +13584,8 @@ class LTX2TransformerPatcher(ModelPatcher):
             del block.get_mod_params
         for module, orig_forward in self._orig_output_forwards:
             module.forward = orig_forward
+        if self._proj_out_hook is not None:
+            self._proj_out_hook.remove()
 
         # Restore original attention processors
         for name, module in self._model.named_modules():
