@@ -124,9 +124,18 @@ def test_streaming_submodel_exports_carry_state(tmp_path, voxtral_model):
     export_voxtral_realtime_submodels(model, tmp_path)
 
     core = ov.Core()
+    embeddings = core.compile_model(core.read_model(str(tmp_path / "text_embeddings/openvino_model.xml")), "CPU")
+    input_ids = torch.tensor([[0, 1, 7], [2, 5, 3]], dtype=torch.long)
+    with torch.no_grad():
+        expected_embeddings = model.model.language_model.get_input_embeddings()(input_ids).numpy()
+    np.testing.assert_allclose(embeddings({"input": input_ids.numpy()})["inputs_embeds"], expected_embeddings)
     audio = core.compile_model(core.read_model(str(tmp_path / "audio_encoder/openvino_model.xml")), "CPU")
     text = core.compile_model(core.read_model(str(tmp_path / "text_decoder/openvino_model.xml")), "CPU")
     text_request = text.create_infer_request()
+    text_input_names = {name for port in text.inputs for name in port.get_names()}
+    assert "inputs_embeds" in text_input_names
+    assert "input_ids" not in text_input_names
+    assert "audio_embeddings" not in text_input_names
     assert len(text_request.query_state()) == 2 * config.text_config.num_hidden_layers
     assert not any("past_key_values" in name for port in text.inputs for name in port.get_names())
     assert not any("present" in name for port in text.outputs for name in port.get_names())
@@ -173,22 +182,22 @@ def test_streaming_submodel_exports_carry_state(tmp_path, voxtral_model):
         audio_embeddings = actual_audio["audio_embeddings"]
         sequence_length = audio_embeddings.shape[1]
         past_length = text_past[0][0].shape[2]
-        input_ids = torch.zeros((1, sequence_length), dtype=torch.long)
+        input_ids = torch.randint(config.text_config.vocab_size, (1, sequence_length))
+        token_embeddings = embeddings({"input": input_ids.numpy()})["inputs_embeds"]
+        inputs_embeds = token_embeddings + audio_embeddings
         position_ids = torch.arange(past_length, past_length + sequence_length).unsqueeze(0)
         attention_mask = torch.ones((1, past_length + sequence_length), dtype=torch.long)
         num_delay_tokens = torch.tensor([6.0])
         with torch.no_grad():
             expected_text = text_wrapper(
-                input_ids,
-                torch.from_numpy(audio_embeddings),
+                torch.from_numpy(inputs_embeds),
                 attention_mask,
                 position_ids,
                 num_delay_tokens,
                 text_past,
             )
         text_inputs = {
-            "input_ids": input_ids.numpy(),
-            "audio_embeddings": audio_embeddings,
+            "inputs_embeds": inputs_embeds,
             "attention_mask": attention_mask.numpy(),
             "position_ids": position_ids.numpy(),
             "num_delay_tokens": num_delay_tokens.numpy(),
@@ -208,7 +217,8 @@ def test_streaming_submodel_exports_carry_state(tmp_path, voxtral_model):
     np.testing.assert_allclose(reset_logits, first_logits, rtol=1e-5, atol=1e-5)
 
 
-def test_streaming_text_decoder_matches_transformers(voxtral_model):
+@pytest.mark.parametrize("delay", [2, 6])
+def test_streaming_text_decoder_matches_transformers(voxtral_model, delay):
     model = voxtral_model
     config = model.config.text_config
     wrapper = VoxtralRealtimeStreamingTextDecoder(
@@ -227,13 +237,14 @@ def test_streaming_text_decoder_matches_transformers(voxtral_model):
             )
             for _ in range(config.num_hidden_layers)
         )
-        actual = wrapper(input_ids, audio_embeddings, attention_mask, position_ids, torch.tensor([6.0]), past)
+        inputs_embeds = model.model.language_model.get_input_embeddings()(input_ids) + audio_embeddings
+        actual = wrapper(inputs_embeds, attention_mask, position_ids, torch.tensor([float(delay)]), past)
         expected = model(
             input_ids=input_ids,
             input_features=features,
             attention_mask=attention_mask,
             position_ids=position_ids,
-            num_delay_tokens=6,
+            num_delay_tokens=delay,
         )
     torch.testing.assert_close(actual["logits"], expected.logits)
 
@@ -244,5 +255,48 @@ def test_export_from_model_selects_text_state(tmp_path, voxtral_model, stateful)
     core = ov.Core()
     audio = core.read_model(str(tmp_path / "openvino_audio_encoder.xml"))
     text = core.read_model(str(tmp_path / "openvino_text_decoder.xml"))
+    embeddings = core.compile_model(core.read_model(str(tmp_path / "openvino_text_embeddings_model.xml")), "CPU")
+    input_ids = torch.tensor([[1, 4], [3, 5]], dtype=torch.long)
+    with torch.no_grad():
+        expected_embeddings = voxtral_model.model.language_model.get_input_embeddings()(input_ids).numpy()
+    np.testing.assert_allclose(embeddings({"input": input_ids.numpy()})["inputs_embeds"], expected_embeddings)
     assert not audio.get_sinks()
+    assert not embeddings.create_infer_request().query_state()
     assert bool(text.get_sinks()) is stateful
+    text_input_names = {name for port in text.inputs for name in port.get_names()}
+    assert "inputs_embeds" in text_input_names
+    assert "input_ids" not in text_input_names
+    assert "audio_embeddings" not in text_input_names
+    inputs_embeds = torch.from_numpy(embeddings({"input": input_ids.numpy()})["inputs_embeds"].copy())
+    inputs_embeds += torch.randn_like(inputs_embeds)
+    batch_size, sequence_length = input_ids.shape
+    config = voxtral_model.config.text_config
+    past = tuple(
+        (
+            torch.zeros(batch_size, config.num_key_value_heads, 0, config.head_dim),
+            torch.zeros(batch_size, config.num_key_value_heads, 0, config.head_dim),
+        )
+        for _ in range(config.num_hidden_layers)
+    )
+    attention_mask = torch.ones_like(input_ids)
+    position_ids = torch.arange(sequence_length).expand(batch_size, -1)
+    delay = torch.tensor([6.0])
+    wrapper = VoxtralRealtimeStreamingTextDecoder(
+        voxtral_model.model.language_model, voxtral_model.model.time_embedding, voxtral_model.lm_head
+    ).eval()
+    with torch.no_grad():
+        expected = wrapper(inputs_embeds, attention_mask, position_ids, delay, past)["logits"].numpy()
+    text_inputs = {
+        "inputs_embeds": inputs_embeds.numpy(),
+        "attention_mask": attention_mask.numpy(),
+        "position_ids": position_ids.numpy(),
+        "num_delay_tokens": delay.numpy(),
+    }
+    if stateful:
+        text_inputs["beam_idx"] = np.arange(batch_size, dtype=np.int32)
+    else:
+        for layer_index, (key, value) in enumerate(past):
+            text_inputs[f"past_key_values.{layer_index}.key"] = key.numpy()
+            text_inputs[f"past_key_values.{layer_index}.value"] = value.numpy()
+    actual = core.compile_model(text, "CPU").create_infer_request().infer(text_inputs)["logits"]
+    np.testing.assert_allclose(actual, expected, rtol=1e-2, atol=1.5e-2)

@@ -164,7 +164,7 @@ def export_voxtral_streaming_encoder(encoder: nn.Module, output: str | Path, dev
 
 
 class VoxtralRealtimeStreamingTextDecoder(nn.Module):
-    """Expose Voxtral's text decoder with aligned audio embeddings and explicit KV state."""
+    """Expose Voxtral's text decoder with combined embeddings and explicit KV state."""
 
     def __init__(
         self,
@@ -178,7 +178,7 @@ class VoxtralRealtimeStreamingTextDecoder(nn.Module):
         self.lm_head = lm_head
         self.config = language_model.config
 
-    def forward(self, input_ids, audio_embeddings, attention_mask, position_ids, num_delay_tokens, past_key_values):
+    def forward(self, inputs_embeds, attention_mask, position_ids, num_delay_tokens, past_key_values):
         cache = DynamicCache()
         cache.layers = []
         for layer_data in past_key_values:
@@ -189,7 +189,6 @@ class VoxtralRealtimeStreamingTextDecoder(nn.Module):
             cache_layer.is_initialized = True
             cache.layers.append(cache_layer)
 
-        inputs_embeds = self.language_model.get_input_embeddings()(input_ids) + audio_embeddings
         t_cond = self.time_embedding(num_delay_tokens.to(dtype=inputs_embeds.dtype))[None, ...]
         result = self.language_model(
             inputs_embeds=inputs_embeds,
@@ -221,8 +220,7 @@ class VoxtralRealtimeStreamingTextDecoderOpenVINOConfig(OpenVINOConfig):
     @property
     def inputs(self) -> dict[str, dict[int, str]]:
         inputs = {
-            "input_ids": {0: "batch_size", 1: "sequence_length"},
-            "audio_embeddings": {0: "batch_size", 1: "sequence_length"},
+            "inputs_embeds": {0: "batch_size", 1: "sequence_length"},
             "attention_mask": {0: "batch_size", 1: "past_sequence_length + sequence_length"},
             "position_ids": {0: "batch_size", 1: "sequence_length"},
             "num_delay_tokens": {},
@@ -264,8 +262,7 @@ class VoxtralRealtimeStreamingTextDecoderOpenVINOConfig(OpenVINOConfig):
             for _ in range(config.num_hidden_layers)
         )
         return {
-            "input_ids": torch.zeros(batch_size, sequence_length, dtype=torch.long),
-            "audio_embeddings": torch.zeros(batch_size, sequence_length, config.hidden_size),
+            "inputs_embeds": torch.zeros(batch_size, sequence_length, config.hidden_size),
             "attention_mask": torch.ones(batch_size, past_sequence_length + sequence_length, dtype=torch.long),
             "position_ids": torch.arange(past_sequence_length, past_sequence_length + sequence_length)
             .unsqueeze(0)
@@ -299,22 +296,27 @@ def export_voxtral_streaming_text_decoder(
 
 
 def export_voxtral_realtime_submodels(model: nn.Module, output: str | Path, device: str = "cpu"):
-    """Export Voxtral audio and text components as separate streaming IRs."""
+    """Export Voxtral audio, text embeddings, and text decoder as separate IRs."""
     from optimum.exporters.openvino.convert import export
 
     output_path = Path(output)
-    audio = VoxtralRealtimeStreamingEncoder(
-        model.model.audio_tower,
-        projector=model.model.multi_modal_projector,
-        downsample_factor=model.model.config.downsample_factor,
-    )
-    audio_config = VoxtralRealtimeStreamingEncoderOpenVINOConfig(model.model.audio_tower.config, projected=True)
+    configs, get_submodels = _get_voxtral_realtime_submodels_fn_and_export_configs(model)
+    submodels = get_submodels(model)
+    audio_config = configs["audio_encoder"]
     audio_result = export(
-        audio,
+        submodels["audio_encoder"],
         audio_config,
         output_path / "audio_encoder" / "openvino_model.xml",
         device=device,
         input_shapes={"sequence_length": audio_config.chunk_frames, "past_sequence_length": audio_config.past_frames},
+        stateful=False,
+        library_name="transformers",
+    )
+    embedding_result = export(
+        submodels["text_embeddings_model"],
+        configs["text_embeddings_model"],
+        output_path / "text_embeddings" / "openvino_model.xml",
+        device=device,
         stateful=False,
         library_name="transformers",
     )
@@ -325,7 +327,7 @@ def export_voxtral_realtime_submodels(model: nn.Module, output: str | Path, devi
         output_path / "text_decoder",
         device=device,
     )
-    return {"audio_encoder": audio_result, "text_decoder": text_result}
+    return {"audio_encoder": audio_result, "text_embeddings_model": embedding_result, "text_decoder": text_result}
 
 
 def _get_voxtral_realtime_submodels_fn_and_export_configs(
@@ -336,6 +338,8 @@ def _get_voxtral_realtime_submodels_fn_and_export_configs(
     custom_export_configs: dict[str, OpenVINOConfig] | None = None,
     fn_get_submodels=None,
 ):
+    from optimum.exporters.openvino.model_configs import InputEmbedOpenVINOConfig
+
     audio_encoder = VoxtralRealtimeStreamingEncoder(
         model.model.audio_tower,
         projector=model.model.multi_modal_projector,
@@ -344,15 +348,22 @@ def _get_voxtral_realtime_submodels_fn_and_export_configs(
     text_decoder = VoxtralRealtimeStreamingTextDecoder(
         model.model.language_model, model.model.time_embedding, model.lm_head
     )
+    text_embeddings = model.model.language_model.get_input_embeddings()
+    text_embeddings.config = model.config.text_config
     configs = {
         "audio_encoder": VoxtralRealtimeStreamingEncoderOpenVINOConfig(
             model.model.audio_tower.config,
             projected=True,
         ),
+        "text_embeddings_model": InputEmbedOpenVINOConfig(model.config.text_config, task="feature-extraction"),
         "text_decoder": VoxtralRealtimeStreamingTextDecoderOpenVINOConfig(model.model.language_model.config),
     }
 
     def get_submodels(_model):
-        return {"audio_encoder": audio_encoder, "text_decoder": text_decoder}
+        return {
+            "audio_encoder": audio_encoder,
+            "text_embeddings_model": text_embeddings,
+            "text_decoder": text_decoder,
+        }
 
     return configs, get_submodels
