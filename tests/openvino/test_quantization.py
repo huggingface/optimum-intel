@@ -2723,6 +2723,29 @@ class OVQuantizationConfigTest(unittest.TestCase):
         with unittest.mock.patch("optimum.intel.utils.import_utils._nncf_version", nncf_version):
             self.assertEqual(expected_version, _get_missing_nncf_version(quantization_config))
 
+    def test_narrow_range_reaches_nncf_advanced_parameters(self):
+        narrow = OVWeightQuantizationConfig(
+            bits=2, sym=True, group_size=128, ratio=1.0, narrow_range=True
+        ).to_nncf_dict()
+        self.assertEqual(narrow["mode"], nncf.CompressWeightsMode.INT2_SYM)
+        self.assertTrue(narrow["advanced_parameters"].narrow_range)
+
+        default = OVWeightQuantizationConfig(bits=2, sym=True, group_size=128, ratio=1.0).to_nncf_dict()
+        self.assertNotIn("advanced_parameters", default)
+
+    @parameterized.expand(
+        [
+            # (name, kwargs overriding the symmetric INT2 base config)
+            ("asymmetric", {"sym": False}),
+            ("nf4", {"dtype": "nf4", "bits": 4}),
+        ]
+    )
+    def test_narrow_range_rejected_for_unsupported_formats(self, _, overrides):
+        kwargs = {"bits": 2, "sym": True} | overrides
+        with pytest.raises(ValueError) as exc_info:
+            OVWeightQuantizationConfig(narrow_range=True, **kwargs)
+        self.assertIn("`narrow_range` applies to the symmetric integer weight formats", str(exc_info.value))
+
     def test_for_no_short_id_duplicates(self):
         short_ids = set()
         for model_id in _DEFAULT_4BIT_WQ_CONFIGS.keys():
