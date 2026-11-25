@@ -805,6 +805,9 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
         "squeezebert",
     )
 
+    if is_model_type_transformers_compatible("eurobert"):
+        SUPPORTED_ARCHITECTURES += ("eurobert",)
+
     # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
     if is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES += ("flaubert", "xlm")
@@ -817,6 +820,7 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
             model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
         )
         self.assertIsInstance(ov_model.config, PretrainedConfig)
+        set_seed(SEED)
         transformers_model = AutoModelForSequenceClassification.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         inputs = "This is a sample input"
@@ -857,6 +861,7 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
         self.assertGreaterEqual(outputs[0]["score"], 0.0)
         self.assertIsInstance(outputs[0]["label"], str)
 
+        set_seed(SEED)
         ov_pipe = optimum_pipeline("text-classification", model_id, accelerator="openvino")
         ov_outputs = ov_pipe(inputs)
         atol = 1e-4 if model_arch not in ["flaubert", "squeezebert"] else 0.08
@@ -987,6 +992,9 @@ class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
         "roberta",
     )
 
+    if is_model_type_transformers_compatible("eurobert"):
+        SUPPORTED_ARCHITECTURES += ("eurobert",)
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
@@ -995,6 +1003,7 @@ class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
             model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
         )
         self.assertIsInstance(ov_model.config, PretrainedConfig)
+        set_seed(SEED)
         transformers_model = AutoModelForTokenClassification.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         inputs = "This is a sample input"
@@ -1026,6 +1035,7 @@ class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
         outputs = pipe(inputs)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(item["score"] > 0.0 for item in outputs))
+        set_seed(SEED)
         ov_pipe = optimum_pipeline("token-classification", model_id, accelerator="openvino")
         ov_outputs = ov_pipe(inputs)
         self.assertEqual(outputs[-1]["score"], ov_outputs[-1]["score"])
@@ -1062,6 +1072,8 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         "sentence-transformers-bert",
         "qwen3",
     )
+    if is_model_type_transformers_compatible("eurobert"):
+        SUPPORTED_ARCHITECTURES += ("eurobert",)
     if is_model_type_transformers_compatible("qwen3_vl"):
         SUPPORTED_ARCHITECTURES += ("qwen3_vl_embedding",)
 
@@ -1162,6 +1174,9 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         "squeezebert",
         "xlm-roberta",
     )
+
+    if is_model_type_transformers_compatible("eurobert"):
+        SUPPORTED_ARCHITECTURES += ("eurobert",)
 
     # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
     if is_transformers_version("<", "5"):

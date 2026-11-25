@@ -200,6 +200,7 @@ HUB_MODEL_NAMES = {
     "detr": "optimum-intel-internal-testing/tiny-random-DetrModel",
     "electra": "optimum-intel-internal-testing/tiny-random-electra",
     "esm": "optimum-intel-internal-testing/tiny-random-EsmModel",
+    "eurobert": "optimum-intel-internal-testing/tiny-random-EuroBertModel",
     "exaone": "optimum-intel-internal-testing/tiny-random-exaone",
     "exaone4": "optimum-intel-internal-testing/tiny-random-exaone4",
     "gemma": "optimum-intel-internal-testing/tiny-random-GemmaForCausalLM",
