@@ -71,6 +71,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyMiniCPMVResampleInputGenerator,
     DummyMistral3MultiModalProjectorInputGenerator,
     DummyMuseGlimmerVisionInputGenerator,
+    DummyPaddleOCRVLVisionEmbedInputGenerator,
     DummyPhi3VisionProjectionInputGenerator,
     DummyQwen2VLLMInputGenerator,
     DummyQwen2VLVisionEmbedInputGenerator,
@@ -219,6 +220,9 @@ from optimum.exporters.openvino.model_patcher import (
     NemotronHModelPatcher,
     OVDecoderModelPatcher,
     OVSeq2SeqModelPatcher,
+    PaddleOCRVLVisionEmbeddingsPatcher,
+    PaddleOCRVLVisionEmbMergerModule,
+    PaddleOCRVLVisionEmbMergerPatcher,
     Phi3ModelPatcher,
     Phi3VisionImageEmbeddingsPatcher,
     Phi4MMAudioEncoderPatcher,
@@ -4394,6 +4398,8 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
     ]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyQwen2VLVisionEmbedInputGenerator,)
+    # export config type used for the language model and the text embeddings
+    LANGUAGE_MODEL_TYPE = "qwen2"
 
     def __init__(
         self,
@@ -4464,7 +4470,7 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
 
         if behavior == QwenVLConfigBehavior.TEXT_EMBEDDINGS:
             return get_vlm_text_embeddings_config(
-                "qwen2",
+                self.LANGUAGE_MODEL_TYPE,
                 self._orig_config if is_transformers_version("<", "5") else self._orig_config.text_config,
                 self.int_dtype,
                 self.float_dtype,
@@ -4472,7 +4478,7 @@ class Qwen2VLOpenVINOConfig(BaseVLMOpenVINOConfig):
 
         if behavior == QwenVLConfigBehavior.LANGUAGE:
             return get_vlm_text_generation_config(
-                "qwen2",
+                self.LANGUAGE_MODEL_TYPE,
                 self._orig_config if is_transformers_version("<", "5") else self._orig_config.text_config,
                 self.int_dtype,
                 self.float_dtype,
@@ -4545,6 +4551,54 @@ class Qwen2_5_VLOpenVINOConfig(Qwen2VLOpenVINOConfig):
         if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
             return Qwen2_5_VLVisionEmbMergerPatcher(self, model, model_kwargs)
         return super().patch_model_for_export(model, model_kwargs)
+
+
+@register_in_tasks_manager("paddleocr_vl", *["image-text-to-text"], library_name="transformers")
+class PaddleOCRVLOpenVINOConfig(Qwen2VLOpenVINOConfig):
+    """
+    PaddleOCR-VL: a SigLIP-like NaViT vision encoder (bilinear-interpolated position embeddings and 2D vision rotary)
+    followed by a 2x2 patch-merging projector, and an ERNIE-4.5 text decoder with Qwen2-VL style 3D M-RoPE.
+    The submodels follow Qwen2-VL: patch embeddings (+ position embeddings) and encoder + projector ("merger").
+    """
+
+    # the host computes the position-embedding gather with `transformers.vision_utils`, which PaddleOCR-VL uses since v5.13
+    MIN_TRANSFORMERS_VERSION = "5.13.0"
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyPaddleOCRVLVisionEmbedInputGenerator,)
+    # the text decoder has an explicit `head_dim` (not hidden_size // num_attention_heads), handled by the qwen3 config
+    LANGUAGE_MODEL_TYPE = "qwen3"
+
+    @staticmethod
+    def get_model_for_behavior(model, behavior: Union[str, QwenVLConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, QwenVLConfigBehavior):
+            behavior = QwenVLConfigBehavior(behavior)
+
+        if behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS:
+            vision_embeddings = model.model.visual.vision_model.embeddings
+            vision_embeddings.config = model.config.vision_config
+            return vision_embeddings
+
+        if behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+            return PaddleOCRVLVisionEmbMergerModule(model)
+
+        return Qwen2VLOpenVINOConfig.get_model_for_behavior(model, behavior)
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS:
+            return PaddleOCRVLVisionEmbeddingsPatcher(self, model, model_kwargs)
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS_MERGER:
+            return PaddleOCRVLVisionEmbMergerPatcher(self, model, model_kwargs)
+        return super().patch_model_for_export(model, model_kwargs)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior == QwenVLConfigBehavior.VISION_EMBEDDINGS:
+            return {
+                "pixel_values": {0: "patch_thw_grid"},
+                "bilinear_indices": {1: "patch_thw_grid"},
+                "bilinear_weights": {1: "patch_thw_grid"},
+            }
+        return super().inputs
 
 
 @register_in_tasks_manager(

@@ -164,6 +164,7 @@ class ExportModelTest(unittest.TestCase):
         "deepseek_ocr2": OVModelForVisualCausalLM,
         "minicpmv4_7": OVModelForVisualCausalLM,
         "minicpm_ocr": OVModelForVisualCausalLM,
+        "paddleocr_vl": OVModelForVisualCausalLM,
     }
 
     if is_diffusers_version(">=", "0.41.0.dev0"):

@@ -14,6 +14,7 @@
 
 import gc
 import importlib.util
+import json
 import logging
 import operator
 import os
@@ -276,6 +277,26 @@ def update_config_for_custom_draft_model(config, auto_model, auto_model_for_caus
     return config
 
 
+def _remove_auto_map(output: Path):
+    """Removes `auto_map` remote code references from the configs saved in `output`."""
+
+    def _remove(value):
+        if not isinstance(value, dict):
+            return False
+        removed = value.pop("auto_map", None) is not None
+        for item in value.values():
+            removed = _remove(item) or removed
+        return removed
+
+    for config_path in Path(output).glob("*.json"):
+        with open(config_path, encoding="utf-8") as f:
+            config_dict = json.load(f)
+        if not _remove(config_dict):
+            continue
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(config_dict, f, indent=2, ensure_ascii=False)
+
+
 def infer_library_name(
     model_name_or_path: str,
     subfolder: str = "",
@@ -419,6 +440,7 @@ def main_export(
     do_gptq_patching = False
     do_quant_patching = False
     patch_16bit = False
+    remove_auto_map = False
     architecture = None
     loading_kwargs = model_loading_kwargs or {}
     if variant is not None:
@@ -534,10 +556,13 @@ def main_export(
             loading_kwargs["config"] = config
         # there are some difference between remote and in library representation of past key values for some models,
         # for avoiding confusion we disable remote code for them
+        # PaddleOCR-VL checkpoints ship remote code for transformers 4.x, the export supports the in library model only
         if (
             trust_remote_code
-            and model_type in {"falcon", "mpt", "phi", "phi3"}
-            and ("with-past" in task or original_task == "auto")
+            and (
+                (model_type in {"falcon", "mpt", "phi", "phi3"} and ("with-past" in task or original_task == "auto"))
+                or model_type == "paddleocr_vl"
+            )
             and not custom_export_configs
         ):
             logger.warning(
@@ -546,6 +571,8 @@ def main_export(
                 "Please provide custom export config if you want load model with remote code."
             )
             trust_remote_code = False
+            # the exported model is the in library one, remote code references from the checkpoint configs are invalid
+            remove_auto_map = model_type == "paddleocr_vl"
         if dtype == "auto":
             dtype = getattr(config, "torch_dtype")
 
@@ -807,6 +834,9 @@ def main_export(
 
         if convert_tokenizer:
             maybe_convert_tokenizers(library_name, output, model, preprocessors, task=task)
+
+        if remove_auto_map:
+            _remove_auto_map(output)
 
         # Evaluated before `del model`: the size-based quantization below is skipped for some model
         # types, and by the time it runs the object is gone.

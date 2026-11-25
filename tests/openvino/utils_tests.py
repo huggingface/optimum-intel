@@ -144,6 +144,74 @@ def _create_tiny_kokoro_model():
     return str(output_dir)
 
 
+def _create_tiny_paddleocr_vl_model():
+    """Generate a tiny random PaddleOCR-VL model for testing and return its local path.
+
+    Only the configuration, tokenizer and processor assets of the original checkpoint are downloaded. The native
+    transformers implementation is used, so the remote code references are dropped from the configs.
+    Result is cached on disk under the system temp dir, so subsequent calls are cheap.
+    """
+    model_id = "PaddlePaddle/PaddleOCR-VL-1.6"
+    if is_transformers_version("<", "5.13"):
+        # the architecture is filtered out of the tests by its export config minimum transformers version
+        return model_id
+
+    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_paddleocr_vl"
+    marker_file = output_dir / "tiny_model_marker.json"
+    marker = {"version": 1, "model_id": model_id}
+    if marker_file.exists() and json.loads(marker_file.read_text()) == marker:
+        return str(output_dir)
+
+    from huggingface_hub import snapshot_download
+    from transformers import AutoProcessor, PaddleOCRVLConfig, PaddleOCRVLForConditionalGeneration
+
+    from optimum.exporters.openvino.__main__ import _remove_auto_map
+
+    source_dir = Path(snapshot_download(model_id, allow_patterns=["*.json", "*.jinja", "*.txt"]))
+    config_dict = json.loads((source_dir / "config.json").read_text())
+    # text parameters are stored at the top level of the original config
+    config_dict.update(
+        {
+            "hidden_size": 32,
+            "intermediate_size": 64,
+            "num_hidden_layers": 2,
+            "num_attention_heads": 4,
+            "num_key_value_heads": 2,
+            # head_dim is decoupled from hidden_size // num_attention_heads as in the original model
+            "head_dim": 32,
+            "max_position_embeddings": 4096,
+            "torch_dtype": "float32",
+        }
+    )
+    # mrope_section must sum to head_dim // 2
+    config_dict["rope_scaling"] = dict(config_dict["rope_scaling"], mrope_section=[4, 6, 6])
+    config_dict["vision_config"].update(
+        {
+            "hidden_size": 32,
+            "intermediate_size": 64,
+            "num_hidden_layers": 2,
+            "num_attention_heads": 2,
+            "torch_dtype": "float32",
+        }
+    )
+    config = PaddleOCRVLConfig.from_dict(config_dict)
+    for sub_config in (config, config.text_config, config.vision_config):
+        sub_config.dtype = "float32"
+
+    torch.manual_seed(SEED)
+    model = PaddleOCRVLForConditionalGeneration(config).eval()
+    model.save_pretrained(output_dir)
+    AutoProcessor.from_pretrained(source_dir).save_pretrained(output_dir)
+    generation_config = source_dir / "generation_config.json"
+    if generation_config.exists():
+        (output_dir / generation_config.name).write_text(generation_config.read_text())
+
+    _remove_auto_map(output_dir)
+
+    marker_file.write_text(json.dumps(marker))
+    return str(output_dir)
+
+
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -297,6 +365,7 @@ HUB_MODEL_NAMES = {
     "olmo": "optimum-intel-internal-testing/tiny-random-olmo-hf",
     "orion": "optimum-intel-internal-testing/tiny-random-orion",
     "ouro": "optimum-intel-internal-testing/tiny-random-ouro",
+    "paddleocr_vl": _create_tiny_paddleocr_vl_model(),
     "pegasus": "optimum-intel-internal-testing/tiny-random-pegasus",
     "perceiver_text": "optimum-intel-internal-testing/tiny-random-language_perceiver",
     "perceiver_vision": "optimum-intel-internal-testing/tiny-random-vision_perceiver_conv",
@@ -604,6 +673,12 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
         "text_embeddings_model": 1,
         "vision_embeddings_model": 1,
         "vision_embeddings_merger_model": 10,
+    },
+    "paddleocr_vl": {
+        "lm_model": 30,
+        "text_embeddings_model": 1,
+        "vision_embeddings_model": 2,
+        "vision_embeddings_merger_model": 14,
     },
     "deepseek_ocr2": {
         "lm_model": 36,

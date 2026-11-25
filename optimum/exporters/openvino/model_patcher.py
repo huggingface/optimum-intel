@@ -3648,12 +3648,15 @@ def _qwenimage21_vision_forward(self, pixel_values, bilinear_indices, bilinear_w
     return (merged, *deepstack_features)
 
 
-# Swaps in `_qwenimage21_vision_forward`, which takes the host-precomputed grid tensors as inputs.
+# Swaps in `_vision_forward` (`_qwenimage21_vision_forward` by default), which takes the host-precomputed grid tensors as inputs.
 class QwenImage21VisionModelPatcher(ModelPatcher):
+    _vision_forward = staticmethod(_qwenimage21_vision_forward)
+
     def __enter__(self):
         super().__enter__()
-        self._model._orig_forward = self._model.forward
-        self._model.forward = types.MethodType(_qwenimage21_vision_forward, self._model)
+        # keep the unpatched forward so that it can be called by `_vision_forward` and restored on exit
+        self._model._orig_forward = self.orig_forward
+        self._model.forward = types.MethodType(self._vision_forward, self._model)
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)
@@ -4884,6 +4887,92 @@ class Qwen2_5_VLVisionEmbMergerPatcher(ModelPatcher):
         for block in self._model.blocks:
             block.forward = block._orig_forward
             block.attn.forward = block.attn._orig_forward
+
+
+# Patches PaddleOCRVisionEmbeddings.forward:
+# https://github.com/huggingface/transformers/blob/v5.13.0/src/transformers/models/paddleocr_vl/modeling_paddleocr_vl.py#L592-L619
+# Why: the bilinear position-embedding gather indices / weights are computed from `grid_thw` in a Python loop over
+# `grid_thw.tolist()`, which bakes the image size into the graph. The host computes them and passes them as inputs
+# (the original forward takes precomputed values from its kwargs). Patches come flattened, as for Qwen2-VL.
+def _paddleocr_vl_vision_embeddings_forward(self, pixel_values, bilinear_indices, bilinear_weights):
+    pixel_values = pixel_values.reshape(1, -1, self.config.num_channels, self.patch_size, self.patch_size)
+    return self._orig_forward(pixel_values, bilinear_indices=bilinear_indices, bilinear_weights=bilinear_weights)
+
+
+class PaddleOCRVLVisionEmbeddingsPatcher(QwenImage21VisionModelPatcher):
+    _vision_forward = staticmethod(_paddleocr_vl_vision_embeddings_forward)
+
+
+# Patches PaddleOCRVisionAttention.forward:
+# https://github.com/huggingface/transformers/blob/v5.13.0/src/transformers/models/paddleocr_vl/modeling_paddleocr_vl.py#L660-L738
+# Why: the attention is split per image by `cu_seqlens.tolist()`, which does not trace. A block-diagonal
+# `attention_mask` computed on the host keeps the images separated instead, with a single SDPA call.
+def _paddleocr_vl_vision_attn_forward(
+    self, hidden_states, cu_seqlens=None, position_embeddings=None, attention_mask=None, **kwargs
+):
+    from transformers.models.paddleocr_vl.modeling_paddleocr_vl import apply_rotary_pos_emb_vision
+
+    seq_length = hidden_states.shape[0]
+    query_states = self.q_proj(hidden_states).view(seq_length, self.num_heads, self.head_dim)
+    key_states = self.k_proj(hidden_states).view(seq_length, self.num_heads, self.head_dim)
+    value_states = self.v_proj(hidden_states).view(seq_length, self.num_heads, self.head_dim)
+    cos, sin = position_embeddings
+    query_states, key_states = apply_rotary_pos_emb_vision(query_states, key_states, cos, sin)
+    attn_output = F.scaled_dot_product_attention(
+        query_states.transpose(0, 1),
+        key_states.transpose(0, 1),
+        value_states.transpose(0, 1),
+        attention_mask,
+        scale=self.scaling,
+    )
+    attn_output = attn_output.transpose(0, 1).reshape(seq_length, -1)
+    return self.out_proj(attn_output), None
+
+
+class PaddleOCRVLVisionEmbMergerModule(nn.Module):
+    """
+    PaddleOCR-VL vision encoder (without the patch embeddings) followed by the projector, exported as one graph.
+    The projector lives on `PaddleOCRVLModel`, not on the vision tower, so both are gathered here.
+
+    The host feeds the patches in spatial-merge-block order (as Qwen2-VL does), so the projector's per-image
+    `(t, h // m, m, w // m, m)` regrouping becomes a plain reshape. Vision attention is per-token position aware
+    (rotary + position embeddings follow the patches), so the permutation does not change the merged features.
+    """
+
+    def __init__(self, model: "PreTrainedModel"):
+        super().__init__()
+        self.config = model.config.vision_config
+        self.vision_model = model.model.visual.vision_model
+        self.projector = model.model.projector
+
+    # Replaces PaddleOCRVisionTransformer.forward (without embeddings) + PaddleOCRProjector.forward:
+    # https://github.com/huggingface/transformers/blob/v5.13.0/src/transformers/models/paddleocr_vl/modeling_paddleocr_vl.py#L821-L919
+    # https://github.com/huggingface/transformers/blob/v5.13.0/src/transformers/models/paddleocr_vl/modeling_paddleocr_vl.py#L80-L101
+    def forward(self, hidden_states, attention_mask, rotary_pos_emb):
+        emb = torch.cat((rotary_pos_emb, rotary_pos_emb), dim=-1)
+        position_embeddings = (emb.cos(), emb.sin())
+        for layer in self.vision_model.encoder.layers:
+            hidden_states = layer(
+                hidden_states, cu_seqlens=None, position_embeddings=position_embeddings, attention_mask=attention_mask
+            )
+        hidden_states = self.projector.pre_norm(self.vision_model.post_layernorm(hidden_states))
+        merge_unit = self.projector.merge_kernel_size[0] * self.projector.merge_kernel_size[1]
+        hidden_states = hidden_states.reshape(-1, merge_unit * hidden_states.shape[-1])
+        return self.projector.linear_2(self.projector.act(self.projector.linear_1(hidden_states)))
+
+
+class PaddleOCRVLVisionEmbMergerPatcher(ModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        for layer in self._model.vision_model.encoder.layers:
+            layer.self_attn._orig_forward = layer.self_attn.forward
+            layer.self_attn.forward = types.MethodType(_paddleocr_vl_vision_attn_forward, layer.self_attn)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for layer in self._model.vision_model.encoder.layers:
+            layer.self_attn.forward = layer.self_attn._orig_forward
+            del layer.self_attn._orig_forward
 
 
 class Qwen3VLVisionEmbMergerPatcher(ModelPatcher):

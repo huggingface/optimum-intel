@@ -3381,9 +3381,12 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
             **kwargs,
         )
         self.rope_deltas = None  # cache rope_deltas here
-        self._rotary_pos_emb = VisionRotaryEmbedding(
-            self.config.vision_config.embed_dim // self.config.vision_config.num_heads // 2
-        )
+        vision_config = self.config.vision_config
+        # Qwen2-VL vision configs name the vision width / heads `embed_dim` / `num_heads`, PaddleOCR-VL ones
+        # `hidden_size` / `num_attention_heads` (Qwen2-VL `hidden_size` is the language model width)
+        embed_dim = getattr(vision_config, "embed_dim", None) or vision_config.hidden_size
+        num_heads = getattr(vision_config, "num_heads", None) or vision_config.num_attention_heads
+        self._rotary_pos_emb = VisionRotaryEmbedding(embed_dim // num_heads // 2)
 
     def prepare_inputs_for_generation(
         self,
@@ -3474,6 +3477,9 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
 
     def get_vision_embeddings(self, pixel_values, grid_thw, **kwargs):
         hidden_states = self.vision_embeddings(pixel_values)[0]
+        return self._get_merged_vision_embeddings(hidden_states, grid_thw)
+
+    def _get_merged_vision_embeddings(self, hidden_states, grid_thw):
         rotary_pos_emb = self.rot_pos_emb(grid_thw)
         cu_seqlens = torch.repeat_interleave(grid_thw[:, 1] * grid_thw[:, 2], grid_thw[:, 0]).cumsum(
             dim=0, dtype=torch.int32
@@ -3661,6 +3667,36 @@ class _OVQwen2VLForCausalLM(OVModelForVisualCausalLM):
 
         inputs = processor(images=image, text=text_prompt, videos=video, return_tensors="pt")
         return inputs
+
+
+class _OVPaddleOCRVLForCausalLM(_OVQwen2VLForCausalLM):
+    """
+    PaddleOCR-VL reuses the Qwen2-VL pipeline: the vision merger graph takes the patches in spatial-merge-block order
+    with a block-diagonal attention mask and the vision rotary embeddings, and the language model takes 3D M-RoPE
+    positions from the original `get_rope_index`. The patch embeddings graph additionally takes the bilinear
+    position-embedding gather indices / weights.
+    """
+
+    def get_vision_embeddings(self, pixel_values, grid_thw, **kwargs):
+        from transformers.vision_utils import get_vision_bilinear_indices_and_weights
+
+        vision_config = self.config.vision_config
+        merge_size = vision_config.spatial_merge_size
+        # the processor returns the patches of every image in raster order, the projector merges m x m blocks
+        pixel_values = pixel_values.reshape(pixel_values.shape[0], -1)
+        patches = []
+        for image_patches, (t, h, w) in zip(pixel_values.split(grid_thw.prod(-1).tolist()), grid_thw.tolist()):
+            image_patches = image_patches.reshape(t, h // merge_size, merge_size, w // merge_size, merge_size, -1)
+            patches.append(image_patches.transpose(2, 3).reshape(-1, pixel_values.shape[1]))
+        pixel_values = torch.cat(patches)
+        # position-embedding gather in the same merge-block order
+        bilinear_indices, bilinear_weights = get_vision_bilinear_indices_and_weights(
+            grid_thw, vision_config.image_size // vision_config.patch_size, merge_size
+        )
+        hidden_states = self.vision_embeddings(
+            pixel_values, bilinear_indices=bilinear_indices, bilinear_weights=bilinear_weights
+        )[0]
+        return self._get_merged_vision_embeddings(hidden_states, grid_thw)
 
 
 class _OVQwen2_5_VLForCausalLM(OVModelForVisualCausalLM):
@@ -4034,6 +4070,12 @@ if is_transformers_version(">=", "4.57"):
     _OVQwen2VLForCausalLM.get_vision_position_ids = getattr(Qwen2VLModel, "get_vision_position_ids", None)
     _OVQwen2_5_VLForCausalLM.get_rope_index = Qwen2_5_VLModel.get_rope_index
     _OVQwen2_5_VLForCausalLM.get_vision_position_ids = getattr(Qwen2_5_VLModel, "get_vision_position_ids", None)
+
+if is_transformers_version(">=", "5.13"):
+    from transformers.models.paddleocr_vl.modeling_paddleocr_vl import PaddleOCRVLModel
+
+    _OVPaddleOCRVLForCausalLM.get_rope_index = PaddleOCRVLModel.get_rope_index
+    _OVPaddleOCRVLForCausalLM.get_vision_position_ids = PaddleOCRVLModel.get_vision_position_ids
 
 
 class _OVQwen3VLForCausalLM(OVModelForVisualCausalLM):
@@ -9180,6 +9222,7 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "qwen2_vl_text": _OVQwen2VLForCausalLM,
     "qwen2_5_vl": _OVQwen2_5_VLForCausalLM,
     "qwen2_5_vl_text": _OVQwen2_5_VLForCausalLM,
+    "paddleocr_vl": _OVPaddleOCRVLForCausalLM,
     "got_ocr2": _OVGotOCR2ForCausalLM,
     "gemma3": _OVGemma3ForCausalLM,
     "gemma3n": _OVGemma4ForCausalLM,

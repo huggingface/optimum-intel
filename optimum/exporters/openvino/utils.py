@@ -642,6 +642,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "phi3_v",
     "qwen2_vl",
     "qwen2_5_vl",
+    "paddleocr_vl",
     "qwen3_vl",
     "qwen3_5",
     "qwen3_5_moe",
