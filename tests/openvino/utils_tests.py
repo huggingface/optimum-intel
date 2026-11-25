@@ -200,6 +200,7 @@ HUB_MODEL_NAMES = {
     "detr": "optimum-intel-internal-testing/tiny-random-DetrModel",
     "electra": "optimum-intel-internal-testing/tiny-random-electra",
     "esm": "optimum-intel-internal-testing/tiny-random-EsmModel",
+    "eurobert": "optimum-intel-internal-testing/tiny-random-EuroBertModel",
     "exaone": "optimum-intel-internal-testing/tiny-random-exaone",
     "exaone4": "optimum-intel-internal-testing/tiny-random-exaone4",
     "gemma": "optimum-intel-internal-testing/tiny-random-GemmaForCausalLM",
@@ -291,6 +292,7 @@ HUB_MODEL_NAMES = {
     "mt5": "optimum-intel-internal-testing/mt5-tiny-random",
     "llava-qwen2": "optimum-intel-internal-testing/tiny-random-nanollava",
     "nanollava_vision_tower": "optimum-intel-internal-testing/tiny-random-siglip",
+    "nemotron_h": "optimum-intel-internal-testing/tiny-random-nemotron-h",
     "nystromformer": "optimum-intel-internal-testing/tiny-random-NystromformerModel",
     "olmo": "optimum-intel-internal-testing/tiny-random-olmo-hf",
     "orion": "optimum-intel-internal-testing/tiny-random-orion",
@@ -331,6 +333,7 @@ HUB_MODEL_NAMES = {
     "qwen3_asr": "optimum-intel-internal-testing/tiny-random-qwen3-asr",
     "qwen3_dflash": "optimum-intel-internal-testing/tiny-random-qwen3-dflash",
     "qwen3_deepspec_dflash": "optimum-intel-internal-testing/tiny-random-qwen3-deepspec-dflash",
+    "qwen3_dflash2": "optimum-intel-internal-testing/tiny-random-qwen3-dflash2",
     "fun_asr": "optimum-intel-internal-testing/tiny-random-fun-asr",
     "sense_voice": "optimum-intel-internal-testing/tiny-random-sense-voice-small",
     "rembert": "optimum-intel-internal-testing/tiny-random-rembert",
@@ -444,6 +447,7 @@ EAGLE3_MODELS = {"qwen3_eagle3": ("qwen3_eagle3", "qwen3_eagle3_target")}
 DFLASH_MODELS = {
     "qwen3_dflash": ("qwen3_dflash", "qwen3"),
     "qwen3_deepspec_dflash": ("qwen3_deepspec_dflash", "qwen3"),
+    "qwen3_dflash2": ("qwen3_dflash2", "qwen3"),
 }
 
 DFLASH_VLM_MODELS = {
@@ -480,6 +484,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "cohere2": {"model": 32},
     "gpt2": {"model": 44},
     "granitemoehybrid": {"model": 70 if is_transformers_version(">=", "5.13") else 118},
+    "nemotron_h": {"model": 46},
     "wav2vec2": {"model": 34},
     "lasr_ctc": {"model": 32},
     "lasr_ctc_full": {"model": 384},
@@ -784,6 +789,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "qwen3_eagle3": {"model": 20},
     "qwen3_dflash": {"model": 30},
     "qwen3_deepspec_dflash": {"model": 30},
+    "qwen3_dflash2": {"model": 38},
     "minicpmv4_7_dspark": {"model": 30},
     "muse_glimmer_assistant": {"model": 30},
     "qwen3_vl_eagle3": {"model": 18},
@@ -1204,6 +1210,7 @@ TEST_NAME_TO_MODEL_TYPE = {
     "qwen3_5_moe_mtp_legacy_weights": "qwen3_5_moe",
     "qwen3_dflash": "qwen3",
     "qwen3_deepspec_dflash": "qwen3",
+    "qwen3_dflash2": "qwen3",
     "minicpmv4_7_dspark": "qwen3",
     "qwen3_eagle3": "llama",
     "qwen3_eagle3_target": "qwen3",
