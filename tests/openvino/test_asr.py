@@ -47,9 +47,7 @@ class OVASRTest(unittest.TestCase):
         model_id = MODEL_NAMES["lasr_ctc"]
         set_seed(SEED)
         pt_model = AutoModelForCTC.from_pretrained(model_id).eval()
-        ov_model = OVModelForCTC.from_pretrained(
-            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
-        )
+        ov_model = OVModelForCTC.from_pretrained(model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE)
 
         input_features = torch.randn(2, 32, pt_model.config.encoder_config.num_mel_bins)
         attention_mask = torch.ones(2, 32, dtype=torch.long)

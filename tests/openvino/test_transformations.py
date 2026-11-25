@@ -29,13 +29,13 @@ from utils_tests import (
     get_supported_model_for_library,
 )
 
+from optimum.exporters.openvino import main_export
+from optimum.intel.openvino.utils import TemporaryDirectory
 from optimum.intel.utils.import_utils import (
     is_diffusers_version,
     is_qwen_tts_available,
     is_transformers_version,
 )
-from optimum.exporters.openvino import main_export
-from optimum.intel.openvino.utils import TemporaryDirectory
 
 
 # Expected transformations per architecture, separated by stage:

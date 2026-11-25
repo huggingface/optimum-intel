@@ -24,8 +24,7 @@ from utils_tests import MODEL_NAMES, OPENVINO_DEVICE, REMOTE_CODE_MODELS, get_su
 
 from optimum.exporters.openvino import main_export
 from optimum.intel.openvino.utils import TemporaryDirectory
-from optimum.intel.utils.import_utils import is_transformers_version
-from optimum.intel.utils.import_utils import is_qwen_tts_available
+from optimum.intel.utils.import_utils import is_qwen_tts_available, is_transformers_version
 
 
 # The submodels of each architecture that continuous batching can serve, i.e. whose stateful
