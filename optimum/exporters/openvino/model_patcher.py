@@ -11915,11 +11915,19 @@ def qwen3_5_gated_delta_net_forward(
     batch_size, seq_len, _ = hidden_states.shape
 
     # getting projected states from cache if it exists
+    layer_idx = None
     recurrent_state = None
     if cache_params is not None:
-        state_holder = cache_params.layers[self.layer_idx]
-        conv_state = state_holder.conv_states[0]
-        recurrent_state = state_holder.recurrent_states[0]
+        if hasattr(cache_params, "linear_attn_mapping"):
+            # Qwen3_5DynamicCache: states of all linear-attention layers in flat lists
+            layer_idx = cache_params.linear_attn_mapping[self.layer_idx]
+            state_holder = cache_params
+        else:
+            # transformers `DynamicCache` (Qwen3_5DynamicCache was removed): per-layer LinearAttentionLayer
+            layer_idx = 0
+            state_holder = cache_params.layers[self.layer_idx]
+        conv_state = state_holder.conv_states[layer_idx]
+        recurrent_state = state_holder.recurrent_states[layer_idx]
 
     mixed_qkv = self.in_proj_qkv(hidden_states)
     mixed_qkv = mixed_qkv.transpose(1, 2)
@@ -11933,7 +11941,7 @@ def qwen3_5_gated_delta_net_forward(
     if cache_params is not None:
         new_mixed_qkv, new_conv_state = ov_causal_conv1d(conv_state, mixed_qkv, self.conv1d.weight, self.conv1d.bias)
         mixed_qkv = F.silu(new_mixed_qkv)
-        state_holder.conv_states[0] = new_conv_state
+        state_holder.conv_states[layer_idx] = new_conv_state
     else:
         mixed_qkv = F.silu(self.conv1d(mixed_qkv)[:, :, :seq_len])
 
@@ -11972,7 +11980,7 @@ def qwen3_5_gated_delta_net_forward(
 
     # Update cache
     if cache_params is not None:
-        state_holder.recurrent_states[0] = last_recurrent_state
+        state_holder.recurrent_states[layer_idx] = last_recurrent_state
 
     # reshape input data into 2D tensor
     core_attn_out = core_attn_out.reshape(-1, self.head_v_dim)

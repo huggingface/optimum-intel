@@ -251,7 +251,7 @@ def eager_mask_without_vmap(**kwargs):
 
 
 def patched_dynamic_layer_update(
-    self, key_states: torch.Tensor, value_states: torch.Tensor, cache_kwargs: dict[str, Any] | None = None
+    self, key_states: torch.Tensor, value_states: torch.Tensor, *args, **kwargs
 ) -> tuple[torch.Tensor, torch.Tensor]:
     if self.keys is None:
         self.keys = key_states
@@ -354,6 +354,8 @@ class ModelPatcher:
             output_names = list(config.outputs.keys())
             if isinstance(outputs, dict):
                 for name, value in outputs.items():
+                    if use_cache and name == "cache" and isinstance(value, (DynamicCache, EncoderDecoderCache)):
+                        name = "past_key_values"
                     ov_output_name = config.torch_to_ov_output_map.get(name, name)
                     if (
                         ov_output_name in output_names
