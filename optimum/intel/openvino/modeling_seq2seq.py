@@ -11,6 +11,7 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+import json
 import logging
 import os
 import warnings
@@ -62,6 +63,7 @@ from .utils import (
     OV_ENCODER_NAME,
     OV_LANGUAGE_MODEL_NAME,
     OV_TEXT_EMBEDDINGS_MODEL_NAME,
+    OV_XML_FILE_NAME,
     TemporaryDirectory,
     classproperty,
 )
@@ -1348,6 +1350,19 @@ class OVModelForSpeechSeq2Seq(OVModelForSeq2SeqLM):
             return _OVModelForSenseVoice._from_pretrained_sensevoice(model_id, export=export, **kwargs)
         if config is None and _is_funasr_source(model_id, **kwargs):
             return _OVModelForFunAsr._from_pretrained_funasr(model_id, export=export, **kwargs)
+
+        # CLI quantization resolves every ASR export to this class; single-graph CTC exports (e.g. MedASR) need OVModelForCTC
+        model_dir = Path(model_id) / kwargs.get("subfolder", "")
+        if not export and (model_dir / OV_XML_FILE_NAME).is_file() and (model_dir / "config.json").is_file():
+            from transformers.models.auto.modeling_auto import MODEL_FOR_CTC_MAPPING_NAMES
+
+            with open(model_dir / "config.json", encoding="utf-8") as f:
+                model_type = json.load(f).get("model_type")
+            if model_type in MODEL_FOR_CTC_MAPPING_NAMES:
+                from .modeling import OVModelForCTC
+
+                kwargs.pop("use_cache", None)
+                return OVModelForCTC.from_pretrained(model_id, export=export, config=config, **kwargs)
 
         return super().from_pretrained(model_id, export=export, config=config, **kwargs)
 
