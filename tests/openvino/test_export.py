@@ -191,8 +191,10 @@ class ExportModelTest(unittest.TestCase):
         )
     }
 
-    if os.environ.get("RUN_SLOW_EXPORT_TESTS") == "1" and is_transformers_version(">=", "5.0"):
-        SUPPORTED_ARCHITECTURES.update({"lasr_ctc": OVModelForCTC})
+    if is_transformers_version(">=", "5.0"):
+        SUPPORTED_ARCHITECTURES["lasr_ctc"] = OVModelForCTC
+        if os.environ.get("RUN_SLOW_EXPORT_TESTS") == "1":
+            SUPPORTED_ARCHITECTURES["lasr_ctc_full"] = OVModelForCTC
 
     EXPECTED_DIFFUSERS_SCALE_FACTORS = {
         "stable-diffusion-xl": {"vae_encoder": "128.0", "vae_decoder": "128.0"},

@@ -1226,8 +1226,10 @@ class OVWeightCompressionTest(unittest.TestCase):
         in get_supported_model_for_library("transformers") | get_supported_model_for_library("funasr")
     ]
 
-    if os.environ.get("RUN_SLOW_EXPORT_TESTS") == "1" and is_transformers_version(">=", "5.0"):
+    if is_transformers_version(">=", "5.0"):
         SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForCTC, "lasr_ctc", True))
+        if os.environ.get("RUN_SLOW_EXPORT_TESTS") == "1":
+            SUPPORTED_ARCHITECTURES_WITH_AUTO_COMPRESSION.append((OVModelForCTC, "lasr_ctc_full", True))
 
     SUPPORTED_ARCHITECTURES_WITH_HYBRID_QUANTIZATION = [
         (OVStableDiffusionPipeline, "stable-diffusion", 72, 195),

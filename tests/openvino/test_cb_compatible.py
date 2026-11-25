@@ -24,6 +24,7 @@ from utils_tests import MODEL_NAMES, OPENVINO_DEVICE, REMOTE_CODE_MODELS, get_su
 
 from optimum.exporters.openvino import main_export
 from optimum.intel.openvino.utils import TemporaryDirectory
+from optimum.intel.utils.import_utils import is_transformers_version
 from optimum.intel.utils.import_utils import is_qwen_tts_available
 
 
@@ -99,6 +100,20 @@ _PAGED_ATTENTION_INPUTS = (
 
 
 class OVContinuousBatchingCompatibilityTest(unittest.TestCase):
+    @unittest.skipUnless(is_transformers_version(">=", "5.0"), "LASR-CTC requires transformers>=5.0")
+    def test_lasr_ctc_has_no_kv_cache(self):
+        with TemporaryDirectory() as tmpdir:
+            main_export(
+                model_name_or_path=MODEL_NAMES["lasr_ctc"],
+                output=tmpdir,
+                task="automatic-speech-recognition",
+            )
+            model = ov.Core().read_model(Path(tmpdir) / "openvino_model.xml")
+            op_types = {op.get_type_name() for op in model.get_ops()}
+            self.assertNotIn("ReadValue", op_types)
+            self.assertNotIn("Assign", op_types)
+            self.assertNotIn("PagedAttentionExtension", op_types)
+
     @parameterized.expand(list(ARCH_TO_CB_COMPATIBLE_SUBMODELS.keys()), skip_on_empty=True)
     def test_cb_compatible(self, model_arch):
         expected = ARCH_TO_CB_COMPATIBLE_SUBMODELS[model_arch]

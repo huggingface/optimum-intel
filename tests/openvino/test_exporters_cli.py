@@ -53,6 +53,7 @@ from optimum.intel import (  # noqa
     OVLTXPipeline,
     OVModelForAudioClassification,
     OVModelForCausalLM,
+    OVModelForCTC,
     OVModelForFeatureExtraction,
     OVModelForImageClassification,
     OVModelForMaskedLM,
@@ -1682,6 +1683,26 @@ class OVCLIExportTestCase(unittest.TestCase):
             shell=True,
             check=True,
         )
+
+    @unittest.skipUnless(is_transformers_version(">=", "5.0"), "LASR-CTC requires transformers>=5.0")
+    def test_lasr_ctc_export_cli(self):
+        with TemporaryDirectory() as output_dir:
+            subprocess.run(
+                [
+                    "optimum-cli",
+                    "export",
+                    "openvino",
+                    "--model",
+                    MODEL_NAMES["lasr_ctc"],
+                    "--task",
+                    "automatic-speech-recognition",
+                    output_dir,
+                ],
+                check=True,
+            )
+            self.assertTrue((Path(output_dir) / "openvino_model.xml").is_file())
+            model = OVModelForCTC.from_pretrained(output_dir, device=OPENVINO_DEVICE)
+            self.assertIsNotNone(model)
 
     def test_exporters_cli_sentence_transformers(self):
         model_id = MODEL_NAMES["bge"]

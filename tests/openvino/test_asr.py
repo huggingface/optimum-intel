@@ -19,10 +19,10 @@ import numpy as np
 import pytest
 import torch
 from parameterized import parameterized
-from transformers import AutoProcessor, set_seed
+from transformers import AutoModelForCTC, AutoProcessor, set_seed
 from utils_tests import F32_CONFIG, MODEL_NAMES, OPENVINO_DEVICE, SEED
 
-from optimum.intel import OVModelForSpeechSeq2Seq
+from optimum.intel import OVModelForCTC, OVModelForSpeechSeq2Seq
 from optimum.intel.utils.import_utils import is_transformers_version
 
 
@@ -41,6 +41,24 @@ class OVASRTest(unittest.TestCase):
         t = np.linspace(0, 1.0, sample_rate * duration, endpoint=False)
         audio_data = (0.5 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
         return audio_data, sample_rate
+
+    @unittest.skipUnless(is_transformers_version(">=", "5.0"), "LASR-CTC requires transformers>=5.0")
+    def test_lasr_ctc_logits_match_transformers(self):
+        model_id = MODEL_NAMES["lasr_ctc"]
+        set_seed(SEED)
+        pt_model = AutoModelForCTC.from_pretrained(model_id).eval()
+        ov_model = OVModelForCTC.from_pretrained(
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+
+        input_features = torch.randn(2, 32, pt_model.config.encoder_config.num_mel_bins)
+        attention_mask = torch.ones(2, 32, dtype=torch.long)
+        attention_mask[1, 24:] = 0
+        with torch.no_grad():
+            pt_logits = pt_model(input_features=input_features, attention_mask=attention_mask).logits
+            ov_logits = ov_model(input_features=input_features, attention_mask=attention_mask).logits
+
+        torch.testing.assert_close(ov_logits, pt_logits, rtol=1e-4, atol=1e-5)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @pytest.mark.skipif(
