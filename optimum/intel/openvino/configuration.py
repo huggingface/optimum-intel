@@ -57,6 +57,14 @@ class OVQuantizationMethod(str, Enum):
 # gives the layers it matches its own precision, and when several match a layer, the last one wins.
 _LTX2_5_BLOCK = r"__module\.model\.transformer_blocks\.\d+\."
 _LTX2_5_INT8 = {"bits": 8, "sym": False, "group_size": -1}
+# The small layers of the transformer that every block depends on, 1.3% of its weights: the timestep and prompt
+# modulation, the audio-video cross-attention conditioning, the input and output projections and the attention gates
+_LTX2_5_SMALL_LAYERS = [
+    r"__module\.model\.(audio_)?(time_embed|prompt_adaln)\.",
+    r"__module\.model\.av_cross_attn_",
+    r"__module\.model\.(audio_)?proj_(in|out)/",
+    r".*to_gate_logits/",
+]
 
 # The transformer, connectors and text encoder at int4_asym with group size 128, except for the layers that cost the
 # most video quality at it: 18.37 GiB instead of 17.00 GiB, and a wwb similarity of 0.891 instead of 0.831 for the plain
@@ -76,18 +84,8 @@ _LTX2_5_INT4_CONFIGS = {
             {"patterns": [_LTX2_5_BLOCK + r"attn1\.to_(v|out\.0)/"], **_LTX2_5_INT8},
             # The video feed-forward at group size 32
             {"patterns": [_LTX2_5_BLOCK + r"ff\.net\.(0\.proj|2)/"], "bits": 4, "sym": False, "group_size": 32},
-            # The small layers every block depends on, 1.3% of the weights, at int8: the timestep and prompt
-            # modulation, the audio-video cross-attention conditioning, the input and output projections and the
-            # attention gates
-            {
-                "patterns": [
-                    r"__module\.model\.(audio_)?(time_embed|prompt_adaln)\.",
-                    r"__module\.model\.av_cross_attn_",
-                    r"__module\.model\.(audio_)?proj_(in|out)/",
-                    r".*to_gate_logits/",
-                ],
-                **_LTX2_5_INT8,
-            },
+            # The small layers at int8
+            {"patterns": _LTX2_5_SMALL_LAYERS, **_LTX2_5_INT8},
         ],
     },
     "connectors": {
@@ -99,6 +97,34 @@ _LTX2_5_INT4_CONFIGS = {
         "scoped_configs": [{"patterns": [r".*to_gate_logits/"], **_LTX2_5_INT8}],
     },
     "text_encoder": {"bits": 4, "sym": False, "group_size": 128, "ratio": 1.0, "weight_only": True},
+}
+
+# The transformer, connectors and text encoder at int8_asym with group size 128. At int8 the group size matters more
+# than the precision: per-channel int8 has 2.5 times the error of group size 128 in the transformer, and 10 times in the
+# text encoder. 33.25 GiB instead of 34.42 GiB for the previous config (int8_sym with group size 32, with the small
+# layers and the text input projection of the connectors in BF16), and videos closer to the uncompressed model's: a
+# wwb SSIM of 0.916 instead of 0.890 against the videos of the OpenVINO BF16 model.
+_LTX2_5_INT8_CONFIGS = {
+    "transformer": {
+        "bits": 8,
+        "sym": False,
+        "group_size": 128,
+        "weight_only": True,
+        "scoped_configs": [
+            # The video self-attention and feed-forward, the layers that cost the most quality at int4 too, at group
+            # size 32
+            {
+                "patterns": [_LTX2_5_BLOCK + r"attn1\.to_(q|k|v|out\.0)/", _LTX2_5_BLOCK + r"ff\.net\.(0\.proj|2)/"],
+                "bits": 8,
+                "sym": True,
+                "group_size": 32,
+            },
+        ],
+        # The small layers keep their original precision
+        "ignored_scope": {"patterns": _LTX2_5_SMALL_LAYERS},
+    },
+    "connectors": {"bits": 8, "sym": False, "group_size": 128, "weight_only": True},
+    "text_encoder": {"bits": 8, "sym": False, "group_size": 128, "weight_only": True},
 }
 
 # The prompt enhancer of LTX-2.5, used only with `enable_prompt_enhancement=True`: a Gemma 4 E2B model whose OpenVINO
@@ -767,32 +793,7 @@ _DEFAULT_8BIT_WQ_CONFIGS = {
         },
     },
     "Lightricks/LTX-2.5-Diffusers": {
-        "quantization_configs": {
-            "transformer": {
-                "bits": 8,
-                "sym": True,
-                "group_size": 32,
-                "weight_only": True,
-                "ignored_scope": {
-                    "patterns": [
-                        r".*proj_in.*",  # patchify_proj, audio_patchify_proj
-                        r".*proj_out.*",  # proj_out, audio_proj_out
-                        r".*time_embed.*",  # adaln_single, audio_adaln_single
-                        r".*av_cross_attn_.*",  # av_ca_*_adaln_single
-                        r".*prompt_adaln.*",  # prompt_adaln_single, audio_prompt_adaln_single
-                    ],
-                },
-            },
-            "connectors": {
-                "bits": 8,
-                "sym": True,
-                "group_size": 32,
-                "weight_only": True,
-                "ignored_scope": {"patterns": [r".*text_proj_in"]},
-            },
-            "text_encoder": {"bits": 8, "sym": False, "weight_only": True},
-            "prompt_enhancer": _LTX2_5_PROMPT_ENHANCER_CONFIG,
-        },
+        "quantization_configs": {**_LTX2_5_INT8_CONFIGS, "prompt_enhancer": _LTX2_5_PROMPT_ENHANCER_CONFIG},
     },
 }
 
