@@ -1390,6 +1390,44 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         del ov_model
         gc.collect()
 
+    def test_bagel_generate_frames_with_frames_models(self):
+        model_arch = "bagel"
+        if model_arch not in self.SUPPORTED_ARCHITECTURES:
+            self.skipTest("bagel is not supported by the installed transformers version")
+        from optimum.exporters.openvino import main_export
+
+        processor = self.get_preprocessors(model_arch)["processor"]
+        image = self.IMAGE.resize((600, 600))
+        frames = [image, image.rotate(90), image.transpose(Image.FLIP_LEFT_RIGHT)]
+        inputs = processor(text="Generate the next frame", images=frames, generation_mode="image", return_tensors="pt")
+        kwargs = {"num_frames": 3, "num_inference_steps": 3, "guidance_scale": 4.0, "seed": SEED}
+        with TemporaryDirectory() as tmpdir:
+            main_export(MODEL_NAMES[model_arch], tmpdir, task="image-text-to-text", model_kwargs={"num_frames": 3})
+            ov_model = self.OVMODEL_CLASS.from_pretrained(tmpdir, device=OPENVINO_DEVICE, ov_config=F32_CONFIG)
+            single_frame_calls = []
+            for part in (ov_model.vision_embeddings, ov_model.vae_encoder, ov_model.vae_decoder):
+                part.forward = functools.partial(
+                    lambda name, *args, **kw: single_frame_calls.append(name), part._model_name
+                )
+            frames_output = ov_model.generate_frames(**inputs, **kwargs)
+            self.assertEqual(single_frame_calls, [])
+            self.assertEqual(
+                sorted(name for name, part in ov_model._frames_models.items() if part is not None),
+                ["vae_decoder_3img", "vae_encoder_3img", "vision_embeddings_3img"],
+            )
+            del ov_model
+        ov_model = self.OVMODEL_CLASS.from_pretrained(
+            MODEL_NAMES[model_arch], export=True, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
+        )
+        expected = ov_model.generate_frames(**inputs, **kwargs)
+        self.assertEqual(frames_output.shape, expected.shape)
+        self.assertTrue(
+            torch.allclose(frames_output, expected, atol=1e-4),
+            f"max abs diff {(frames_output - expected).abs().max()}",
+        )
+        del ov_model
+        gc.collect()
+
     @pytest.mark.skipif(is_transformers_version("<", "5.0"), reason="qwen3_omni_moe requires transformers >= 5.0")
     def test_qwen3_omni_moe_video_not_supported(self):
         model_id = MODEL_NAMES["qwen3_omni_moe"]

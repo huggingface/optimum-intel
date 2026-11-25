@@ -9236,6 +9236,7 @@ class _OVBagelForCausalLM(OVModelForVisualCausalLM):
         vae = config.vae_config
         self._patch_dim = config.latent_patch_size**2 * vae.latent_channels
         self.latent_downsample = 2 ** (len(vae.channel_multiplier) - 1) * config.latent_patch_size
+        self._frames_models = {}
 
         if kwargs.get("compile", True) and not self._compile_only:
             self.compile()
@@ -9251,6 +9252,7 @@ class _OVBagelForCausalLM(OVModelForVisualCausalLM):
 
     def to(self, device: str):
         # the parts have no `to()`, unlike the language model part of the other VLMs
+        self._frames_models = {}
         return OVBaseModel.to(self, device)
 
     @staticmethod
@@ -9396,6 +9398,19 @@ class _OVBagelForCausalLM(OVModelForVisualCausalLM):
 
     def _velocity(self, context, x_t, timestep, latent_position_ids) -> np.ndarray:
         return self._latent_block(context, x_t, timestep, latent_position_ids, keep=False)["v_t"]
+
+    def _frames_model(self, name: str, num_frames: int) -> Optional[OVBagelModelPart]:
+        """The `{name}_{num_frames}img` model of an export with `num_frames`, loaded on first use; None if absent."""
+        key = f"{name}_{num_frames}img"
+        if key not in self._frames_models:
+            model_dir = self.model_save_dir
+            if isinstance(model_dir, TemporaryDirectory):
+                model_dir = model_dir.name
+            path = Path(model_dir) / f"openvino_{key}_model.xml"
+            self._frames_models[key] = (
+                OVBagelModelPart(self.load_model(path), self, model_name=key) if path.is_file() else None
+            )
+        return self._frames_models[key]
 
     def _add_prompt(
         self, context, input_ids, pixel_values=None, image_position_ids=None, image_num_patches=None
@@ -9629,7 +9644,9 @@ class _OVBagelForCausalLM(OVModelForVisualCausalLM):
         window of the input frames' count and then replaces the oldest frame of the window: input frames are a VAE and
         a ViT block, generated frames join as their clean latent tokens only, without a decode / re-encode. All
         generated frames are decoded at the end, in one VAE decoder call when the decoder has a dynamic batch (one
-        call per frame on NPU, where a batched decoder returns NaN for all but the first image).
+        call per frame on NPU, where a batched decoder returns NaN for all but the first image). As the batch decode of
+        the original OpenVINO BAGEL world model demo, an export with `num_frames` (`--model-kwargs`) encodes that many
+        input frames and decodes that many generated frames in one call of its N-frame models, also on NPU.
 
         Takes the processor outputs for the frames, oldest first, in `generation_mode="image"`. `guidance_scale` and
         `image_guidance_scale` of 1.0 disable the text and image guidance. Frame k starts from
@@ -9655,12 +9672,35 @@ class _OVBagelForCausalLM(OVModelForVisualCausalLM):
         latent_position_ids = self._latent_position_ids(height, width)
 
         # the input frames are encoded once; a generated frame has no ViT block
+        num_inputs = vae_pixel_values.shape[0]
         offsets = np.concatenate([[0], np.cumsum(num_patches)])
-        window = []
-        for idx in range(vae_pixel_values.shape[0]):
-            latents = self.vae_encoder({"pixel_values": vae_pixel_values[idx : idx + 1]})["latent"]
-            patches = slice(offsets[idx], offsets[idx + 1])
-            window.append((self._patchify(latents), (pixel_values[patches], image_position_ids[patches])))
+        vit_inputs = [
+            (pixel_values[offsets[i] : offsets[i + 1]], image_position_ids[offsets[i] : offsets[i + 1]])
+            for i in range(num_inputs)
+        ]
+        vision = self._frames_model("vision_embeddings", num_inputs) if len(set(num_patches)) == 1 else None
+        encoder = self._frames_model("vae_encoder", num_inputs) if vision is not None else None
+        if encoder is not None:
+            embeds = vision(
+                {
+                    **{f"pixel_values_{i}": np.asarray(p, np.float32) for i, (p, _) in enumerate(vit_inputs)},
+                    **{f"position_ids_{i}": np.asarray(ids, np.int64) for i, (_, ids) in enumerate(vit_inputs)},
+                }
+            )
+            embeds = [embeds[f"image_embeds_{i}"] for i in range(num_inputs)]
+            latents = encoder({f"image_{i}": vae_pixel_values[i : i + 1] for i in range(num_inputs)})
+            latents = [latents[f"latent_{i}"] for i in range(num_inputs)]
+        else:
+            embeds = [
+                self.vision_embeddings(
+                    {"pixel_values": np.asarray(p, np.float32), "position_ids": np.asarray(ids, np.int64)}
+                )["image_embeds"]
+                for p, ids in vit_inputs
+            ]
+            latents = [
+                self.vae_encoder({"pixel_values": vae_pixel_values[i : i + 1]})["latent"] for i in range(num_inputs)
+            ]
+        window = [(self._patchify(latent), embed) for latent, embed in zip(latents, embeds)]
 
         use_text_cfg = guidance_scale > 1.0
         cfg_img = None
@@ -9671,10 +9711,10 @@ class _OVBagelForCausalLM(OVModelForVisualCausalLM):
         generated = []
         for k in range(num_frames):
             cond = self._new_context()
-            for tokens, vit in window:
+            for tokens, embeds in window:
                 self._latent_block(cond, tokens, 0.0, latent_position_ids, True)
-                if vit is not None:
-                    self._add_vit_image(cond, *vit)
+                if embeds is not None:
+                    self._add_image_block(cond, self._image_block(embeds))
             cfg_text = copy.copy(cond) if use_text_cfg else None
             self._add_text(cond, input_ids)
             noise = np.random.RandomState(seed + k).randn(latent_position_ids.shape[0], self._patch_dim)
@@ -9698,6 +9738,10 @@ class _OVBagelForCausalLM(OVModelForVisualCausalLM):
         if output_type == "latent":
             return torch.from_numpy(np.stack(generated))
         latents = np.concatenate([self._unpatchify(tokens, height, width) for tokens in generated], 0)
+        decoder = self._frames_model("vae_decoder", num_frames) if num_frames > 1 else None
+        if decoder is not None:
+            images = decoder({f"latent_{i}": latents[i : i + 1] for i in range(num_frames)})
+            return torch.from_numpy(np.concatenate([images[f"image_{i}"] for i in range(num_frames)], 0)).float()
         batched = "NPU" not in self._device and self.vae_decoder.model.input(0).get_partial_shape()[0].is_dynamic
         if batched:
             images = self.vae_decoder({"latents": latents})["image"]
