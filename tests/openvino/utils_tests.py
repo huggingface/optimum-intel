@@ -144,41 +144,6 @@ def _create_tiny_kokoro_model():
     return str(output_dir)
 
 
-def _create_tiny_lasr_ctc_model():
-    """Generate and cache a tiny random LASR-CTC checkpoint for export tests."""
-    output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_lasr_ctc"
-    config_file = output_dir / "config.json"
-    weights_file = output_dir / "model.safetensors"
-    if config_file.exists() and weights_file.exists():
-        return str(output_dir)
-
-    from transformers import AutoConfig, AutoModelForCTC
-
-    config = AutoConfig.for_model(
-        "lasr_ctc",
-        vocab_size=32,
-        encoder_config={
-            "model_type": "lasr_encoder",
-            "hidden_size": 32,
-            "intermediate_size": 64,
-            "num_hidden_layers": 1,
-            "num_attention_heads": 4,
-            "num_key_value_heads": 4,
-            "num_mel_bins": 128,
-            "subsampling_conv_channels": 16,
-            "conv_kernel_size": 3,
-            "subsampling_conv_kernel_size": 3,
-            "max_position_embeddings": 256,
-        },
-    )
-    with torch.random.fork_rng(devices=[]):
-        torch.manual_seed(SEED)
-        model = AutoModelForCTC.from_config(config)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    model.save_pretrained(output_dir)
-    return str(output_dir)
-
-
 SEED = 42
 
 F32_CONFIG = {"INFERENCE_PRECISION_HINT": "f32"}
@@ -439,7 +404,7 @@ HUB_MODEL_NAMES = {
 }
 
 if is_transformers_version(">=", "5.0"):
-    HUB_MODEL_NAMES["lasr_ctc"] = _create_tiny_lasr_ctc_model()
+    HUB_MODEL_NAMES["lasr_ctc"] = "Parual/tiny-random-lasr-ctc-optimum-intel"
     if os.environ.get("RUN_SLOW_EXPORT_TESTS") == "1":
         HUB_MODEL_NAMES["lasr_ctc_full"] = "google/medasr"
 
