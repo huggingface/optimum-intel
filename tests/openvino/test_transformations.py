@@ -797,6 +797,11 @@ class OVTransformationTest(unittest.TestCase):
             inputs = {name: port for port in model.inputs for name in port.get_names()}
             for input_name in ("input_features", "attention_mask"):
                 self.assertTrue(inputs[input_name].get_partial_shape()[1].is_dynamic, input_name)
+            # GPU plugin miscomputes auto_pad="same_upper" for MedASR's even-kernel depthwise conv
+            group_convs = [op for op in model.get_ordered_ops() if op.get_type_name() == "GroupConvolution"]
+            self.assertTrue(group_convs)
+            for op in group_convs:
+                self.assertEqual(op.get_attributes()["auto_pad"], "explicit", op.get_friendly_name())
 
     @parameterized.expand(list(ARCH_TO_EXPECTED_TRANSFORMATIONS.keys()), skip_on_empty=True)
     def test_transformations_applied(self, model_arch):

@@ -172,6 +172,7 @@ from optimum.exporters.openvino.model_patcher import (
     InternVLChatImageEmbeddingModelPatcher,
     JaisModelPatcher,
     KokoroModelPatcher,
+    LasrCtcModelPatcher,
     Lfm2ModelPatcher,
     Lfm2MoeModelPatcher,
     Lfm3ModelPatcher,
@@ -7465,6 +7466,9 @@ class LasrCtcOpenVINOConfig(OpenVINOConfig):
     @property
     def outputs(self):
         return {"logits": {0: "batch_size", 1: "sequence_length"}}
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        return LasrCtcModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager("sew", *["feature-extraction", "automatic-speech-recognition", "audio-classification"])
