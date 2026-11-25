@@ -5064,9 +5064,14 @@ class Qwen3OmniMoeAudioEncoderPatcher(ModelPatcher):
             aftercnn_lens: torch.Tensor,
             cu_seqlens: torch.Tensor = None,
         ) -> torch.Tensor:
-            # Uses 3D batched attention with masks instead of cu_seqlens (Qwen3ASR pattern).
-            # This avoids the correctness bug where cu_seqlens calculated for compacted
-            # representation was applied to flattened padded embeddings.
+            # `n_window_infer`-based windowed attention.
+            # Windows are moved into the batch dimension, `_prepare_inputs` should pad every
+            # audio's chunk count up to a multiple of R = n_window_infer // (n_window * 2),
+            # so a window is exactly R consecutive conv chunks and never spans two audios.
+            # The graph additionally pads the total chunk count up to a multiple of R, so inputs
+            # that are not padded per audio (e.g. a single audio) are still valid.
+            # Each window then is processed independently with a per-window padding mask.
+            R = self.n_window_infer // (self.n_window * 2)
             padded_feature = padded_feature.unsqueeze(1)
             padded_embed = torch.nn.functional.gelu(self.conv2d1(padded_feature))
             padded_embed = torch.nn.functional.gelu(self.conv2d2(padded_embed))
@@ -5081,17 +5086,31 @@ class Qwen3OmniMoeAudioEncoderPatcher(ModelPatcher):
             )
             padded_embed = padded_embed + positional_embedding
 
-            hidden_states = padded_embed
+            batch, aftercnn_time, embed_dim = padded_embed.shape
+            num_windows = (batch + R - 1) // R
+            window_len = R * aftercnn_time
 
-            # Create attention mask from padding mask: masked positions get -inf
-            # Shape: (batch, 1, 1, time) for broadcasting across heads and query positions
-            attention_mask = (~padded_mask_after_cnn.bool()).float()
-            attention_mask = attention_mask.masked_fill(attention_mask.bool(), float("-inf"))
-            attention_mask = attention_mask.unsqueeze(1).unsqueeze(2)
+            embed_pad = torch.zeros_like(padded_embed[:1]).expand(R - 1, -1, -1)
+            padded_embed = torch.cat([padded_embed, embed_pad], dim=0)[: num_windows * R]
+
+            valid_mask = padded_mask_after_cnn.bool()
+            mask_pad = torch.zeros_like(valid_mask[:1]).expand(R - 1, -1)
+            valid_mask = torch.cat([valid_mask, mask_pad], dim=0)[: num_windows * R]
+
+            hidden_states = padded_embed.reshape(num_windows, window_len, embed_dim)
+
+            window_valid = valid_mask.reshape(num_windows, window_len)
+            attention_mask = torch.zeros(
+                (num_windows, window_len), dtype=padded_embed.dtype, device=padded_embed.device
+            )
+            attention_mask = attention_mask.masked_fill(~window_valid, torch.finfo(padded_embed.dtype).min)
+            attention_mask = attention_mask.view(num_windows, 1, 1, window_len)
 
             for encoder_layer in self.layers:
                 layer_outputs = encoder_layer(hidden_states, attention_mask=attention_mask)
                 hidden_states = layer_outputs[0]
+
+            hidden_states = hidden_states.reshape(num_windows * R, aftercnn_time, embed_dim)[:batch]
 
             hidden_states = self.ln_post(hidden_states)
             hidden_states = self.proj1(hidden_states)
@@ -13355,6 +13374,11 @@ class LTX2TransformerPatcher(ModelPatcher):
         # this keeps LTX-2.0 export working across diffusers versions.
         _fwd_params = inspect.signature(self._orig_model_forward).parameters
         _supports_sigma = "sigma" in _fwd_params
+        # The audio<->video cross-attention modulation takes the other modality's noise level with
+        # `use_cross_timestep=True`, and each token's own timestep otherwise. The transformer forward
+        # defaults to False, but the diffusers pipelines pass True for every LTX-2 checkpoint, so trace
+        # that. The two differ only when the video timestep varies per token (image-to-video, conditions).
+        _supports_cross_timestep = _supports_sigma and "use_cross_timestep" in _fwd_params
 
         # `sigma`/`audio_sigma` sit here, rather than after `audio_coords`, to keep the parameter
         # order of the wrapped forward. OpenVINO traces the model directly when the dummy inputs are
@@ -13426,6 +13450,8 @@ class LTX2TransformerPatcher(ModelPatcher):
                     audio_sigma = sigma
                 extra_forward_kwargs["sigma"] = sigma
                 extra_forward_kwargs["audio_sigma"] = audio_sigma
+            if _supports_cross_timestep:
+                extra_forward_kwargs["use_cross_timestep"] = True
             result = self._orig_model_forward(
                 hidden_states=hidden_states,
                 audio_hidden_states=audio_hidden_states,
