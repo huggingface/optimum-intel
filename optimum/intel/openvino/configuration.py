@@ -984,8 +984,8 @@ def _find_model_config(model_id_or_path: str, default_configs_dict: Dict[str, An
 def _get_missing_nncf_version(quantization_config: Optional[Dict[str, Any]]) -> Optional[str]:
     """
     Returns the NNCF version that the given quantization config needs if the installed NNCF version is older, and
-    `None` otherwise. So far, only group-wise int8 weight compression needs a newer NNCF version: NNCF supports it
-    since 3.5.0.
+    `None` otherwise. So far, group-wise int8 weight compression and scoped configs need a newer NNCF version: NNCF
+    supports them since 3.5.0.
     """
     if quantization_config is None:
         return None
@@ -995,11 +995,18 @@ def _get_missing_nncf_version(quantization_config: Optional[Dict[str, Any]]) -> 
     else:
         configs = [quantization_config]
     for config in configs:
-        # The data type of the weights is given either by `dtype` or by `bits`, which is 8 by default
-        is_int8 = (config.get("dtype") or f"int{config.get('bits', 8)}") == "int8"
+        scoped_configs = config.get("scoped_configs") or []
+        # Scoped configs are converted to `nncf.ScopedConfig` objects, which older NNCF versions don't have
+        if scoped_configs and not hasattr(nncf, "ScopedConfig"):
+            return "3.5.0"
+        # The data type of the weights is given either by `dtype` or by `bits`, which is 8 by default. Scoped configs
+        # can't set `dtype`, so their data type is given by `bits` only
+        int8_group_sizes = [sc.get("group_size") for sc in scoped_configs if sc.get("bits", 8) == 8]
+        if (config.get("dtype") or f"int{config.get('bits', 8)}") == "int8":
+            int8_group_sizes.append(config.get("group_size"))
         # Only the release counts: a development build of NNCF 3.5.0 (3.5.0.dev0+<commit>) supports group-wise int8
         # weight compression only if it includes the commit that added it, which its version does not tell
-        if is_int8 and config.get("group_size") not in (None, -1) and not is_nncf_version(">=", "3.5.0"):
+        if any(gs not in (None, -1) for gs in int8_group_sizes) and not is_nncf_version(">=", "3.5.0"):
             return "3.5.0"
     return None
 
