@@ -1,25 +1,33 @@
+import json
+
 import numpy as np
 import openvino as ov
 import pytest
 import torch
+from openvino._offline_transformations import paged_attention_transformation
+from transformers.cache_utils import DynamicCache
 
 transformers = pytest.importorskip("transformers.models.voxtral_realtime")
 from transformers.models.voxtral_realtime.configuration_voxtral_realtime import (
     VoxtralRealtimeConfig,
     VoxtralRealtimeEncoderConfig,
 )
+from transformers.models.voxtral_realtime.feature_extraction_voxtral_realtime import VoxtralRealtimeFeatureExtractor
 from transformers.models.voxtral_realtime.modeling_voxtral_realtime import (
     VoxtralRealtimeEncoder,
     VoxtralRealtimeForConditionalGeneration,
 )
 
-from optimum.exporters.openvino.convert import export_from_model
+from optimum.exporters.openvino.convert import export, export_from_model
+from optimum.exporters.openvino.model_patcher import _paged_attention_masks
 from optimum.exporters.openvino.voxtral_realtime import (
+    VoxtralRealtimeAudioTransformer,
+    VoxtralRealtimeAudioTransformerOpenVINOConfig,
     VoxtralRealtimeStreamingEncoder,
     VoxtralRealtimeStreamingTextDecoder,
+    export_voxtral_realtime_submodels,
     export_voxtral_streaming_encoder,
     export_voxtral_streaming_text_decoder,
-    export_voxtral_realtime_submodels,
 )
 from optimum.intel.openvino.utils import (
     OV_AUDIO_ENCODER_MODEL_NAME,
@@ -119,6 +127,11 @@ def voxtral_model():
 def test_streaming_submodel_exports_carry_state(tmp_path, voxtral_model):
     model = voxtral_model
     config = model.config
+    source = tmp_path / "source"
+    source.mkdir()
+    VoxtralRealtimeFeatureExtractor(feature_size=config.audio_config.num_mel_bins).save_pretrained(source)
+    (source / "tekken.json").write_text('{"test": true}')
+    model.config._name_or_path = str(source)
     audio_wrapper = VoxtralRealtimeStreamingEncoder(
         model.model.audio_tower,
         projector=model.model.multi_modal_projector,
@@ -128,6 +141,13 @@ def test_streaming_submodel_exports_carry_state(tmp_path, voxtral_model):
         model.model.language_model, model.model.time_embedding, model.lm_head
     ).eval()
     export_voxtral_realtime_submodels(model, tmp_path)
+    assert (tmp_path / "preprocessor_config.json").is_file()
+    assert (
+        json.loads((tmp_path / "config.json").read_text())["audio_config"]["sliding_window"]
+        == config.audio_config.sliding_window
+    )
+    assert (tmp_path / "generation_config.json").is_file()
+    assert (tmp_path / "tekken.json").read_text() == (source / "tekken.json").read_text()
 
     core = ov.Core()
     embeddings = core.compile_model(core.read_model(str(tmp_path / "text_embeddings/openvino_model.xml")), "CPU")
@@ -223,6 +243,158 @@ def test_streaming_submodel_exports_carry_state(tmp_path, voxtral_model):
     np.testing.assert_allclose(reset_logits, first_logits, rtol=1e-5, atol=1e-5)
 
 
+def test_split_audio_matches_streaming_encoder_across_window(tmp_path, voxtral_model):
+    model = voxtral_model
+    config = model.config.audio_config
+    export_voxtral_realtime_submodels(model, tmp_path)
+    core = ov.Core()
+    options = {"INFERENCE_PRECISION_HINT": "f32"}
+    legacy = core.compile_model(str(tmp_path / "audio_encoder/openvino_model.xml"), "CPU", options)
+    conv = core.compile_model(str(tmp_path / "audio_conv/openvino_model.xml"), "CPU", options)
+    transformer = core.compile_model(str(tmp_path / "audio_transformer/openvino_model.xml"), "CPU", options)
+    adapter = core.compile_model(str(tmp_path / "audio_adapter/openvino_model.xml"), "CPU", options)
+    request = transformer.create_infer_request()
+    assert len(request.query_state()) == 2 * config.num_hidden_layers
+    assert {port.get_any_name() for port in transformer.inputs} == {
+        "inputs_embeds",
+        "attention_mask",
+        "position_ids",
+        "beam_idx",
+    }
+
+    conv_caches = {
+        "conv1_cache": np.zeros((2, config.num_mel_bins, 2), dtype=np.float32),
+        "conv2_cache": np.zeros((2, config.hidden_size, 1), dtype=np.float32),
+    }
+    past = {
+        f"past_key_values.{layer}.{kind}": np.zeros((2, config.num_attention_heads, 0, config.head_dim), np.float32)
+        for layer in range(config.num_hidden_layers)
+        for kind in ("key", "value")
+    }
+    past_length = 0
+    for frames in (16, 48, 16, 8):
+        features = torch.randn(2, config.num_mel_bins, frames).numpy()
+        original = legacy({"input_features": features, **conv_caches, **past})
+        conv_out = conv({"input_features": features, **conv_caches})
+        token_count = conv_out["inputs_embeds"].shape[1]
+        mask = np.ones((2, past_length + token_count), dtype=np.int64)
+        positions = np.broadcast_to(np.arange(past_length, past_length + token_count), (2, token_count)).copy()
+        transformed = request.infer(
+            {
+                "inputs_embeds": conv_out["inputs_embeds"],
+                "attention_mask": mask,
+                "position_ids": positions,
+                "beam_idx": np.arange(2, dtype=np.int32),
+            }
+        )
+        actual = adapter({"hidden_states": transformed["last_hidden_state"]})["audio_embeddings"]
+        np.testing.assert_allclose(actual, original["audio_embeddings"], rtol=1e-2, atol=1e-4)
+        for name in conv_caches:
+            np.testing.assert_allclose(conv_out[name + "_1"], original[name + "_1"], rtol=1e-5, atol=1e-6)
+            conv_caches[name] = conv_out[name + "_1"].copy()
+        past = {
+            f"past_key_values.{layer}.{kind}": original[f"present.{layer}.{kind}"].copy()
+            for layer in range(config.num_hidden_layers)
+            for kind in ("key", "value")
+        }
+        past_length += token_count
+    assert past_length > config.sliding_window
+
+
+def test_audio_transformer_paged_attention_32_layers(tmp_path):
+    config = VoxtralRealtimeEncoderConfig(
+        hidden_size=16,
+        intermediate_size=32,
+        num_hidden_layers=32,
+        num_attention_heads=2,
+        num_mel_bins=8,
+        head_dim=8,
+        sliding_window=750,
+    )
+    encoder = VoxtralRealtimeEncoder(config).eval()
+    export(
+        VoxtralRealtimeAudioTransformer(encoder),
+        VoxtralRealtimeAudioTransformerOpenVINOConfig(config),
+        tmp_path / "openvino_model.xml",
+        stateful=True,
+        library_name="transformers",
+    )
+    model = ov.Core().read_model(str(tmp_path / "openvino_model.xml"))
+    sdpa = [node for node in model.get_ops() if node.get_type_name() == "ScaledDotProductAttention"]
+    assert len(sdpa) == config.num_hidden_layers
+    assert all(len(node.input_values()) >= 4 for node in sdpa)
+    paged_attention_transformation(model)
+    paged = [node for node in model.get_ops() if node.get_type_name() == "PagedAttentionExtension"]
+    assert len(paged) == config.num_hidden_layers
+    assert not any(node.get_type_name() in ("ReadValue", "Assign") for node in model.get_ops())
+    for node in paged:
+        window = node.input_value(10).get_node()
+        while window.get_type_name() in ("Convert", "Squeeze", "Unsqueeze", "Reshape"):
+            window = window.input_value(0).get_node()
+        assert window.get_type_name() == "Constant"
+        assert int(window.get_data().flatten()[0]) == config.sliding_window
+
+
+def test_audio_transformer_positions_and_padding(tmp_path, voxtral_model):
+    encoder = voxtral_model.model.audio_tower
+    config = encoder.config
+    export(
+        VoxtralRealtimeAudioTransformer(encoder),
+        VoxtralRealtimeAudioTransformerOpenVINOConfig(config),
+        tmp_path / "openvino_model.xml",
+        stateful=True,
+        library_name="transformers",
+    )
+    request = (
+        ov.Core()
+        .compile_model(str(tmp_path / "openvino_model.xml"), "CPU", {"INFERENCE_PRECISION_HINT": "f32"})
+        .create_infer_request()
+    )
+    cache = DynamicCache()
+    for positions, mask in (
+        ([[10, 11, 12, 13], [30, 31, 32, 33]], [[0, 1, 1, 1], [1, 1, 1, 1]]),
+        ([[14, 17], [34, 39]], [[0, 1, 1, 1, 1, 1], [1, 1, 1, 1, 1, 1]]),
+    ):
+        inputs = torch.randn(2, len(positions[0]), config.hidden_size)
+        position_ids = torch.tensor(positions, dtype=torch.int64)
+        attention_mask = torch.tensor(mask, dtype=torch.int64)
+        with torch.no_grad():
+            expected = encoder(
+                inputs_embeds=inputs,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=cache,
+                use_cache=True,
+            ).last_hidden_state.numpy()
+        actual = request.infer(
+            {
+                "inputs_embeds": inputs.numpy(),
+                "attention_mask": attention_mask.numpy(),
+                "position_ids": position_ids.numpy(),
+                "beam_idx": np.arange(2, dtype=np.int32),
+            }
+        )["last_hidden_state"]
+        valid_queries = attention_mask[:, -inputs.shape[1] :].numpy().astype(bool)
+        np.testing.assert_allclose(actual[valid_queries], expected[valid_queries], rtol=1e-2, atol=1e-3)
+
+
+def test_paged_mask_retains_dflash_block_attention():
+    full, sliding = _paged_attention_masks(
+        torch.tensor([[0, 1, 1, 1, 1]]),
+        torch.tensor([[0, 1, 1]]),
+        sliding_window=2,
+        dtype=torch.float32,
+    )
+    expected_full = torch.tensor(
+        [[False, True, True, False, False], [False, True, True, True, True], [False, True, True, True, True]]
+    )
+    expected_sliding = torch.tensor(
+        [[False, True, True, False, False], [False, False, True, True, True], [False, False, False, True, True]]
+    )
+    torch.testing.assert_close(full[0, 0] == 0, expected_full)
+    torch.testing.assert_close(sliding[0, 0] == 0, expected_sliding)
+
+
 def test_streaming_text_decoder_crosses_sliding_window(tmp_path, voxtral_model, monkeypatch):
     model = voxtral_model
     config = model.config.text_config
@@ -314,7 +486,11 @@ def test_streaming_text_decoder_matches_transformers(voxtral_model, delay):
 def test_export_from_model_selects_text_state(tmp_path, voxtral_model, stateful):
     paths = export_from_model(voxtral_model, tmp_path, task="automatic-speech-recognition", stateful=stateful)
     expected_names = {OV_AUDIO_ENCODER_MODEL_NAME, OV_TEXT_EMBEDDINGS_MODEL_NAME, OV_LANGUAGE_MODEL_NAME}
-    assert set(paths) == expected_names
+    assert set(paths) == expected_names | {
+        "audio_conv/openvino_model.xml",
+        "audio_transformer/openvino_model.xml",
+        "audio_adapter/openvino_model.xml",
+    }
     assert {path.name for path in tmp_path.glob("*.xml")} == expected_names
     assert {path.name for path in tmp_path.glob("*.bin")} == {
         (tmp_path / name).with_suffix(".bin").name for name in expected_names

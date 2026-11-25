@@ -10010,22 +10010,24 @@ class LlamaEagle3ForCausalLM(LlamaPreTrainedModel, GenerationMixin):
         )
 
 
-def _dflash_attention_masks(
+def _paged_attention_masks(
     attention_mask: torch.Tensor,
-    token_type_ids: torch.Tensor,
+    token_type_ids: Optional[torch.Tensor],
     sliding_window: Optional[int],
     dtype: torch.dtype,
+    query_length: Optional[int] = None,
 ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
     """Additive [batch, 1, query_len, kv_len] masks for the full and the sliding-window layers.
 
-    Queries are the new rows [context; block] and keys are [past; context; block]. Attention is causal,
-    except that block rows (token_type_ids == 1) also see the later block rows, which makes the block
-    bidirectional. These are the PagedAttentionExtension token_type_ids semantics: SDPAToPagedAttention
+    Attention is causal except that block rows (token_type_ids == 1) also see later block rows.
+    These are the PagedAttentionExtension token_type_ids semantics: SDPAToPagedAttention
     forwards token_type_ids because the masks depend on it, and it recognizes the sliding mask form
     Select(.., Select(Unsqueeze(Unsqueeze(distance >= window)))) as the PagedAttentionExtension sliding_window.
     """
     batch_size, kv_len = attention_mask.shape
-    query_len = token_type_ids.shape[1]
+    if token_type_ids is None and query_length is None:
+        raise ValueError("query_length is required when token_type_ids is absent")
+    query_len = token_type_ids.shape[1] if token_type_ids is not None else query_length
     past_len = kv_len - query_len
     device = attention_mask.device
     min_value = torch.tensor(torch.finfo(dtype).min, dtype=dtype, device=device)
@@ -10033,13 +10035,16 @@ def _dflash_attention_masks(
 
     key_positions = torch.arange(kv_len, device=device)
     query_positions = torch.arange(past_len, kv_len, device=device)
-    # cached keys are committed context, never block rows
-    past_token_types = torch.zeros((batch_size, past_len), dtype=token_type_ids.dtype, device=device)
-    key_token_types = torch.cat([past_token_types, token_type_ids], dim=1)
-    bidirectional = (token_type_ids[:, :, None] == 1) & (key_token_types[:, None, :] == 1)
     future = key_positions[None, :] > query_positions[:, None]
     padding = attention_mask[:, None, :] == 0
-    masked = ((future[None, :, :] & ~bidirectional) | padding)[:, None, :, :]
+    if token_type_ids is None:
+        masked = (future[None, :, :] | padding)[:, None, :, :]
+    else:
+        # Cached keys are committed context, never block rows.
+        past_token_types = torch.zeros((batch_size, past_len), dtype=token_type_ids.dtype, device=device)
+        key_token_types = torch.cat([past_token_types, token_type_ids], dim=1)
+        bidirectional = (token_type_ids[:, :, None] == 1) & (key_token_types[:, None, :] == 1)
+        masked = ((future[None, :, :] & ~bidirectional) | padding)[:, None, :, :]
 
     full_mask = torch.where(masked, min_value, zero)
     if sliding_window is None:
@@ -10296,7 +10301,7 @@ class Qwen3DFlashDraftModel(Qwen3PreTrainedModel):
                 device=noise_states.device,
             )
         has_sliding_layers = any(layer.self_attn.sliding_window is not None for layer in self.layers)
-        full_mask, sliding_mask = _dflash_attention_masks(
+        full_mask, sliding_mask = _paged_attention_masks(
             attention_mask,
             token_type_ids,
             self.config.sliding_window if has_sliding_layers else None,
@@ -10499,7 +10504,7 @@ def get_muse_glimmer_assistant_draft_model_class():
             # the window is inclusive, abs(q_idx - kv_idx) <= sliding_window, so it spans sliding_window + 1 keys:
             # https://github.com/huggingface/transformers/blob/v5.15.1/src/transformers/masking_utils.py#L146-L149
             has_sliding_layers = any(layer.self_attn.is_sliding for layer in self.layers)
-            full_mask, sliding_mask = _dflash_attention_masks(
+            full_mask, sliding_mask = _paged_attention_masks(
                 attention_mask,
                 token_type_ids,
                 self.config.sliding_window + 1 if has_sliding_layers else None,

@@ -56,7 +56,10 @@ from optimum.exporters.openvino.utils import (
     save_preprocessors,
     set_simplified_chat_template,
 )
-from optimum.exporters.openvino.voxtral_realtime import _get_voxtral_realtime_submodels_fn_and_export_configs
+from optimum.exporters.openvino.voxtral_realtime import (
+    _get_voxtral_realtime_submodels_fn_and_export_configs,
+    _save_voxtral_realtime_assets,
+)
 from optimum.exporters.tasks import TasksManager
 from optimum.exporters.utils import (
     DECODER_NAME,
@@ -935,6 +938,16 @@ def export_from_model(
         save_preprocessors(preprocessors, model.config, output, trust_remote_code)
 
         files_subpaths = ["openvino_" + model_name + ".xml" for model_name in models_and_export_configs.keys()]
+        if model_type == "voxtral_realtime":
+            _save_voxtral_realtime_assets(model, output)
+            files_subpaths = [
+                (
+                    os.path.join(name, OV_XML_FILE_NAME)
+                    if name in ("audio_conv", "audio_transformer", "audio_adapter")
+                    else path
+                )
+                for name, path in zip(models_and_export_configs, files_subpaths)
+            ]
 
     else:
         # save the subcomponent configuration
@@ -1297,7 +1310,9 @@ def _get_submodels_and_export_configs(
     stateful_per_model = [stateful] * len(models_for_export)
 
     if getattr(getattr(model, "config", None), "model_type", None) == "voxtral_realtime":
-        stateful_per_model = [stateful and name == "language_model" for name in models_for_export]
+        stateful_per_model = [
+            name == "audio_transformer" or (stateful and name == "language_model") for name in models_for_export
+        ]
 
     # The Markov head of a DFlash-2 or DSpark draft is exported next to the draft backbone.
     if "markov_head" in getattr(export_config, "SUPPORTED_BEHAVIORS", []):

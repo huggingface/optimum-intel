@@ -36,6 +36,20 @@ optimum-cli export openvino --model meta-llama/Meta-Llama-3-8B ov_model/
 
 To export a private model or a model that requires access, you can either run `huggingface-cli login` to log in permanently, or set the environment variable `HF_TOKEN` to a [token](https://huggingface.co/settings/tokens) with access to the model. See the [authentication documentation](https://huggingface.co/docs/huggingface_hub/quick-start#authentication) for more information.
 
+### Voxtral Realtime streaming audio
+
+Voxtral Realtime exports retain the original audio encoder and additionally write
+`audio_conv/`, `audio_transformer/`, and `audio_adapter/` IRs. The convolution IR takes
+mel features and the two convolution caches and returns `inputs_embeds` and updated caches.
+The stateful transformer takes those embeddings, an attention mask, absolute `position_ids`,
+and `beam_idx`; its `last_hidden_state` is passed to the adapter to produce `audio_embeddings`.
+The adapter groups frames by the configured downsample factor, so its input length must be
+divisible by that factor. Reset transformer state and convolution caches between streams.
+The transformer retains the configured sliding window and can be converted to paged attention.
+The split transformer is always stateful, including when `--disable-stateful` is selected
+for the text decoder. The model configuration and available processor and tokenizer assets
+are saved at the export root.
+
 The model argument can either be the model ID of a model hosted on the Hub or a path to a model hosted locally. For local models, you need to specify the task for which the model should be loaded before export, among the list of the [supported tasks](https://huggingface.co/docs/optimum/main/en/exporters/task_manager).
 
 ```bash
