@@ -138,6 +138,7 @@ from optimum.exporters.openvino.model_patcher import (
     AfmoeModelPatcher,
     AquilaModelPatcher,
     ArcticModelPatcher,
+    BagelAttentionPatcher,
     BagelLanguageModelForExport,
     BagelLanguageModelPatcher,
     BagelTextEmbeddingsForExport,
@@ -9000,10 +9001,11 @@ class BagelOpenVINOConfig(OpenVINOConfig):
     - `num_frames`: also export `vision_embeddings_{N}img`, `vae_encoder_{N}img` and `vae_decoder_{N}img`, which take
       N same-size frames in one call with one port per frame, as the N-frame models of the original OpenVINO BAGEL
       demo (`convert_bagel_openvino.py --num-frames`).
-    - `reference_weights`: the weights of that demo's INT4 export. Its FP32-loaded parts are kept in FP16 instead of
-      the BF16 of the checkpoint, the VAE keeps its FP32 checkpoint weights, and `--weight-format int4` compresses
-      the decoder layers only: the LM head, the latent position embedding and the timestep / latent projections stay
-      in FP16.
+    - `reference_weights`: the weights of that demo's export, which loads the checkpoint in FP32 and saves FP16: the
+      parts outside the decoder layers and the decoder biases are saved in FP16 instead of the BF16 of the checkpoint,
+      the VAE keeps its FP32 checkpoint weights, and the understanding stream is not rescaled (see
+      `BagelLanguageModelPatcher`). With `--weight-format int4 --sym --group-size 128 --ratio 1.0 --backup-precision
+      int8_sym --group-size-fallback adjust`, the export has the weights of that demo's INT4 export.
     """
 
     SUPPORTED_BEHAVIORS = [behavior.value for behavior in BagelConfigBehavior]
@@ -9034,12 +9036,14 @@ class BagelOpenVINOConfig(OpenVINOConfig):
         behavior: BagelConfigBehavior = BagelConfigBehavior.LANGUAGE,
         preprocessors: Optional[List[Any]] = None,
         num_frames: int = 0,
+        reference_weights: bool = False,
         **kwargs,
     ):
         super().__init__(
             config=config, task=task, int_dtype=int_dtype, float_dtype=float_dtype, preprocessors=preprocessors
         )
         self._orig_config = config
+        self.reference_weights = reference_weights
         # an N-frame model is `<behavior>_<N>img`
         frames = re.fullmatch(r"(.+)_(\d+)img", str(getattr(behavior, "value", behavior)))
         self._behavior = BagelConfigBehavior(frames[1] if frames else behavior)
@@ -9069,6 +9073,7 @@ class BagelOpenVINOConfig(OpenVINOConfig):
             behavior=self._behavior,
             preprocessors=self._preprocessors,
             num_frames=num_frames,
+            reference_weights=reference_weights,
         )
 
     def with_behavior(self, behavior: Union[str, BagelConfigBehavior]):
@@ -9080,6 +9085,7 @@ class BagelOpenVINOConfig(OpenVINOConfig):
             behavior=behavior,
             preprocessors=self._preprocessors,
             num_frames=self.num_frames,
+            reference_weights=self.reference_weights,
         )
 
     def get_model_for_behavior(self, model, behavior: Union[str, BagelConfigBehavior]):
@@ -9216,4 +9222,4 @@ class BagelOpenVINOConfig(OpenVINOConfig):
         # the BAGEL `--model-kwargs` are export options (`set_export_options`), not forward arguments
         if self._behavior == BagelConfigBehavior.LANGUAGE:
             return BagelLanguageModelPatcher(self, model)
-        return super().patch_model_for_export(model)
+        return BagelAttentionPatcher(self, model)

@@ -1665,15 +1665,6 @@ class OVQuantizer(OptimumQuantizer):
                     # BAGEL compresses its language model only, the other parts stay in FP16
                     if self.model.config.model_type != "bagel":
                         default_config = OVWeightQuantizationConfig(bits=8, sym=True)
-                    elif getattr(self.model, "_reference_weights", False) and quantization_config.bits == 4:
-                        # as the original OpenVINO BAGEL demo: only the decoder layers are compressed
-                        lm_config = quantization_config.clone()
-                        lm_config.backup_precision = "none"
-                        lm_config.ignored_scope = _merge_ignored_scopes(
-                            lm_config.ignored_scope,
-                            {"patterns": [r".*\.bagel\.(time_embedder|vae2llm|llm2vae)[./].*"]},
-                        )
-                        quantization_configs["lm_model"] = lm_config
                 else:
                     default_config = quantization_config
             elif not isinstance(quantization_config, OVPipelineQuantizationConfig):

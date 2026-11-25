@@ -9236,8 +9236,6 @@ class _OVBagelForCausalLM(OVModelForVisualCausalLM):
         vae = config.vae_config
         self._patch_dim = config.latent_patch_size**2 * vae.latent_channels
         self.latent_downsample = 2 ** (len(vae.channel_multiplier) - 1) * config.latent_patch_size
-        # export option (`--model-kwargs`), read by the INT4 weight compression
-        self._reference_weights = bool(kwargs.get("reference_weights", False))
 
         if kwargs.get("compile", True) and not self._compile_only:
             self.compile()

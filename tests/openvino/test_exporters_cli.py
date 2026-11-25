@@ -1431,18 +1431,18 @@ class OVCLIExportTestCase(unittest.TestCase):
         with TemporaryDirectory() as tmpdir:
             subprocess.run(
                 f"optimum-cli export openvino --model {MODEL_NAMES['bagel']} --task image-text-to-text "
-                f"--weight-format int4 --sym --group-size -1 --model-kwargs '{model_kwargs}' {tmpdir}",
+                "--weight-format int4 --sym --group-size 128 --ratio 1.0 --backup-precision int8_sym "
+                f"--group-size-fallback adjust --model-kwargs '{model_kwargs}' {tmpdir}",
                 shell=True,
                 check=True,
             )
             model = OVModelForVisualCausalLM.from_pretrained(tmpdir)
-            # INT4 on the 14 decoder layer projections of the 4 layers only; the LM head, latent position embedding and
-            # timestep / latent projections stay floating point
+            # the INT4 recipe of the original OpenVINO BAGEL demo: INT8 LM head and latent position embedding
             check_compression_state_per_model(
                 self,
                 model.ov_models,
                 {
-                    "lm_model": {"int4": 56},
+                    "lm_model": {"int8": 11, "int4": 51},
                     "text_embeddings_model": {},
                     "vision_embeddings_model": {},
                     "vae_encoder_model": {},
@@ -1465,6 +1465,19 @@ class OVCLIExportTestCase(unittest.TestCase):
                     [port.get_any_name() for port in frames_model.outputs],
                     [f"{p}_{i}" for p in outputs for i in range(3)],
                 )
+            # attention scaled inside SDPA, as the original model, not by an f16-rounded scale constant
+            for name in ("vision_embeddings", "vae_encoder", "vae_decoder", "vision_embeddings_3img", "language"):
+                ops = core.read_model(Path(tmpdir) / f"openvino_{name}_model.xml").get_ops()
+                sdpa = [op for op in ops if op.get_type_name() == "ScaledDotProductAttention"]
+                self.assertTrue(sdpa, name)
+                self.assertTrue(all(op.get_input_size() < 5 for op in sdpa), name)
+                # floating point weights in FP16, as that demo
+                bf16 = [
+                    op.get_friendly_name()
+                    for op in ops
+                    if op.get_type_name() == "Constant" and op.get_output_element_type(0) == ov.Type.bf16
+                ]
+                self.assertEqual(bf16, [], name)
 
     def test_exporters_cli_4bit_with_statistics_path(self):
         with TemporaryDirectory() as tmpdir:

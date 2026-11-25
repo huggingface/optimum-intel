@@ -14525,7 +14525,6 @@ class BagelLanguageModelForExport(nn.Module):
             llama_repeat_kv(key, groups),
             llama_repeat_kv(value, groups),
             attn_mask=attention_mask,
-            scale=attn.scaling,
         )
         out = out[0].transpose(0, 1).flatten(1)
         und = und + attn.o_proj(out[und_index])
@@ -14639,8 +14638,8 @@ class BagelVAEDecoderFramesForExport(_BagelFramesForExport):
 def bagel_reference_weights(model: "PreTrainedModel"):
     """
     Weights as the original OpenVINO BAGEL demo export, which loads the checkpoint in FP32 and saves FP16: the parts
-    outside the language model decoder layers go to FP32 (saved as FP16 instead of BF16), and the VAE is reloaded from
-    the checkpoint, where it is stored in FP32, since loading the model in BF16 rounds it.
+    outside the language model decoder layers and the decoder biases go to FP32 (saved as FP16 instead of BF16), and the
+    VAE is reloaded from the checkpoint, where it is stored in FP32, since loading the model in BF16 rounds it.
     """
     bagel = model.model
     for module in (
@@ -14657,6 +14656,9 @@ def bagel_reference_weights(model: "PreTrainedModel"):
         module.float()
     for name in ("vit_pos_embed", "latent_pos_embed"):
         setattr(bagel, name, nn.Parameter(getattr(bagel, name).float(), requires_grad=False))
+    for module in bagel.language_model.layers.modules():
+        if isinstance(module, nn.Linear) and module.bias is not None:
+            module.bias = nn.Parameter(module.bias.float(), requires_grad=False)
 
     path = model.name_or_path
     if not os.path.isdir(path):
@@ -14676,13 +14678,15 @@ class BagelLanguageModelPatcher(ModelPatcher):
     `BAGEL_UND_SCALE_FROM_LAYER` on, so it fits f16 (see `BAGEL_UND_SCALE`). This is not a runtime workaround but an
     exact reparametrization: the scale is folded into the und `o_proj` and `down_proj` weights, RMSNorm(x / s) with
     eps / s^2 equals RMSNorm(x), and power-of-two scaling is lossless. The f32 export matches the PyTorch model to
-    ~2e-6 on logits and velocity.
+    ~2e-6 on logits and velocity. With the `reference_weights` export option the stream is not rescaled, as the
+    original OpenVINO BAGEL demo export.
     """
 
     def __init__(
         self, config: "OpenVINOConfig", model: "PreTrainedModel", model_kwargs: Optional[Dict[str, Any]] = None
     ):
         super().__init__(config, model, model_kwargs)
+        self._rescale = not getattr(config, "reference_weights", False)
 
         @functools.wraps(self.orig_forward)
         def patched_forward(*args, **kwargs):
@@ -14692,6 +14696,8 @@ class BagelLanguageModelPatcher(ModelPatcher):
 
     def _scales(self):
         num_layers = len(self._model.bagel.language_model.layers)
+        if not self._rescale:
+            return [(1.0, 1.0)] * num_layers
         return [(_bagel_und_scale(i - 1) if i else 1.0, _bagel_und_scale(i)) for i in range(num_layers)]
 
     def __enter__(self):
@@ -14728,3 +14734,46 @@ class BagelLanguageModelPatcher(ModelPatcher):
             layer.post_attention_layernorm.variance_epsilon = eps_post
         text.norm.variance_epsilon = self._orig_eps[-1]
         self._model.und_rescale = None
+
+
+def _bagel_vision_attention_forward(self, hidden_states, attention_mask=None, **kwargs):
+    hidden_shape = (*hidden_states.shape[:-1], -1, self.head_dim)
+    query, key, value = (
+        proj(hidden_states).view(hidden_shape).transpose(1, 2) for proj in (self.q_proj, self.k_proj, self.v_proj)
+    )
+    # the default scale is head_dim**-0.5 computed in the kernel; an explicit one is saved as an f16 constant
+    out = F.scaled_dot_product_attention(query, key, value, attn_mask=attention_mask)
+    return self.out_proj(out.transpose(1, 2).flatten(2)), None
+
+
+def _bagel_vae_attention_forward(self, hidden_states):
+    batch_size, channels, height, width = hidden_states.shape
+    normed = self.norm(hidden_states)
+    query, key, value = (proj(normed).flatten(2).transpose(1, 2)[:, None] for proj in (self.q, self.k, self.v))
+    out = F.scaled_dot_product_attention(query, key, value)[:, 0].transpose(1, 2)
+    return hidden_states + self.proj_out(out.reshape(batch_size, channels, height, width))
+
+
+class BagelAttentionPatcher(ModelPatcher):
+    """
+    Runs the ViT and VAE attention as the original BAGEL code: `scaled_dot_product_attention` with its default scale.
+    The Transformers port scales by an explicit head_dim**-0.5 (and the VAE through a matmul and softmax), which the
+    export saves as an f16 constant, 6.6e-5 off for the ViT head size 72.
+    """
+
+    def __enter__(self):
+        super().__enter__()
+        self._patched = []
+        for module in self._model.modules():
+            name = type(module).__name__
+            if name in ("BagelVisionAttention", "BagelVAEAttnBlock"):
+                patched = (
+                    _bagel_vision_attention_forward if name == "BagelVisionAttention" else _bagel_vae_attention_forward
+                )
+                self._patched.append((module, module.forward))
+                module.forward = types.MethodType(patched, module)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for module, forward in self._patched:
+            module.forward = forward
