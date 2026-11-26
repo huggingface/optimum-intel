@@ -231,8 +231,7 @@ def download_reference_ir(model_id: str) -> Optional[Path]:
     skip it. Everything else (429, 5xx, timeouts) is retried and then raised: a flaky Hub must not
     silently turn this suite into a green no-op.
     """
-    # Some fixtures are generated on the fly into a local directory (see `_create_tiny_kokoro_model`
-    # in utils_tests.py), so their "model id" is a filesystem path with no Hub reference behind it.
+    # Some fixtures may be local directories rather than Hub ids, with no Hub reference behind them.
     if os.path.isdir(model_id):
         return None
 
