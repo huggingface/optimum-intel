@@ -9001,6 +9001,9 @@ class _OVLfm3OmniForCausalLM(_OVLfm3VlForCausalLM):
             mode = str(getattr(generation_mode, "value", generation_mode))
             if mode not in (text_mode, audio_mode, interleaved_mode):
                 raise ValueError(f"Unknown generation_mode {generation_mode}")
+            if mode == text_mode:
+                # as the remote model: a requested text answer never opens speech
+                suppress += [config.mixed_start_token_id, config.audio_start_token_id]
             # speech always follows its marker in training; append the one the requested mode needs
             markers = {
                 audio_mode: (config.audio_start_token_id, config.audio_out_token_id),

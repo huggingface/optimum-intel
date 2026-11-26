@@ -1229,6 +1229,26 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             torch.allclose(ov_audio, transformers_audio, atol=1e-4),
             f"Max abs diff {(ov_audio - transformers_audio).abs().max()}",
         )
+
+        # an explicit text mode never opens speech, even where a speech marker is the most likely next token
+        config = ov_model.config
+        language_model_step = ov_model._language_model_step
+
+        def favor_speech_markers(*args, **kwargs):
+            logits, hidden = language_model_step(*args, **kwargs)
+            logits = logits.clone()
+            logits[..., config.mixed_start_token_id] += 1e4
+            logits[..., config.audio_start_token_id] += 1e3
+            return logits, hidden
+
+        ov_model._language_model_step = favor_speech_markers
+        ov_outputs = ov_model.generate(
+            **inputs, generation_mode="text", max_new_tokens=8, do_sample=False, return_dict_in_generate=True
+        )
+        generated = ov_outputs.sequences[0, inputs["input_ids"].shape[1] :].tolist()
+        self.assertNotIn(config.mixed_start_token_id, generated)
+        self.assertNotIn(config.audio_start_token_id, generated)
+        self.assertEqual(int(ov_outputs.audio_lengths[0]), 0)
         del transformers_model
         del ov_model
         gc.collect()
