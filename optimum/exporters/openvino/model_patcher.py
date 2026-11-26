@@ -14554,7 +14554,7 @@ class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        from transformers.cache_utils import LinearAttentionCacheLayerMixin
+        from transformers.cache_utils import DynamicLayer, LinearAttentionCacheLayerMixin
 
         from openvino.frontend.pytorch import ConversionExtension, ModuleExtension
 
@@ -14564,6 +14564,9 @@ class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
         text_config = model.config.text_config
         layer_types = text_config.layer_types
         num_linear_attn_layers = layer_types.count("linear_attention")
+
+        def update_full_attention_cache(layer, key_states, value_states, *args, **kwargs):
+            return DynamicLayer.update(layer, key_states, value_states)
 
         # Packs the flat model inputs into a transformers `DynamicCache` and unpacks it into the outputs, so that the
         # KV-cache, conv and recurrent states are graph inputs / outputs. `cache_params` is grouped by layer type:
@@ -14581,6 +14584,8 @@ class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
                 else:
                     layer.keys, layer.values = next(key_states), next(value_states)
                     layer.is_initialized = True
+                    if type(layer) is DynamicLayer:
+                        layer.update = types.MethodType(update_full_attention_cache, layer)
 
             # (3, batch, seq) M-RoPE positions [T, H, W]
             outputs = text_model(
