@@ -1425,6 +1425,16 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             torch.allclose(frames_output, expected, atol=1e-4),
             f"max abs diff {(frames_output - expected).abs().max()}",
         )
+
+        labels = [
+            processor(text=f"Frame {i + 1}:", generation_mode="image", return_tensors="pt")["input_ids"]
+            for i in range(3)
+        ]
+        labeled = ov_model.generate_frames(**inputs, **kwargs, frame_labels=labels)
+        self.assertEqual(labeled.shape, expected.shape)
+        self.assertFalse(torch.equal(labeled, expected), "frame_labels have no effect")
+        with self.assertRaises(ValueError):
+            ov_model.generate_frames(**inputs, **kwargs, frame_labels=labels[:2])
         del ov_model
         gc.collect()
 

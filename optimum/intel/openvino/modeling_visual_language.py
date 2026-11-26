@@ -9637,6 +9637,7 @@ class _OVBagelForCausalLM(OVModelForVisualCausalLM):
         timestep_shift: float = 3.0,
         seed: int = 0,
         output_type: str = "pt",
+        frame_labels: Optional[List] = None,
         **kwargs,
     ) -> torch.Tensor:
         r"""
@@ -9651,6 +9652,8 @@ class _OVBagelForCausalLM(OVModelForVisualCausalLM):
         Takes the processor outputs for the frames, oldest first, in `generation_mode="image"`. `guidance_scale` and
         `image_guidance_scale` of 1.0 disable the text and image guidance. Frame k starts from
         `numpy.random.RandomState(seed + k).randn` noise, as `openvino_genai.BagelPipeline.generate_frames`.
+        `frame_labels` are the `input_ids` of one text per input frame (e.g. `processor(text="Frame 1 (t-2):")`), each
+        added before the frame of its window slot, as `BagelImageGenerationConfig.frame_labels` of GenAI.
 
         Returns `[num_frames, 3, height, width]` images at the VAE resolution of the frames (`output_type="pt"`), or
         `[num_frames, num_tokens, patch_dim]` latent tokens (`output_type="latent"`).
@@ -9666,6 +9669,9 @@ class _OVBagelForCausalLM(OVModelForVisualCausalLM):
         )
         if len(num_patches) != vae_pixel_values.shape[0]:
             raise ValueError(f"Got {vae_pixel_values.shape[0]} VAE frames but {len(num_patches)} ViT frames.")
+        labels = list(frame_labels or [])
+        if labels and len(labels) != len(num_patches):
+            raise ValueError(f"Got {len(labels)} frame labels for {len(num_patches)} frames.")
         height, width = vae_pixel_values.shape[-2:]
         if height % self.latent_downsample or width % self.latent_downsample:
             raise ValueError(f"height and width must be multiples of {self.latent_downsample}")
@@ -9706,12 +9712,16 @@ class _OVBagelForCausalLM(OVModelForVisualCausalLM):
         cfg_img = None
         if use_text_cfg and image_guidance_scale > 1.0:
             cfg_img = self._new_context()
+            for label in labels:
+                self._add_text(cfg_img, label)
             self._add_text(cfg_img, input_ids)
 
         generated = []
         for k in range(num_frames):
             cond = self._new_context()
-            for tokens, embeds in window:
+            for i, (tokens, embeds) in enumerate(window):
+                if labels:
+                    self._add_text(cond, labels[i])
                 self._latent_block(cond, tokens, 0.0, latent_position_ids, True)
                 if embeds is not None:
                     self._add_image_block(cond, self._image_block(embeds))
