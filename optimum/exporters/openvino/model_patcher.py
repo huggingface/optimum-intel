@@ -3143,10 +3143,6 @@ def maira_vision_embed_forward(self, pixel_values):
 
 
 class LlavaImageEmbeddingModelPatcher(ModelPatcher):
-    # Traced forward used to export the image-embedding submodel. Subclasses
-    # only override this to reuse the identical save/restore logic below.
-    _patched_forward = staticmethod(llava_vision_embed_forward)
-
     def __init__(
         self,
         config: "OpenVINOConfig",
@@ -3154,7 +3150,7 @@ class LlavaImageEmbeddingModelPatcher(ModelPatcher):
         model_kwargs: Dict[str, Any],
     ):
         model.__orig_forward = model.forward
-        model.forward = types.MethodType(type(self)._patched_forward, model)
+        model.forward = types.MethodType(llava_vision_embed_forward, model)
         super().__init__(config, model, model_kwargs)
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -4167,10 +4163,20 @@ def _minicpmv4_6_vision_embeddings_forward(self, pixel_values, position_ids, win
     return merged_tokens
 
 
-class MiniCPMV4_6VisionEmbeddingsModelPatcher(LlavaImageEmbeddingModelPatcher):
-    # Reuses the image-embedding save/restore logic from
-    # LlavaImageEmbeddingModelPatcher; only the traced forward differs.
-    _patched_forward = staticmethod(_minicpmv4_6_vision_embeddings_forward)
+class MiniCPMV4_6VisionEmbeddingsModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any],
+    ):
+        self._original_forward = model.forward
+        model.forward = types.MethodType(_minicpmv4_6_vision_embeddings_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._original_forward
 
 
 class LlavaQwen2ImageEmbeddingsModelPatcher(ModelPatcher):
