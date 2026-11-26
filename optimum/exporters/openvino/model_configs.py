@@ -3844,7 +3844,7 @@ class MiniCPMV4_7OpenVINOConfig(BaseVLMOpenVINOConfig):
     """
 
     MIN_TRANSFORMERS_VERSION = "5.18.0"
-    MAX_TRANSFORMERS_VERSION = None
+    MAX_TRANSFORMERS_VERSION = "5.23.0"
     SUPPORTED_BEHAVIORS = [model_type.value for model_type in MiniCPMV4_7ConfigBehavior]
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyMiniCPMV4_7VisionInputGenerator,)
