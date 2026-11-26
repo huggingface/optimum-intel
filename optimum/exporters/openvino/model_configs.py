@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional, Union
 
 import torch
 from transformers import AutoConfig, PretrainedConfig, PreTrainedModel
+from transformers.utils import cached_file
 
 from optimum.exporters.openvino.base import (
     ConfigBehavior,
@@ -8146,6 +8147,18 @@ class LFM3OmniOpenVINOConfig(BaseVLMOpenVINOConfig):
             behavior = Lfm3OmniConfigBehavior(behavior)
         self._behavior = behavior
         self._orig_config = config
+        model_dir = config._name_or_path
+        if model_dir and not cached_file(
+            model_dir, "config.json", subfolder="audio_tokenizer", _raise_exceptions_for_missing_entries=False
+        ):
+            # a checkpoint without audio_tokenizer/ has no Liquid Codec, so it cannot produce speech
+            logger.warning(f"{model_dir} has no audio_tokenizer/: exporting without the speech output models")
+            speech_output = {
+                Lfm3OmniConfigBehavior.AUDIO_OUT_EMBEDDINGS.value,
+                Lfm3OmniConfigBehavior.DEPTH_DECODER.value,
+                Lfm3OmniConfigBehavior.AUDIO_DECODER.value,
+            }
+            self.SUPPORTED_BEHAVIORS = [b for b in self.SUPPORTED_BEHAVIORS if b not in speech_output]
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
