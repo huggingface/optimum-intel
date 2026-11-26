@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Type, Union
 
 import torch
-from huggingface_hub import HfApi, get_token, hf_hub_download
+from huggingface_hub import HfApi, get_token, hf_hub_download, snapshot_download
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from huggingface_hub.errors import OfflineModeIsEnabled
 from huggingface_hub.hf_api import file_exists
@@ -501,6 +501,13 @@ class _KokoroForTextToSpeech:
         # Check if model_name_or_path is a local directory
         model_path = Path(model_name_or_path)
         is_local_dir = model_path.is_dir()
+
+        # `KModel` only knows a fixed set of official repo ids (it indexes `KModel.MODEL_NAMES` by repo id),
+        # so any other Hub repo is downloaded and loaded as a local directory
+        if not is_local_dir and str(model_name_or_path) not in getattr(KModel, "MODEL_NAMES", {}):
+            model_path = Path(snapshot_download(repo_id=str(model_name_or_path), cache_dir=cache_dir, token=token))
+            model_name_or_path = str(model_path)
+            is_local_dir = True
 
         if is_local_dir:
             # For local directories, load KModel directly from local artifacts.
