@@ -32,7 +32,7 @@ INSTALL_REQUIRE = [
     "transformers>=4.51,<5.16",
     "setuptools",
     "huggingface-hub>=0.23.2,<2.0",
-    "nncf@git+https://github.com/openvinotoolkit/nncf.git@release_v340",
+    "nncf@git+https://github.com/openvinotoolkit/nncf.git@release_v350",
     "openvino>=2026.0",
     "openvino-tokenizers>=2026.0",
     "requests>=2.33,<3.0",
