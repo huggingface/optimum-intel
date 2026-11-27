@@ -19,11 +19,12 @@ from pathlib import Path
 import openvino as ov
 from openvino._offline_transformations import paged_attention_transformation
 from parameterized import parameterized
+from transformers import AutoConfig
 from utils_tests import MODEL_NAMES, OPENVINO_DEVICE, REMOTE_CODE_MODELS, get_supported_model_for_library
 
 from optimum.exporters.openvino import main_export
 from optimum.intel.openvino.utils import TemporaryDirectory
-from optimum.intel.utils.import_utils import is_qwen_tts_available
+from optimum.intel.utils.import_utils import is_qwen_tts_available, is_transformers_version
 
 
 # The submodels of each architecture that continuous batching can serve, i.e. whose stateful
@@ -49,6 +50,40 @@ ARCH_TO_CB_COMPATIBLE_SUBMODELS = {
         "task": "image-text-to-text",
         "submodels": ("language_model",),
     },
+    # dense hybrid Gated DeltaNet + full attention language model
+    "minicpm_ocr": {
+        "task": "image-text-to-text",
+        "submodels": ("language_model",),
+    },
+    # hybrid Mamba2 + attention language model: the Mamba2 layers become PagedSelectiveSSM / PagedCausalConv1D. The
+    # Mamba2 fusions (FuseSSMLoop, SelectiveSSMFusion) only run in this transformation, not on the stateful model
+    "nemotron_h": {
+        "task": "text-generation-with-past",
+        "submodels": ("model",),
+        # one of each per Mamba2 layer of the tiny model
+        "paged_ops": {"PagedSelectiveSSM": 2, "PagedCausalConv1D": 2},
+    },
+    # hybrid short conv + full / sliding window attention: besides SDPA -> PagedAttention (with the sliding window
+    # extracted from the attention mask), the conv layers become PagedCausalConv1D
+    "lfm3": {
+        "task": "text-generation-with-past",
+        "submodels": ("model",),
+        "paged_causal_conv1d": True,
+        "sliding_window": True,
+    },
+    "lfm3_vl": {
+        "task": "image-text-to-text",
+        "submodels": ("language_model",),
+        "paged_causal_conv1d": True,
+        "sliding_window": True,
+    },
+    # the language model of LFM3-Omni is the LFM3 one with an extra hidden_states output (for the depth decoder)
+    "lfm3_omni": {
+        "task": "image-text-to-text",
+        "submodels": ("language_model",),
+        "paged_causal_conv1d": True,
+        "sliding_window": True,
+    },
 }
 
 # Architectures exported through an out-of-tree library are not part of the transformers set, so
@@ -60,6 +95,15 @@ ARCH_TO_CB_COMPATIBLE_SUBMODELS = {
     for arch, expected in ARCH_TO_CB_COMPATIBLE_SUBMODELS.items()
     if arch in get_supported_model_for_library("transformers") or _NON_TRANSFORMERS_ARCHS.get(arch, False)
 }
+
+# DFlash and DSpark drafts have the model type of their backbone decoder (qwen3), so they are added after the
+# transformers filter above. The Markov head model of DFlash v2 and DSpark drafts has no key/value cache.
+_DFLASH_DRAFT_SUBMODELS = {"task": "text-generation-with-past", "submodels": ("model",)}
+ARCH_TO_CB_COMPATIBLE_SUBMODELS["qwen3_dflash"] = _DFLASH_DRAFT_SUBMODELS
+ARCH_TO_CB_COMPATIBLE_SUBMODELS["qwen3_dflash2"] = _DFLASH_DRAFT_SUBMODELS
+# DSpark drafts describe their RoPE in the rope_parameters of transformers 5, which earlier versions misread.
+if is_transformers_version(">=", "5"):
+    ARCH_TO_CB_COMPATIBLE_SUBMODELS["minicpmv4_7_dspark"] = _DFLASH_DRAFT_SUBMODELS
 
 # The inputs through which a PagedAttention graph receives the paged cache and its layout.
 _PAGED_ATTENTION_INPUTS = (
@@ -83,12 +127,48 @@ class OVContinuousBatchingCompatibilityTest(unittest.TestCase):
                 task=expected["task"],
                 trust_remote_code=model_arch in REMOTE_CODE_MODELS,
             )
+            config = AutoConfig.from_pretrained(tmpdir, trust_remote_code=model_arch in REMOTE_CODE_MODELS)
+            # the layer types of the language model (LFM3-Omni nests it in text_config)
+            config = config.get_text_config()
             for submodel in expected["submodels"]:
                 with self.subTest(submodel=submodel):
                     model = core.read_model(Path(tmpdir) / f"openvino_{submodel}.xml")
-                    self._assert_paged_attention_applicable(core, model, f"{model_arch}/{submodel}")
+                    label = f"{model_arch}/{submodel}"
+                    self._assert_paged_attention_applicable(core, model, label, expected.get("paged_ops", {}))
+                    if expected.get("paged_causal_conv1d"):
+                        self._assert_paged_causal_conv1d(model, config, label)
+                    if expected.get("sliding_window"):
+                        self._assert_sliding_window(model, config, label)
 
-    def _assert_paged_attention_applicable(self, core, model, label):
+    def _assert_paged_causal_conv1d(self, model, config, label):
+        # every short conv layer keeps its state in a paged conv state table
+        num_conv_layers = config.layer_types.count("conv")
+        ops = Counter(op.get_type_name() for op in model.get_ops())
+        self.assertEqual(
+            ops["PagedCausalConv1D"], num_conv_layers, f"{label}: not every conv became PagedCausalConv1D"
+        )
+        input_names = {name for port in model.inputs for name in port.get_names()}
+        for layer in range(num_conv_layers):
+            self.assertIn(f"conv_state_table.{layer}", input_names, f"{label}: missing conv state table {layer}")
+
+    def _assert_sliding_window(self, model, config, label):
+        # PagedAttention input 10 is the sliding window: 0 for full attention layers, the window size otherwise
+        attention_layer_types = [layer_type for layer_type in config.layer_types if layer_type != "conv"]
+        expected = [config.sliding_window if t == "sliding_attention" else 0 for t in attention_layer_types]
+        windows = []
+        for op in model.get_ordered_ops():
+            if op.get_type_name() == "PagedAttentionExtension":
+                window = op.input_value(10).get_node()
+                # the extracted window is a constant, possibly wrapped by shape / precision adjustments
+                while window.get_type_name() in ("Convert", "Squeeze", "Unsqueeze", "Reshape"):
+                    window = window.input_value(0).get_node()
+                self.assertEqual(
+                    window.get_type_name(), "Constant", f"{label}: the sliding window of {op.get_friendly_name()}"
+                )
+                windows.append(int(window.get_data().flatten()[0]))
+        self.assertEqual(windows, expected, f"{label}: unexpected PagedAttention sliding windows")
+
+    def _assert_paged_attention_applicable(self, core, model, label, paged_ops):
         num_sdpa = Counter(op.get_type_name() for op in model.get_ops())["ScaledDotProductAttention"]
         self.assertGreater(num_sdpa, 0, f"{label}: no ScaledDotProductAttention to convert")
 
@@ -102,6 +182,8 @@ class OVContinuousBatchingCompatibilityTest(unittest.TestCase):
         self.assertEqual(
             ops["PagedAttentionExtension"], num_sdpa, f"{label}: not every SDPA became a PagedAttention block"
         )
+        for op_type, count in paged_ops.items():
+            self.assertEqual(ops[op_type], count, f"{label}: expected {count} {op_type} blocks, got {ops[op_type]}")
         # The paged cache replaces the stateful one entirely. The state operations are what is checked:
         # the transformation removes them but leaves their variables registered on the model.
         self.assertEqual(ops["ReadValue"] + ops["Assign"], 0, f"{label}: key/value cache state left in the graph")

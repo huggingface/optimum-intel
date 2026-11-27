@@ -14,6 +14,7 @@
 
 import copy
 import enum
+import functools
 import logging
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Union
@@ -38,6 +39,15 @@ from optimum.exporters.openvino.config import (
     TextSeq2SeqOpenVINOConfig,
     VisionOpenVINOConfig,
 )
+from optimum.exporters.openvino.dflash_utils import (
+    DFLASH2_MARKOV_HEAD_TYPE,
+    DFLASH_ARCHITECTURES,
+    MarkovHeadSpec,
+    config_architecture,
+    dflash_candidate_position_offset,
+    markov_head_spec,
+    parse_and_validate_dflash_config,
+)
 from optimum.exporters.openvino.input_generators import (
     AquilaDummyPastKeyValuesGenerator,
     ChatGLM2DummyPastKeyValuesGenerator,
@@ -52,6 +62,8 @@ from optimum.exporters.openvino.input_generators import (
     DummyGemma4UnifiedVisionInputGenerator,
     DummyGemma4VisionInputGenerator,
     DummyKokoroInputGenerator,
+    DummyLfm3AudioInputGenerator,
+    DummyLfm3VlInputGenerator,
     DummyLLavaMultiModalProjectorInputGenerator,
     DummyMiniCPMV4_7LMInputGenerator,
     DummyMiniCPMV4_7VisionInputGenerator,
@@ -63,6 +75,7 @@ from optimum.exporters.openvino.input_generators import (
     DummyQwen2VLLMInputGenerator,
     DummyQwen2VLVisionEmbedInputGenerator,
     DummyQwen3_5LMInputGenerator,
+    DummyQwen3_5SequenceClassificationLMInputGenerator,
     DummyQwen3OmniMoeAudioInputGenerator,
     DummyQwen3OmniMoeCode2WavInputGenerator,
     DummyQwen3OmniMoeLMInputGenerator,
@@ -99,8 +112,10 @@ from optimum.exporters.openvino.input_generators import (
     Gemma4DummyPastKeyValuesGenerator,
     GPTBigCodeDummyPastKeyValuesGenerator,
     Lfm2DummyPastKeyValuesGenerator,
+    Lfm3DummyPastKeyValuesGenerator,
     LTX2AudioVaeDecoderDummyInputGenerator,
     LTX2ConnectorsDummyInputGenerator,
+    LTX2DurationHeadDummyInputGenerator,
     LTX2TransformerDummyInputGenerator,
     LTX2VaeDummyInputGenerator,
     LTX2VocoderDummyInputGenerator,
@@ -109,6 +124,7 @@ from optimum.exporters.openvino.input_generators import (
     LTXVaeDummyInputGenerator,
     LTXVaeEncoderDummyInputGenerator,
     MambaCacheDummyInputGenerator,
+    NemotronHDummyPastKeyValuesGenerator,
     OVFalconDummyPastKeyValuesGenerator,
     OVMiniCPM3DummyPastKeyValuesGenerator,
     PooledProjectionsDummyInputGenerator,
@@ -163,6 +179,16 @@ from optimum.exporters.openvino.model_patcher import (
     KokoroModelPatcher,
     Lfm2ModelPatcher,
     Lfm2MoeModelPatcher,
+    Lfm3ModelPatcher,
+    Lfm3OmniAudioDecoderPatcher,
+    Lfm3OmniAudioEncoderPatcher,
+    Lfm3OmniAudioOutEmbeddingsPatcher,
+    Lfm3OmniDepthDecoderPatcher,
+    Lfm3OmniLanguageModelPatcher,
+    Lfm3OmniVisionEmbeddingsPatcher,
+    Lfm3VlLanguageModelPatcher,
+    Lfm3VlNestedLanguageModelPatcher,
+    Lfm3VlVisionEmbeddingsPatcher,
     Llama4ImageEmbeddingsModelPatcher,
     Llama4TextModelPatcher,
     LlavaImageEmbeddingModelPatcher,
@@ -188,7 +214,9 @@ from optimum.exporters.openvino.model_patcher import (
     ModelPatcher,
     MPTModelPatcher,
     MuseGlimmerLanguageModelPatcher,
+    MuseGlimmerTextEmbeddingsModelPatcher,
     MuseGlimmerVisionEmbeddingsModelPatcher,
+    NemotronHModelPatcher,
     OVDecoderModelPatcher,
     OVSeq2SeqModelPatcher,
     Phi3ModelPatcher,
@@ -202,6 +230,7 @@ from optimum.exporters.openvino.model_patcher import (
     Qwen2MoEPatcher,
     Qwen2VLLanguageModelPatcher,
     Qwen2VLVisionEmbMergerPatcher,
+    Qwen3_5ForSequenceClassificationLanguageModelPatcher,
     Qwen3_5ModelPatcher,
     Qwen3_5MoeModelPatcher,
     Qwen3_5MoeMTPModelPatcher,
@@ -247,12 +276,14 @@ from optimum.exporters.openvino.model_patcher import (
 from optimum.exporters.openvino.utils import (
     GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE,
     GRANITEMOEHYBRID_MAMBA_LAYER_TYPE,
-    is_ltx2_3_transformer_config,
+    LTX2_ROPE_INPUTS,
+    has_ltx2_extended_guidance_inputs,
 )
 from optimum.exporters.tasks import TasksManager
 from optimum.intel.utils.import_utils import (
     is_diffusers_available,
     is_diffusers_version,
+    is_torch_version,
     is_transformers_version,
 )
 from optimum.utils.input_generators import (
@@ -419,6 +450,8 @@ def init_model_configs():
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS.setdefault("image-to-video", {})
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["image-to-video"]["ltx-video"] = "LTXImageToVideoPipeline"
         TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["image-to-video"]["ltx2"] = "LTX2ImageToVideoPipeline"
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS.setdefault("video-to-video", {})
+        TasksManager._DIFFUSERS_TASKS_TO_MODEL_MAPPINGS["video-to-video"]["ltx2"] = "LTX2ConditionPipeline"
 
 
 init_model_configs()
@@ -499,27 +532,16 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
             use_past_in_inputs=use_past_in_inputs,
             preprocessors=preprocessors,
         )
-        archs = getattr(config, "architectures", None)
-        self.dflash = False
-        if isinstance(archs, list) and len(archs) > 0:
-            if "dflash" in archs[0].lower():
-                self.dflash = True
-                self.candidate_position_offset = 1
-            elif archs[0] == "Qwen3DSparkModel":
-                if getattr(config, "markov_rank", 0) != 0:
-                    raise ValueError(
-                        "Exporting Qwen3DSparkModel is only supported for DFlash mode (markov_rank == 0). "
-                        "DSpark export is not supported yet (got markov_rank != 0)."
-                    )
-                self.dflash = True
-                self.candidate_position_offset = 0
+        self.dflash = config_architecture(config) in DFLASH_ARCHITECTURES
+        self.dflash2 = False
+        self.markov_head = None
         if self.dflash:
-            model_type = getattr(config, "model_type", "")
-            if model_type != "qwen3":
-                raise ValueError(f"DFlash export supports only Qwen3-based draft models, got model_type={model_type}.")
-            dflash_config = getattr(config, "dflash_config", None) or config.to_dict()
-            if not dflash_config.get("target_layer_ids", []):
-                raise ValueError("DFlash export requires non-empty target_layer_ids in dflash_config or config.")
+            self.dflash2 = parse_and_validate_dflash_config(config).version == 2
+            self.candidate_position_offset = dflash_candidate_position_offset(config)
+            self.markov_head = markov_head_spec(config)
+            if self.markov_head is not None:
+                # The Markov head is exported as a separate model next to the draft backbone.
+                self.SUPPORTED_BEHAVIORS = ["markov_head"]
             # DFlash draft checkpoints still advertise model_type="qwen3"; the
             # architecture and dflash_config fields identify the draft variant.
             self.DUMMY_INPUT_GENERATOR_CLASSES = (
@@ -528,20 +550,20 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
                 Eagle3DummyGenerator,
                 GemmaDummyPastKeyValuesGenerator,
             )
-            self.PAD_ATTENTION_MASK_TO_PAST = False
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         if self.dflash:
             common_inputs = super().inputs
             common_inputs.pop("input_ids", None)
-            common_inputs["inputs_embeds"] = {0: "batch_size", 1: "block_size"}
-            common_inputs["hidden_states"] = {0: "batch_size", 1: "context_length"}
-            common_inputs["position_ids"] = {0: "batch_size", 1: "context_length + block_size"}
+            # Every per-token input covers the new rows [context; block]: hidden_states is read in the context
+            # rows and inputs_embeds in the block rows, as token_type_ids (0 context, 1 block) tells.
+            for name in ("inputs_embeds", "hidden_states", "position_ids", "token_type_ids"):
+                common_inputs[name] = {0: "batch_size", 1: "sequence_length"}
             if self.use_past_in_inputs:
-                mask_length = "past_sequence_length + context_length + block_size"
+                mask_length = "past_sequence_length + sequence_length"
             else:
-                mask_length = "context_length + block_size"
+                mask_length = "sequence_length"
             common_inputs["attention_mask"] = {0: "batch_size", 1: mask_length}
             return common_inputs
         if self.task in ["feature-extraction"]:
@@ -559,42 +581,88 @@ class Qwen3OpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
             common_outputs = super().outputs
             common_outputs.pop("logits", None)
             return {
-                "last_hidden_state": {0: "batch_size", 1: "draft_sequence_length"},
+                "last_hidden_state": {0: "batch_size", 1: "sequence_length"},
                 **common_outputs,
             }
         return super().outputs
 
-    def overwrite_shape_and_generate_input(
-        self, dummy_input_gen: DummyInputGenerator, input_name: str, framework: str, input_shapes: dict
-    ):
-        if self.dflash and input_name in {"inputs_embeds", "hidden_states", "position_ids", "attention_mask"}:
-            sequence_length = dummy_input_gen.sequence_length
-            block_length = sequence_length + 1
-            if input_name == "inputs_embeds":
-                dummy_input_gen.sequence_length = block_length
-            elif input_name == "hidden_states":
-                dummy_input_gen.sequence_length = sequence_length
-            elif input_name == "position_ids":
-                dummy_input_gen.sequence_length = sequence_length + block_length
-            else:
-                if self.use_past_in_inputs:
-                    dummy_input_gen.sequence_length = sequence_length * 2 + block_length
-                else:
-                    dummy_input_gen.sequence_length = sequence_length + block_length
-            dummy_input = dummy_input_gen.generate(
-                input_name, framework=framework, int_dtype=self.int_dtype, float_dtype=self.float_dtype
+    def with_behavior(self, behavior: str):
+        if behavior == "markov_head" and self.markov_head is not None:
+            return MarkovHeadOpenVINOConfig(
+                self._config,
+                self.markov_head,
+                task="feature-extraction",
+                int_dtype=self.int_dtype,
+                float_dtype=self.float_dtype,
+                preprocessors=self._preprocessors,
             )
-            dummy_input_gen.sequence_length = sequence_length
-            return dummy_input
-        return super().overwrite_shape_and_generate_input(dummy_input_gen, input_name, framework, input_shapes)
+        raise ValueError(f"Unsupported behavior {behavior} for {type(self).__name__}.")
 
-    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
-        super().add_past_key_values(inputs_or_outputs, direction)
-        if self.dflash and direction == "outputs":
-            for axes in inputs_or_outputs.values():
-                for axis, name in axes.items():
-                    if name == "past_sequence_length + sequence_length":
-                        axes[axis] = "past_sequence_length + context_length"
+    def get_model_for_behavior(self, model, behavior: str):
+        if behavior == "markov_head" and self.markov_head is not None:
+            return model.markov_head_for_export(self.markov_head.top_k)
+        raise ValueError(f"Unsupported behavior {behavior} for {type(self).__name__}.")
+
+
+class MarkovHeadOpenVINOConfig(OpenVINOConfig):
+    """The Markov-head model of a DFlash draft (a DSpark draft or a DFlash-2 draft), exported next to its backbone.
+
+    The Top-K candidate scorer takes the draft rows of several blocks packed back to back (see
+    `MarkovHeadForExport`). edge_scores already include each candidate's unary score, so the runtime must not add
+    the draft logit again. A DSpark head also holds the dense Markov step over the same weights; the DFlash-2 head has no dense
+    step and gates its transitions by the draft hidden states of the scored rows.
+    """
+
+    DUMMY_INPUT_GENERATOR_CLASSES = (Eagle3DummyGenerator,)
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    # Tells `convert.py` to stamp the DFlash RT-info block onto the exported graph,
+    # the Markov head block rather than the draft one, and to skip the decoder runtime options.
+    dflash = True
+    markov_head_model = True
+
+    def __init__(
+        self,
+        config: PretrainedConfig,
+        markov_head: MarkovHeadSpec,
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        preprocessors: list[Any] | None = None,
+    ):
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        self.markov_head = markov_head
+        self.gated = markov_head.markov_head_type == DFLASH2_MARKOV_HEAD_TYPE
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        inputs = {
+            "draft_logits": {0: "num_draft_rows"},  # draft logits of all blocks
+            "anchor_token_ids": {0: "num_draft_blocks"},  # token before each block
+            # start row of each block, so that blocks of different lengths can be scored in one call
+            "subsequence_begins": {0: "num_draft_blocks + 1"},
+        }
+        if self.gated:
+            inputs["draft_hidden_states"] = {0: "num_draft_rows"}  # draft hidden states of all blocks
+        else:
+            inputs["prev_token_ids"] = {0: "num_prev_tokens"}  # previous tokens
+        return inputs
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        outputs = {
+            "edge_scores": {0: "num_draft_rows"},  # candidate scores given the previous row's candidates
+            "candidate_ids": {0: "num_draft_rows"},  # Top-K candidate tokens of each row
+        }
+        if not self.gated:
+            # logit bias for each previous token
+            outputs = {"markov_bias": {0: "num_prev_tokens"}, **outputs}
+        return outputs
 
 
 @register_in_tasks_manager(
@@ -2469,21 +2537,87 @@ class MuseGlimmerTextOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     _MODEL_PATCHER = MuseGlimmerLanguageModelPatcher
 
 
+@register_in_tasks_manager(
+    "muse_glimmer_assistant",
+    *["text-generation", "text-generation-with-past"],
+    library_name="transformers",
+)
+class MuseGlimmerAssistantOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
+    """Export config for the MuseGlimmer DFlash drafter (``Muse-Glimmer-30B-assistant``).
+
+    Follows the I/O of the Qwen3 DFlash draft export: every per-token input covers the new rows
+    [context; block]. ``hidden_states`` (the target's hidden states at ``target_layer_ids``, concatenated
+    on the last axis) is read in the context rows and ``inputs_embeds`` (the target's raw token
+    embeddings) in the block rows, as ``token_type_ids`` (0 context, 1 block) tells. The model emits
+    ``last_hidden_state`` for every row. Neither the embedding table nor the lm_head is part of the
+    export - the drafter borrows the target's.
+
+    Unlike the Qwen3 drafters this is a native transformers architecture, so it runs the native modules;
+    only the forward is restructured for export (see ``MuseGlimmerAssistantDFlashForCausalLM``).
+    """
+
+    MIN_TRANSFORMERS_VERSION = "5.15.0"
+    DUMMY_INPUT_GENERATOR_CLASSES = (
+        DummyTextInputGenerator,
+        Eagle3VLMDummyGenerator,
+        Eagle3DummyGenerator,
+        MistralDummyPastKeyValuesGenerator,
+    )
+    DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    _MODEL_PATCHER = OVDecoderModelPatcher
+    # Tells `convert.py` to stamp the DFlash RT-info block onto the exported graph.
+    dflash = True
+
+    def __init__(self, config: PretrainedConfig, *args, **kwargs):
+        # The drafter has neither an embedding table nor an lm_head, so its config carries
+        # no `vocab_size`. `DummyTextInputGenerator` requires one at construction even
+        # though `input_ids` is dropped from the exported inputs, so supply a value that
+        # is guaranteed to cover the drafter's own mask token.
+        if getattr(config, "vocab_size", None) is None:
+            config.vocab_size = int(getattr(config, "mask_token_id", 0)) + 1
+        super().__init__(config, *args, **kwargs)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = super().inputs
+        common_inputs.pop("input_ids", None)
+        for name in ("inputs_embeds", "hidden_states", "position_ids", "token_type_ids"):
+            common_inputs[name] = {0: "batch_size", 1: "sequence_length"}
+        if self.use_past_in_inputs:
+            mask_length = "past_sequence_length + sequence_length"
+        else:
+            mask_length = "sequence_length"
+        common_inputs["attention_mask"] = {0: "batch_size", 1: mask_length}
+        return common_inputs
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        common_outputs = super().outputs
+        common_outputs.pop("logits", None)
+        return {
+            "last_hidden_state": {0: "batch_size", 1: "sequence_length"},
+            **common_outputs,
+        }
+
+
 @register_in_tasks_manager("muse_glimmer", *["image-text-to-text"], library_name="transformers")
 class MuseGlimmerOpenVINOConfig(BaseVLMOpenVINOConfig):
     """Multi-part OpenVINO export config for the native MuseGlimmer VLM.
 
-    Splits the model into three IR files: the language model (consumes merged
-    ``inputs_embeds``), the token-embedding table, and the vision stack (vision
-    tower -> adapter -> projection -> perception norm). MuseGlimmer has a nested
-    config (``text_config`` / ``vision_config``), so the standard nested-VLM
-    ``with_behavior`` handles the language / text-embeddings parts; only the vision
-    part is customised for the native flattened-patch + ``image_grid_thw`` inputs.
+    Splits the model into three IR files: a raw token-embedding table, a raw projected
+    vision stack (vision tower -> adapter -> projection), and a language model that
+    normalizes their merged ``inputs_embeds``. MuseGlimmer has a nested config
+    (``text_config`` / ``vision_config``); only its raw text embeddings and flattened
+    vision inputs require custom behavior.
     """
 
     DUMMY_INPUT_GENERATOR_CLASSES = (DummyMuseGlimmerVisionInputGenerator,)
     NORMALIZED_CONFIG_CLASS = NormalizedVisionConfig
     MIN_TRANSFORMERS_VERSION = "5.15.0"
+    # TODO: transformers 5.16+ changed the MuseGlimmer vision RoPE and attention shapes that the vision-embeddings
+    # patcher replicates; port the patcher, then drop this cap
+    MAX_TRANSFORMERS_VERSION = "5.15.1"
 
     def __init__(
         self,
@@ -2507,6 +2641,19 @@ class MuseGlimmerOpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior == VLMConfigBehavior.VISION_EMBEDDINGS and hasattr(config, "vision_config"):
             self._config = config.vision_config
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
+
+    def with_behavior(
+        self,
+        behavior: Union[str, VLMConfigBehavior],
+    ):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        export_config = super().with_behavior(behavior)
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            export_config._MODEL_PATCHER = MuseGlimmerTextEmbeddingsModelPatcher
+            export_config.MIN_TRANSFORMERS_VERSION = self.MIN_TRANSFORMERS_VERSION
+        return export_config
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
@@ -3388,10 +3535,18 @@ class LTX2ConnectorsOpenVINOConfig(VaeEncoderOpenVINOConfig):
 
     @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
-        return {
+        inputs = {
             "text_encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
             "attention_mask": {0: "batch_size", 1: "sequence_length"},
         }
+        # As in the transformer, RoPE enters as precomputed (cos, sin), one pair per connector: the angles
+        # reach ~1.6e4 rad, which an f16 inference precision cannot resolve in the graph. The "split" layout
+        # is (batch, heads, tokens, dim), the "interleaved" one (batch, tokens, dim).
+        seq_axis = 2 if getattr(self._normalized_config.config, "rope_type", "interleaved") == "split" else 1
+        for connector in ("video_connector", "audio_connector"):
+            for name in (f"{connector}_rotary_cos", f"{connector}_rotary_sin"):
+                inputs[name] = {0: "batch_size", seq_axis: "sequence_length"}
+        return inputs
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
@@ -3400,6 +3555,27 @@ class LTX2ConnectorsOpenVINOConfig(VaeEncoderOpenVINOConfig):
             "audio_text_embedding": {0: "batch_size", 1: "connector_sequence_length"},
             "connector_attention_mask": {0: "batch_size", 1: "connector_sequence_length"},
         }
+
+
+@register_in_tasks_manager("ltx2-duration-head", *["semantic-segmentation"], library_name="diffusers")
+class LTX2DurationHeadOpenVINOConfig(VaeEncoderOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (LTX2DurationHeadDummyInputGenerator,)
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        # Both connector streams, in the order `LTX2DurationHead.forward` declares them. The head
+        # accepts either one alone, but the pipeline always has both, and an IR cannot make an input
+        # optional.
+        return {
+            "video_tokens": {0: "batch_size", 1: "video_sequence_length"},
+            "audio_tokens": {0: "batch_size", 1: "audio_sequence_length"},
+        }
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        # Seconds, not frames: the `.exp()` off the log-duration regression is inside the graph, and
+        # the grid snapping that turns seconds into a frame count is pure Python on the caller's side.
+        return {"duration": {0: "batch_size"}}
 
 
 @register_in_tasks_manager("ltx2-video-transformer", *["semantic-segmentation"], library_name="diffusers")
@@ -3435,19 +3611,22 @@ class LTX2VideoTransformerOpenVINOConfig(SanaTransformerOpenVINOConfig):
             "audio_encoder_hidden_states": {0: "batch_size", 1: "sequence_length"},
             "encoder_attention_mask": {0: "batch_size", 1: "sequence_length"},
             "audio_encoder_attention_mask": {0: "batch_size", 1: "sequence_length"},
-            "width": {},
-            "height": {},
-            "num_frames": {},
-            "fps": {},
-            "audio_num_frames": {},
             "timestep": {0: "batch_size", 1: "video_sequence_length"},
             "audio_timestep": {0: "batch_size"},
-            "video_coords": {0: "batch_size", 2: "video_sequence_length"},
-            "audio_coords": {0: "batch_size", 2: "audio_sequence_length"},
         }
-        if is_ltx2_3_transformer_config(self._normalized_config.config):
+        # RoPE enters as precomputed cos/sin rather than coordinates; see `LTX2_ROPE_INPUTS`. The
+        # "split" layout is (batch, heads, tokens, dim), the "interleaved" one (batch, tokens, dim).
+        config = self._normalized_config.config
+        seq_axis = 2 if getattr(config, "rope_type", "interleaved") == "split" else 1
+        for module_name, names in LTX2_ROPE_INPUTS.items():
+            seq_name = (
+                "video_sequence_length" if module_name in ("rope", "cross_attn_rope") else "audio_sequence_length"
+            )
+            for name in names:
+                inputs[name] = {0: "batch_size", seq_axis: seq_name}
+        if has_ltx2_extended_guidance_inputs(config):
             inputs["cross_modality_gate"] = {}
-        if getattr(self._normalized_config.config, "perturbed_attn", False):
+        if getattr(config, "perturbed_attn", False):
             inputs["stg_perturbation_mask"] = {}
         return inputs
 
@@ -3693,15 +3872,25 @@ class MiniCPMV4_7OpenVINOConfig(BaseVLMOpenVINOConfig):
             self._normalized_config = self.NORMALIZED_CONFIG_CLASS(self._config)
 
     @property
+    def use_vit_merger(self) -> bool:
+        # the "4x" downsample mode skips the ViT window merger, see MiniCPMV4_6Model.get_image_features
+        return self._orig_config.downsample_mode != "4x"
+
+    @property
     def inputs(self) -> Dict[str, Dict[int, str]]:
         if self._behavior == MiniCPMV4_7ConfigBehavior.VISION_EMBEDDINGS:
-            return {
+            inputs = {
                 "pixel_values": {3: "patches_width"},
                 "position_ids": {0: "num_patches"},
-                "window_index": {0: "num_patches"},
-                "merge_index": {0: "num_merged_patches"},
             }
+            if self.use_vit_merger:
+                inputs["window_index"] = {0: "num_patches"}
+            inputs["merge_index"] = {0: "num_merged_patches"}
+            return inputs
         return {}
+
+    def _create_dummy_input_generator_classes(self, **kwargs):
+        return super()._create_dummy_input_generator_classes(use_vit_merger=self.use_vit_merger, **kwargs)
 
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
@@ -3779,6 +3968,17 @@ class MiniCPMV4_7OpenVINOConfig(BaseVLMOpenVINOConfig):
         if self._behavior == MiniCPMV4_7ConfigBehavior.VISION_EMBEDDINGS:
             return MiniCPMV4_7VisionEmbeddingsPatcher(self, model, model_kwargs)
         return super().patch_model_for_export(model, model_kwargs)
+
+
+@register_in_tasks_manager("minicpm_ocr", *["image-text-to-text"], library_name="transformers")
+class MiniCPMOcrOpenVINOConfig(MiniCPMV4_7OpenVINOConfig):
+    """
+    MiniCPM-OCR keeps the MiniCPM-V 4.6 architecture: the vision tower, ViT window merger and MLP merger of MiniCPM-V
+    4.7 on top of a dense Qwen3.5 language model with plain 1D RoPE instead of canvas M-RoPE. The graphs are the
+    MiniCPM-V 4.7 ones; the checkpoints use the "4x" downsample mode, which leaves the ViT window merger out.
+    """
+
+    MIN_TRANSFORMERS_VERSION = "5.21.0"
 
 
 class Phi3VisionConfigBehavior(str, enum.Enum):
@@ -6728,6 +6928,26 @@ class GraniteMoeHybridOpenVINOConfig(MambaOpenVINOConfig):
         return common_inputs
 
 
+@register_in_tasks_manager(
+    "nemotron_h", *["text-generation", "text-generation-with-past"], library_name="transformers"
+)
+class NemotronHOpenVINOConfig(GraniteMoeHybridOpenVINOConfig):
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, NemotronHDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = NemotronHDummyPastKeyValuesGenerator
+    _MODEL_PATCHER = NemotronHModelPatcher
+    # first transformers release with native NemotronH MLP layers, used by the dense Nemotron-H models
+    MIN_TRANSFORMERS_VERSION = "5.6.0"
+
+    def __init__(self, config: PretrainedConfig, *args, **kwargs):
+        # the MoE experts are exported with grouped MatMul, which needs torch.nn.functional.grouped_mm
+        if is_torch_version("<", "2.10.0"):
+            raise ValueError(
+                f"NemotronH export requires torch >= 2.10.0, but torch {torch.__version__} is installed. "
+                "Please upgrade torch."
+            )
+        super().__init__(config, *args, **kwargs)
+
+
 @register_in_tasks_manager("audio-spectrogram-transformer", *["feature-extraction", "audio-classification"])
 class ASTOpenVINOConfig(OpenVINOConfig):
     NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
@@ -6959,6 +7179,16 @@ class RobertaOpenVINOConfig(DistilBertOpenVINOConfig):
 @register_in_tasks_manager("camembert", *COMMON_TEXT_TASKS)
 class CamembertOpenVINOConfig(DistilBertOpenVINOConfig):
     pass
+
+
+@register_in_tasks_manager(
+    "eurobert",
+    *["feature-extraction", "fill-mask", "text-classification", "token-classification"],
+)
+class EuroBertOpenVINOConfig(DistilBertOpenVINOConfig):
+    # EuroBERT is natively available in transformers starting with 5.3. The model takes `input_ids` and
+    # `attention_mask` only (default `position_ids` are built in the forward pass), same contract as DistilBert.
+    MIN_TRANSFORMERS_VERSION = "5.3"
 
 
 @register_in_tasks_manager("flaubert", *COMMON_TEXT_TASKS)
@@ -7669,6 +7899,315 @@ class LFM2MoeOpenVINOConfig(LFM2OpenVINOConfig):
     _MODEL_PATCHER = Lfm2MoeModelPatcher
 
 
+@functools.lru_cache(maxsize=1)
+def _warn_lfm3_remote_code_support():
+    # cached to warn once per process: an export creates these configs for every submodel
+    logger.warning(
+        "LFM3 models are temporarily supported through remote code. Once they are integrated into transformers, "
+        "optimum-intel will support them from transformers itself and support for the remote modeling code will be "
+        "removed."
+    )
+
+
+@register_in_tasks_manager(
+    "lfm3",
+    *[
+        "text-generation",
+        "text-generation-with-past",
+    ],
+    library_name="transformers",
+)
+class LFM3OpenVINOConfig(LFM2OpenVINOConfig):
+    # the LFM3 remote code (LiquidAI/LFM3-1.7B) supports this transformers version only
+    MIN_TRANSFORMERS_VERSION = "5.20.0"
+    MAX_TRANSFORMERS_VERSION = "5.20.0"
+    _MODEL_PATCHER = Lfm3ModelPatcher
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, Lfm3DummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = Lfm3DummyPastKeyValuesGenerator
+
+    def __init__(self, *args, **kwargs):
+        _warn_lfm3_remote_code_support()
+        super().__init__(*args, **kwargs)
+
+    def add_past_key_values(self, inputs_or_outputs: Dict[str, Dict[int, str]], direction: str):
+        if direction not in ["inputs", "outputs"]:
+            raise ValueError(f'direction must either be "inputs" or "outputs", but {direction} was given')
+
+        if direction == "inputs":
+            decoder_sequence_name = "past_sequence_length"
+            cache_name_prefix = "cache_params.past"
+        else:
+            decoder_sequence_name = "past_sequence_length + sequence_length"
+            cache_name_prefix = "cache_params.present"
+
+        layer_types = self._normalized_config.layer_types
+        num_conv_layers = layer_types.count("conv")
+        # both full_attention and sliding_attention layers keep a full KV cache
+        attention_layer_types = [layer_type for layer_type in layer_types if layer_type != "conv"]
+
+        for i in range(num_conv_layers):
+            inputs_or_outputs[f"{cache_name_prefix}.conv.{i}"] = {0: "batch_size"}
+
+        for i, layer_type in enumerate(attention_layer_types):
+            # The KV caches of sliding_attention layers get a distinct sequence dimension name: same-named dimensions
+            # share one symbol and the per-layer-type RoPE positions computed from them would be merged into a
+            # single Range, which SDPAToPagedAttention cannot rewire for both RoPE tables.
+            sequence_name = decoder_sequence_name
+            if layer_type == "sliding_attention":
+                sequence_name = decoder_sequence_name.replace("past_sequence_length", "past_sliding_sequence_length")
+            inputs_or_outputs[f"{cache_name_prefix}.key.{i}"] = {0: "batch_size", 2: sequence_name}
+            inputs_or_outputs[f"{cache_name_prefix}.value.{i}"] = {0: "batch_size", 2: sequence_name}
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        common_inputs = {
+            "input_ids": {0: "batch_size", 1: "sequence_length"},
+            # a distinct dimension name: same-named dimensions share one symbol in the converted model, and the mask
+            # is longer than input_ids at decoding steps
+            "attention_mask": {0: "batch_size", 1: "past_sequence_length + sequence_length"},
+        }
+        if self.use_past_in_inputs:
+            self.add_past_key_values(common_inputs, direction="inputs")
+        return common_inputs
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        dummy_inputs = super().generate_dummy_inputs(framework, **kwargs)
+        # the attention mask covers both the past and the new tokens, as passed by OVModelWithMambaForCausalLM
+        if self.use_past_in_inputs and "attention_mask" in dummy_inputs:
+            num_conv_layers = self._normalized_config.layer_types.count("conv")
+            past_length = dummy_inputs["cache_params"][num_conv_layers].shape[-2]
+            attention_mask = dummy_inputs["attention_mask"]
+            past_mask = torch.ones((attention_mask.shape[0], past_length), dtype=attention_mask.dtype)
+            dummy_inputs["attention_mask"] = torch.cat([past_mask, attention_mask], dim=-1)
+        return dummy_inputs
+
+
+@register_in_tasks_manager("lfm3_vl", *["image-text-to-text"], library_name="transformers")
+class LFM3VlOpenVINOConfig(BaseVLMOpenVINOConfig):
+    # the LFM3-VL remote code (LiquidAI/LFM3-VL-2B) supports this transformers version only
+    MIN_TRANSFORMERS_VERSION = "5.20.0"
+    MAX_TRANSFORMERS_VERSION = "5.20.0"
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyLfm3VlInputGenerator,)
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: VLMConfigBehavior = VLMConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        _warn_lfm3_remote_code_support()
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            behavior=behavior,
+            preprocessors=preprocessors,
+        )
+        self._orig_config = config
+        self._is_nested = getattr(config, "text_config", None) is not None
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {"pixel_values": {0: "num_images", 1: "grid_height", 2: "grid_width"}}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return {}
+        return {"last_hidden_state": {0: "num_images", 1: "num_image_tokens"}}
+
+    def with_behavior(
+        self,
+        behavior: Union[str, VLMConfigBehavior],
+    ):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        # the LFM3-VL partner checkpoint (lfm3-vl-1.9b-rl) keeps the language model config at the top level of the
+        # config, the released LFM3-VL (LiquidAI/LFM3-VL-2B) in a nested text_config, with the LFM3-Omni module layout
+        text_config = self._orig_config.text_config if self._is_nested else self._orig_config
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config("lfm3", text_config, self.int_dtype, self.float_dtype)
+
+        if behavior == VLMConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                "lfm3",
+                text_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=Lfm3VlNestedLanguageModelPatcher if self._is_nested else Lfm3VlLanguageModelPatcher,
+            )
+
+        return super().with_behavior(behavior)
+
+    def get_model_for_behavior(self, model, behavior: Union[str, VLMConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, VLMConfigBehavior):
+            behavior = VLMConfigBehavior(behavior)
+
+        if behavior == VLMConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.get_input_embeddings()
+            text_embedding.config = model.config
+            return text_embedding
+
+        # the language model patcher uses the tied text embeddings of the full model as lm_head
+        return model
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        if self._behavior != VLMConfigBehavior.VISION_EMBEDDINGS:
+            return super().patch_model_for_export(model, model_kwargs)
+        if self._is_nested:
+            return Lfm3OmniVisionEmbeddingsPatcher(self, model, model_kwargs)
+        return Lfm3VlVisionEmbeddingsPatcher(self, model, model_kwargs)
+
+
+class Lfm3OmniConfigBehavior(str, enum.Enum):
+    """
+    Sub-graphs LFM3-Omni is split into for export, paths are relative to `Lfm3OmniForConditionalGeneration`.
+    """
+
+    LANGUAGE = "language"  # model.language_model + lm_head, also returns the hidden states for the depth decoder
+    TEXT_EMBEDDINGS = "text_embeddings"  # model.language_model.embed_tokens
+    VISION_EMBEDDINGS = "vision_embeddings"  # model.vision_tower + model.multi_modal_projector
+    AUDIO_ENCODER = "audio_encoder"  # model.audio_encoder + model.audio_projector
+    AUDIO_OUT_EMBEDDINGS = "audio_out_embeddings"  # model.codebook_embedding, the embedding of speech frames
+    DEPTH_DECODER = "depth_decoder"  # model.depth_decoder, one MaskGIT pass over the codebooks of a speech frame
+    AUDIO_DECODER = "audio_decoder"  # the decoder of the Liquid Codec in the audio_tokenizer subfolder
+
+
+class Lfm3OmniLMConfigHelper(LMInputEmbedsConfigHelper):
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return _append_hidden_states_output(self.orig_export_config.outputs)
+
+
+@register_in_tasks_manager("lfm3_omni", *["image-text-to-text"], library_name="transformers")
+class LFM3OmniOpenVINOConfig(BaseVLMOpenVINOConfig):
+    # the LFM3-Omni remote code (LiquidAI/LFM3-Omni-2B) supports this transformers version only
+    MIN_TRANSFORMERS_VERSION = "5.20.0"
+    MAX_TRANSFORMERS_VERSION = "5.20.0"
+    SUPPORTED_BEHAVIORS = [behavior.value for behavior in Lfm3OmniConfigBehavior]
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyLfm3VlInputGenerator, DummyLfm3AudioInputGenerator)
+
+    _INPUTS = {
+        Lfm3OmniConfigBehavior.VISION_EMBEDDINGS: {
+            "pixel_values": {0: "num_images", 1: "grid_height", 2: "grid_width"}
+        },
+        Lfm3OmniConfigBehavior.AUDIO_ENCODER: {"input_features": {0: "batch_size", 2: "num_frames"}},
+        Lfm3OmniConfigBehavior.AUDIO_OUT_EMBEDDINGS: {"codes": {0: "num_frames"}},
+        Lfm3OmniConfigBehavior.DEPTH_DECODER: {
+            "hidden_states": {0: "batch_size"},
+            "codes": {0: "batch_size"},
+            "masked": {0: "batch_size"},
+        },
+        Lfm3OmniConfigBehavior.AUDIO_DECODER: {"audio_codes": {0: "batch_size", 2: "num_frames"}},
+    }
+    _OUTPUTS = {
+        Lfm3OmniConfigBehavior.VISION_EMBEDDINGS: {"last_hidden_state": {0: "num_images", 1: "num_image_tokens"}},
+        Lfm3OmniConfigBehavior.AUDIO_ENCODER: {"last_hidden_state": {0: "batch_size", 1: "num_audio_tokens"}},
+        Lfm3OmniConfigBehavior.AUDIO_OUT_EMBEDDINGS: {"inputs_embeds": {0: "num_frames"}},
+        Lfm3OmniConfigBehavior.DEPTH_DECODER: {"logits": {0: "batch_size"}},
+        Lfm3OmniConfigBehavior.AUDIO_DECODER: {"audio_values": {0: "batch_size", 1: "num_samples"}},
+    }
+    _PATCHERS = {
+        Lfm3OmniConfigBehavior.VISION_EMBEDDINGS: Lfm3OmniVisionEmbeddingsPatcher,
+        Lfm3OmniConfigBehavior.AUDIO_ENCODER: Lfm3OmniAudioEncoderPatcher,
+        Lfm3OmniConfigBehavior.AUDIO_OUT_EMBEDDINGS: Lfm3OmniAudioOutEmbeddingsPatcher,
+        Lfm3OmniConfigBehavior.DEPTH_DECODER: Lfm3OmniDepthDecoderPatcher,
+        Lfm3OmniConfigBehavior.AUDIO_DECODER: Lfm3OmniAudioDecoderPatcher,
+    }
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "feature-extraction",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: Lfm3OmniConfigBehavior = Lfm3OmniConfigBehavior.VISION_EMBEDDINGS,
+        preprocessors: Optional[List[Any]] = None,
+        **kwargs,
+    ):
+        _warn_lfm3_remote_code_support()
+        super().__init__(
+            config=config,
+            task=task,
+            int_dtype=int_dtype,
+            float_dtype=float_dtype,
+            preprocessors=preprocessors,
+        )
+        if isinstance(behavior, str) and not isinstance(behavior, Lfm3OmniConfigBehavior):
+            behavior = Lfm3OmniConfigBehavior(behavior)
+        self._behavior = behavior
+        self._orig_config = config
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        return copy.deepcopy(self._INPUTS.get(self._behavior, {}))
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        return copy.deepcopy(self._OUTPUTS.get(self._behavior, {}))
+
+    def with_behavior(self, behavior: Union[str, Lfm3OmniConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, Lfm3OmniConfigBehavior):
+            behavior = Lfm3OmniConfigBehavior(behavior)
+
+        text_config = self._orig_config.text_config
+        if behavior == Lfm3OmniConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config("lfm3", text_config, self.int_dtype, self.float_dtype)
+
+        if behavior == Lfm3OmniConfigBehavior.LANGUAGE:
+            internal_config = get_vlm_internal_text_generation_config(
+                "lfm3", text_config, self.int_dtype, self.float_dtype
+            )
+            config = Lfm3OmniLMConfigHelper(internal_config, patcher_cls=Lfm3OmniLanguageModelPatcher)
+            config._normalized_config = internal_config._normalized_config
+            return config
+
+        return self.__class__(
+            self._orig_config,
+            task=self.task,
+            int_dtype=self.int_dtype,
+            float_dtype=self.float_dtype,
+            behavior=behavior,
+            preprocessors=self._preprocessors,
+        )
+
+    def get_model_for_behavior(self, model, behavior: Union[str, Lfm3OmniConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, Lfm3OmniConfigBehavior):
+            behavior = Lfm3OmniConfigBehavior(behavior)
+
+        if behavior == Lfm3OmniConfigBehavior.TEXT_EMBEDDINGS:
+            text_embedding = model.get_input_embeddings()
+            text_embedding.config = model.config
+            return text_embedding
+
+        if behavior == Lfm3OmniConfigBehavior.AUDIO_DECODER:
+            # the Liquid Codec is a separate remote code model bundled in the audio_tokenizer subfolder
+            from transformers.dynamic_module_utils import get_class_from_dynamic_module
+
+            model_dir = model.config._name_or_path
+            codec_cls = get_class_from_dynamic_module("modeling_liquid_codec.LiquidCodecModel", model_dir)
+            return codec_cls.from_pretrained(model_dir, subfolder="audio_tokenizer", dtype=model.dtype).eval()
+
+        # the other parts are traced from the full model, the patchers pick their submodules
+        return model
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        model_kwargs = model_kwargs or {}
+        patcher_cls = self._PATCHERS.get(self._behavior)
+        if patcher_cls is None:
+            return super().patch_model_for_export(model, model_kwargs)
+        return patcher_cls(self, model, model_kwargs)
+
+
 @register_in_tasks_manager(
     "qwen3_5_text",
     *["text-generation", "text-generation-with-past"],
@@ -7885,6 +8424,57 @@ class Qwen3_5OpenVINOConfig(Qwen3VLOpenVINOConfig):
                 "qwen3_5_text", self._orig_config.text_config, self.int_dtype, self.float_dtype
             ).outputs
         raise Exception("Unknown Qwen3.5 behavior type.")
+
+
+@register_in_tasks_manager("qwen3_5", *["text-classification"], library_name="transformers")
+class Qwen3_5ForSequenceClassificationOpenVINOConfig(Qwen3_5OpenVINOConfig):
+    """
+    Qwen3_5ForSequenceClassification (e.g. reward models on the Qwen3.5 VLM): the Qwen3.5 vision and text embeddings
+    graphs, and a language model graph that ends in the `score` head instead of `lm_head`, giving the class logits of
+    every token (see `Qwen3_5ForSequenceClassificationLanguageModelPatcher`). The runtime reads them at the last non-pad
+    token, see `OVModelForVisualSequenceClassification`.
+    """
+
+    # the language model is exported with the transformers `DynamicCache`, whose linear attention layers keep their
+    # states by index since 5.14 (the layout `qwen3_5_gated_delta_net_forward` reads)
+    MIN_TRANSFORMERS_VERSION = "5.14.0"
+    MAX_TRANSFORMERS_VERSION = None
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # the MTP head drafts tokens for generation, a classifier has no use for it
+        self.SUPPORTED_BEHAVIORS = [
+            behavior for behavior in self.SUPPORTED_BEHAVIORS if behavior != QwenVLConfigBehavior.MTP.value
+        ]
+
+    def with_behavior(self, behavior: Union[str, QwenVLConfigBehavior]):
+        if isinstance(behavior, str) and not isinstance(behavior, QwenVLConfigBehavior):
+            behavior = QwenVLConfigBehavior(behavior)
+
+        if behavior == QwenVLConfigBehavior.TEXT_EMBEDDINGS:
+            return get_vlm_text_embeddings_config(
+                "qwen3_5_text",
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
+                max_transformers_version=self.MAX_TRANSFORMERS_VERSION,
+            )
+
+        if behavior == QwenVLConfigBehavior.LANGUAGE:
+            return get_vlm_text_generation_config(
+                "qwen3_5_text",
+                self._orig_config.text_config,
+                self.int_dtype,
+                self.float_dtype,
+                model_patcher=Qwen3_5ForSequenceClassificationLanguageModelPatcher,
+                dummy_input_generator=DummyQwen3_5SequenceClassificationLMInputGenerator,
+                inputs_update={"position_ids": {1: "batch_size", 2: "sequence_length"}},
+                min_transformers_version=self.MIN_TRANSFORMERS_VERSION,
+                max_transformers_version=self.MAX_TRANSFORMERS_VERSION,
+            )
+
+        return super().with_behavior(behavior)
 
 
 class Qwen3_5MTPOpenVINOConfig(OpenVINOConfigWithPast):

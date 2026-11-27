@@ -29,6 +29,14 @@ from transformers.utils import is_torch_available
 from openvino import Model, save_model
 from openvino.exceptions import OVTypeError
 from openvino.tools.ovc import convert_model
+from optimum.exporters.openvino.dflash_utils import (
+    DFLASH2_GPU_MIN_ACTIVATIONS_SCALE_FACTOR,
+    DFLASH2_OPTIONAL_CONFIG_FIELDS,
+    DFLASH_ARCHITECTURES,
+    MarkovHeadSpec,
+    config_architecture,
+    parse_and_validate_dflash_config,
+)
 from optimum.exporters.openvino.utils import (
     MULTI_MODAL_TEXT_GENERATION_MODELS,
     ONNX_SUPPORTED_ARCHITECTURES,
@@ -115,17 +123,17 @@ def _set_runtime_options(
         _, sub_export_config = models_and_export_configs[model_name]
         if not hasattr(sub_export_config, "runtime_options"):
             sub_export_config.runtime_options = {}
-        if (
+        # A Markov head is not a decoder; the plugins apply these options when they compile a model.
+        if getattr(sub_export_config, "markov_head_model", False):
+            continue
+        uses_decoder_runtime_options = (
             "text-generation" in task
             or ("image-text-to-text" in task and model_name == "language_model")
             or getattr(sub_export_config, "stateful", False)
-        ):
+        )
+        if uses_decoder_runtime_options and not getattr(sub_export_config, "dflash2", False):
             sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "8.0"
-        if not quantized_model and (
-            "text-generation" in task
-            or ("image-text-to-text" in task and model_name == "language_model")
-            or getattr(sub_export_config, "stateful", False)
-        ):
+        if not quantized_model and uses_decoder_runtime_options:
             sub_export_config.runtime_options["KV_CACHE_PRECISION"] = "f16"
         # Gemma vision embedders produce activations large enough to overflow in
         # fp16, so scale them down at runtime the same way the language model does.
@@ -138,6 +146,21 @@ def _set_runtime_options(
         # misses them. Without the scale the code predictor logits overflow fp16 on GPU.
         if library_name == "qwen3_tts" and model_name in ("talker_model", "code_predictor_model"):
             sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "8.0"
+        # The Fun-ASR-Nano decoder overflows fp16 on GPU and only emits token 0 without activation
+        # scaling. The GPU plugin ignores the default 8.0 written above for LLM-like (KV-cache) models,
+        # so use a non-default value that the plugin applies (openvinotoolkit/openvino#39233).
+        if (
+            library_name == "funasr"
+            and model_name == DECODER_NAME
+            and getattr(getattr(sub_export_config, "_config", None), "export_model_type", None) == "fun_asr"
+        ):
+            sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "4.0"
+        # SenseVoiceSmall overflows fp16 on GPU (NaN logits); avoid the 8.0 exporter default, as for Fun-ASR-Nano.
+        if (
+            library_name == "funasr"
+            and getattr(getattr(sub_export_config, "_config", None), "export_model_type", None) == "sense_voice"
+        ):
+            sub_export_config.runtime_options["ACTIVATIONS_SCALE_FACTOR"] = "4.0"
 
 
 def _save_model(
@@ -156,21 +179,32 @@ def _save_model(
 
     if getattr(config, "eagle3", False):
         model = _add_eagle3_mode_to_rt_info(model)
-    if getattr(config, "dflash", False):
+    is_dflash = getattr(config, "dflash", False)
+    if is_dflash:
         model = _add_dflash_mode_to_rt_info(
             model,
             config._config,
             candidate_position_offset=getattr(config, "candidate_position_offset", 1),
+            markov_head=getattr(config, "markov_head", None),
+            markov_head_model=getattr(config, "markov_head_model", False),
         )
-    if source_model is not None and getattr(getattr(source_model, "config", None), "model_type", None) in {
-        "qwen3",
-        "qwen3_moe",
-        "qwen3_5",
-        "qwen3_5_moe",
-        "qwen3_5_text",
-        "qwen3_5_moe_text",
-        "gemma4",
-    }:
+    if (
+        source_model is not None
+        and not is_dflash
+        and getattr(getattr(source_model, "config", None), "model_type", None)
+        in {
+            "qwen3",
+            "qwen3_moe",
+            "qwen3_5",
+            "qwen3_5_moe",
+            "qwen3_5_text",
+            "qwen3_5_moe_text",
+            "gemma4",
+            "muse_glimmer",
+            "muse_glimmer_text",
+            "minicpmv4_7",
+        }
+    ):
         add_hidden_states_rt_info(source_model, model, config)
 
     save_model(model, path, compress_to_fp16)
@@ -698,6 +732,12 @@ def export_from_model(
     **kwargs_shapes,
 ):
     model_kwargs = model_kwargs or {}
+    # `stateful` is narrowed below by what *this* model's task supports. Nested exports (LTX-2.5's prompt
+    # enhancer) are a different task, so they need the caller's request, not the narrowed value.
+    requested_stateful = stateful
+    # IRs written by nested `export_from_model` calls, which the caller still needs to see (auto
+    # compression sizes every returned path) but which are not this model's own components.
+    nested_submodel_paths = []
 
     if ov_config is not None and ov_config.quantization_config and not is_nncf_available():
         raise ImportError(
@@ -926,6 +966,17 @@ def export_from_model(
         if safety_checker is not None:
             safety_checker.save_pretrained(output.joinpath("safety_checker"))
 
+        # Kept out of `files_subpaths`, which doubles as `output_names` for this model's own
+        # `export_models` call below and must stay one name per component.
+        nested_submodel_paths += _export_ltx2_prompt_enhancer(
+            model,
+            output,
+            ov_config=ov_config,
+            stateful=requested_stateful,
+            trust_remote_code=trust_remote_code,
+            device=device,
+        )
+
         model.save_config(output)
 
     _set_runtime_options(
@@ -948,7 +999,7 @@ def export_from_model(
         library_name=library_name,
     )
 
-    return files_subpaths
+    return files_subpaths + nested_submodel_paths
 
 
 def export_tokenizer(
@@ -1033,24 +1084,62 @@ def _add_eagle3_mode_to_rt_info(model: Model):
     return model
 
 
-def _add_dflash_mode_to_rt_info(model: Model, hf_config: "PretrainedConfig", candidate_position_offset: int) -> Model:
+def _add_dflash_mode_to_rt_info(
+    model: Model,
+    hf_config: "PretrainedConfig",
+    candidate_position_offset: int,
+    markov_head: Optional[MarkovHeadSpec] = None,
+    markov_head_model: bool = False,
+) -> Model:
     """
     Add DFlash metadata to DFlash draft model.
 
     Marks model as DFlash draft model and adds DFlash configuration to the model including
-    mask token id, target layer ids, and candidate position offset.
-    """
-    try:
-        model.set_rt_info("True", ["dflash_mode"])
-        dflash_config = getattr(hf_config, "dflash_config", None) or hf_config.to_dict()
-        if "mask_token_id" in dflash_config:
-            model.set_rt_info(str(dflash_config["mask_token_id"]), ["dflash", "mask_token_id"])
-        if "target_layer_ids" in dflash_config:
-            model.set_rt_info(",".join(map(str, dflash_config["target_layer_ids"])), ["dflash", "target_layer_ids"])
-        model.set_rt_info(str(candidate_position_offset), ["dflash", "candidate_position_offset"])
-    except Exception:
-        pass
+    mask token id, block size, target layer ids, and candidate position offset. A draft with a Markov head
+    (`markov_head`: a DSpark draft with markov_rank > 0, or a DFlash-2 draft, whose candidate selector is a gated
+    Markov head) also gets markov_rank and markov_head_type, which tell runtimes to load its Markov head model.
 
+    With `markov_head_model`, the model is the Markov head model of the draft instead. It is not marked
+    as a draft (dflash_mode marks the draft backbone), and dflash/top_k is the K of its TopK. It repeats
+    markov_rank and markov_head_type so that runtimes can check that it belongs to the draft backbone next
+    to it. Runtimes find its computations and read their results by port name, so a port whose meaning
+    changes needs a new name.
+    """
+    if markov_head_model:
+        model.set_rt_info(str(markov_head.top_k), ["dflash", "top_k"])
+        model.set_rt_info(str(markov_head.markov_rank), ["dflash", "markov_rank"])
+        model.set_rt_info(markov_head.markov_head_type, ["dflash", "markov_head_type"])
+        model.set_rt_info(str(hf_config.vocab_size), ["dflash", "vocab_size"])
+        return model
+
+    raw_config = getattr(hf_config, "dflash_config", None) or hf_config.to_dict()
+    # Other drafters with a DFlash export config (Muse-Glimmer) get the keys their config has, unvalidated.
+    dflash, dflash_config = None, raw_config
+    if config_architecture(hf_config) in DFLASH_ARCHITECTURES:
+        dflash = parse_and_validate_dflash_config(hf_config)
+        dflash_config = dflash.values
+    model.set_rt_info("True", ["dflash_mode"])
+    if "mask_token_id" in dflash_config:
+        model.set_rt_info(str(dflash_config["mask_token_id"]), ["dflash", "mask_token_id"])
+    if "target_layer_ids" in dflash_config:
+        model.set_rt_info(",".join(map(str, dflash_config["target_layer_ids"])), ["dflash", "target_layer_ids"])
+    if "block_size" in raw_config:
+        model.set_rt_info(str(raw_config["block_size"]), ["dflash", "block_size"])
+    model.set_rt_info(str(candidate_position_offset), ["dflash", "candidate_position_offset"])
+    if dflash is not None and dflash.version == 2:
+        model.set_rt_info("2", ["dflash", "version"])
+        model.set_rt_info(
+            str(DFLASH2_GPU_MIN_ACTIVATIONS_SCALE_FACTOR),
+            ["dflash", "gpu_min_activations_scale_factor"],
+        )
+        for name in DFLASH2_OPTIONAL_CONFIG_FIELDS:
+            value = dflash_config.get(name)
+            if value is not None:
+                model.set_rt_info(str(value), ["dflash", name])
+    # The Markov keys also let runtimes detect a draft that is loaded without its Markov head model.
+    if markov_head is not None:
+        model.set_rt_info(str(markov_head.markov_rank), ["dflash", "markov_rank"])
+        model.set_rt_info(markov_head.markov_head_type, ["dflash", "markov_head_type"])
     return model
 
 
@@ -1125,6 +1214,11 @@ def _get_multi_modal_submodels_and_export_configs(
         model.config.sub_GN = model.model.embed_tokens_extend.image_embed.sub_img_feature_extensor.tolist()
         model.config.num_img_tokens = model.model.embed_tokens_extend.image_embed.num_img_tokens
 
+    if task == "text-classification":
+        # the checkpoint config can name the generative class (e.g. ms-swift seq_cls checkpoints of Qwen3.5), while the
+        # exported language model ends in the classification head
+        model.config.architectures = [model.__class__.__name__]
+
     if hasattr(model, "image_newline"):
         model.config.image_newline = model.image_newline.tolist()
     if hasattr(model, "model") and hasattr(model.model, "image_newline"):
@@ -1195,6 +1289,15 @@ def _get_submodels_and_export_configs(
         exporter,
     )
     stateful_per_model = [stateful] * len(models_for_export)
+
+    # The Markov head of a DFlash-2 or DSpark draft is exported next to the draft backbone.
+    if "markov_head" in getattr(export_config, "SUPPORTED_BEHAVIORS", []):
+        models_for_export["markov_head_model"] = (
+            export_config.get_model_for_behavior(model, "markov_head"),
+            export_config.with_behavior("markov_head"),
+        )
+        # Only models with a KV cache are stateful; the Markov head has none.
+        stateful_per_model.append(False)
 
     # VLM Eagle3 models need stateful KV cache despite model_type being "llama"
     # (not in MULTI_MODAL_TEXT_GENERATION_MODELS) and task being "image-text-to-text".
@@ -1425,6 +1528,46 @@ def get_ltx_video_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     return models_for_export
 
 
+def _export_ltx2_prompt_enhancer(model, output: Path, **export_kwargs) -> List[str]:
+    """Export LTX-2.5's optional prompt enhancer into `prompt_enhancer/`, returning its IR subpaths.
+
+    The enhancer is a `Gemma4ForConditionalGeneration`, which optimum-intel already exports as an
+    `image-text-to-text` VLM: several IRs (language model plus text, per-layer text, vision and audio
+    embeddings) rather than the one-IR-per-subfolder shape `get_ltx2_video_models_for_export` can
+    express. So it is exported by a nested `export_from_model` call into its own subfolder instead of
+    joining the component map.
+
+    Returns an empty list for LTX-2.0/2.3 and for 2.5 checkpoints that register no enhancer, leaving
+    their exports untouched.
+    """
+    if not model.__class__.__name__.startswith("LTX2"):
+        return []
+    prompt_enhancer = getattr(model, "prompt_enhancer", None)
+    if prompt_enhancer is None:
+        return []
+
+    import torch
+
+    subfolder = "prompt_enhancer"
+    logger.info(f"Exporting the LTX-2 prompt enhancer to {subfolder}/")
+    # Tracing a 16-bit module without this fails outright ("expected m1 and m2 to have the same dtype"),
+    # and the real enhancer is bf16. Decided off the enhancer's own weights, as `main_export` does for a
+    # top-level export, rather than inherited from the pipeline's dtype.
+    if getattr(prompt_enhancer, "dtype", None) in (torch.float16, torch.bfloat16):
+        export_kwargs["patch_16bit_model"] = True
+    # The processor is saved separately at the pipeline root, but the enhancer folder needs its own copy
+    # to load as a standalone VLM.
+    preprocessors = [p for p in (getattr(model, "processor", None),) if p is not None]
+    enhancer_paths = export_from_model(
+        model=prompt_enhancer,
+        output=output / subfolder,
+        task="image-text-to-text",
+        preprocessors=preprocessors,
+        **export_kwargs,
+    )
+    return [os.path.join(subfolder, path) for path in enhancer_paths]
+
+
 def get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype):
     models_for_export = {}
 
@@ -1473,6 +1616,22 @@ def get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     )
     models_for_export["transformer"] = (transformer, transformer_export_config)
 
+    # Duration head. Registered from LTX-2.5 onwards; LTX-2.0/2.3 have no such module, so this leaves
+    # their export sets untouched.
+    duration_head = getattr(pipeline, "duration_head", None)
+    if duration_head is not None:
+        duration_head_config_constructor = TasksManager.get_exporter_config_constructor(
+            model=duration_head,
+            exporter=exporter,
+            library_name="diffusers",
+            task="semantic-segmentation",
+            model_type="ltx2-duration-head",
+        )
+        duration_head_export_config = duration_head_config_constructor(
+            duration_head.config, int_dtype=int_dtype, float_dtype=float_dtype
+        )
+        models_for_export["duration_head"] = (duration_head, duration_head_export_config)
+
     # VAE Decoder
     vae_decoder = copy.deepcopy(pipeline.vae)
     if hasattr(pipeline.vae, "latents_mean") and pipeline.vae.latents_mean is not None:
@@ -1499,7 +1658,7 @@ def get_ltx2_video_models_for_export(pipeline, exporter, int_dtype, float_dtype)
     vae_decoder_export_config.runtime_options = {"ACTIVATIONS_SCALE_FACTOR": "8.0"}
     models_for_export["vae_decoder"] = (vae_decoder, vae_decoder_export_config)
 
-    # VAE Encoder (needed for image-to-video conditioning; harmless for text-to-video, which won't load it)
+    # VAE Encoder (needed for image-to-video and video-to-video conditioning; harmless for text-to-video, which won't load it)
     vae_encoder = copy.deepcopy(pipeline.vae)
     vae_encoder.forward = lambda sample: {"latent_parameters": vae_encoder.encode(x=sample)["latent_dist"].parameters}
     vae_encoder_config_constructor = TasksManager.get_exporter_config_constructor(

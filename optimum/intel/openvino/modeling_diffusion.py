@@ -65,6 +65,7 @@ from optimum.utils import (
 )
 
 from ...exporters.openvino import main_export
+from ...exporters.openvino.utils import LTX2_ROPE_INPUTS, build_ltx2_rope_modules, compute_ltx2_rope_inputs
 from ..utils.import_utils import is_diffusers_version
 from .configuration import OVConfig, OVQuantizationConfigBase, OVQuantizationMethod, OVWeightQuantizationConfig
 from .loaders import OVTextualInversionLoaderMixin
@@ -94,10 +95,15 @@ else:
     LTXImageToVideoPipeline = object
 
 if is_diffusers_version(">=", "0.38.0"):
-    from diffusers import LTX2ImageToVideoPipeline, LTX2Pipeline
+    from diffusers import LTX2ConditionPipeline, LTX2ImageToVideoPipeline, LTX2Pipeline
 else:
     LTX2Pipeline = object
     LTX2ImageToVideoPipeline = object
+    LTX2ConditionPipeline = object
+
+if is_diffusers_version(">=", "0.40.0"):
+    # LTX-2.5 onwards. Imported for `predict_num_frames`, which `OVModelDurationHead` reuses verbatim.
+    from diffusers.pipelines.ltx2 import LTX2DurationHead
 
 if is_diffusers_version(">=", "0.29.0"):
     from diffusers import StableDiffusion3Img2ImgPipeline, StableDiffusion3Pipeline
@@ -160,6 +166,8 @@ DIFFUSION_MODEL_TEXT_ENCODER_I2I_SUBFOLDER = "text_encoder_i2i"
 DIFFUSION_MODEL_CONNECTORS_SUBFOLDER = "connectors"
 DIFFUSION_MODEL_AUDIO_VAE_DECODER_SUBFOLDER = "audio_vae_decoder"
 DIFFUSION_MODEL_VOCODER_SUBFOLDER = "vocoder"
+DIFFUSION_MODEL_DURATION_HEAD_SUBFOLDER = "duration_head"
+DIFFUSION_MODEL_PROMPT_ENHANCER_SUBFOLDER = "prompt_enhancer"
 
 core = Core()
 
@@ -189,6 +197,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             "connectors": os.path.join(DIFFUSION_MODEL_CONNECTORS_SUBFOLDER, OV_XML_FILE_NAME),
             "audio_vae_decoder": os.path.join(DIFFUSION_MODEL_AUDIO_VAE_DECODER_SUBFOLDER, OV_XML_FILE_NAME),
             "vocoder": os.path.join(DIFFUSION_MODEL_VOCODER_SUBFOLDER, OV_XML_FILE_NAME),
+            "duration_head": os.path.join(DIFFUSION_MODEL_DURATION_HEAD_SUBFOLDER, OV_XML_FILE_NAME),
         }
         return models_paths
 
@@ -210,6 +219,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         connectors: Optional[openvino.Model] = None,
         audio_vae_decoder: Optional[openvino.Model] = None,
         vocoder: Optional[openvino.Model] = None,
+        duration_head: Optional[openvino.Model] = None,
         # optional pipeline submodels
         tokenizer: Optional[CLIPTokenizer] = None,
         tokenizer_2: Optional[CLIPTokenizer] = None,
@@ -308,6 +318,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
         self.connectors = None
         self.audio_vae_decoder = None
         self.vocoder = None
+        self.duration_head = None
         # We wrap the VAE Decoder & Encoder in a single object to simulate diffusers API
         self.vae = OVModelVae(decoder=self.vae_decoder, encoder=self.vae_encoder)
 
@@ -435,6 +446,11 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             if config_path.is_file():
                 shutil.copyfile(config_path, save_path / CONFIG_NAME)
 
+        # LTX-2.5's prompt enhancer is a whole VLM in its own subfolder, not an `OVPipelinePart`, so it
+        # saves itself rather than going through the component loop above.
+        if getattr(self, "prompt_enhancer", None) is not None:
+            self.prompt_enhancer.save_pretrained(save_directory / DIFFUSION_MODEL_PROMPT_ENHANCER_SUBFOLDER)
+
         if self.tokenizer is not None:
             self.tokenizer.save_pretrained(save_directory / "tokenizer")
         if self.tokenizer_2 is not None:
@@ -520,6 +536,7 @@ class OVDiffusionPipeline(OVBaseModel, DiffusionPipeline):
             "connectors": connectors_file_name or default_file_name,
             "audio_vae_decoder": audio_vae_decoder_file_name or default_file_name,
             "vocoder": vocoder_file_name or default_file_name,
+            "duration_head": default_file_name,
         }
 
         if not os.path.isdir(str(model_id)):
@@ -1217,6 +1234,7 @@ class OVPipelinePart(OVModelHostMixin, ConfigMixin, CacheMixin):
         self.model_name = model_name
         self.parent_pipeline = parent_pipeline
         self.request = None if not parent_pipeline._compile_only else self.model
+
         self.ov_config = parent_pipeline.ov_config
 
         if isinstance(parent_pipeline.model_save_dir, TemporaryDirectory):
@@ -1761,9 +1779,34 @@ class OVModelQwenImage21Transformer(OVPipelinePart):
         return (sample,)
 
 
+def _check_ltx2_rope_inputs(part: OVPipelinePart, required_inputs):
+    # LTX-2 exports made before RoPE became host-computed (cos, sin) graph inputs take coordinates instead,
+    # which the current wrappers no longer feed. Fail at load time with what to do, rather than at the first
+    # inference with an OpenVINO "port not found" error.
+    input_names = {name for inp in part.model.inputs for name in inp.get_names()}
+    missing = sorted(set(required_inputs) - input_names)
+    if missing:
+        raise ValueError(
+            f"The LTX-2 {part.model_name} at {part.model_save_dir} was exported with an older version of "
+            f"optimum-intel and is no longer supported: it is missing the RoPE inputs {missing}. "
+            "Please re-export the model with `optimum-cli export openvino`."
+        )
+
+
 class OVModelTransformerLTX2(OVPipelinePart):
-    # Class-level, so the unsupported-feature notice below is emitted once per process.
+    # Class-level, so the unsupported-feature notices below are emitted once per process.
     _warned_no_cross_modality_gate = False
+    _warned_no_cross_timestep_false = False
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _check_ltx2_rope_inputs(self, [name for names in LTX2_ROPE_INPUTS.values() for name in names])
+        # Weight-free rotary modules of the reference transformer. The pipeline uses `rope` and
+        # `audio_rope` to prepare the coordinates, and the (cos, sin) transformer inputs are computed
+        # from all four here, on the host, in fp32/fp64.
+        self._rope_modules = build_ltx2_rope_modules(self.config)
+        self.rope = self._rope_modules["rope"]
+        self.audio_rope = self._rope_modules["audio_rope"]
 
     def forward(
         self,
@@ -1787,6 +1830,7 @@ class OVModelTransformerLTX2(OVPipelinePart):
         isolate_modalities: bool = False,
         spatio_temporal_guidance_blocks: Optional[List[int]] = None,
         perturbation_mask: Optional[torch.Tensor] = None,
+        use_cross_timestep: bool = True,
         attention_kwargs: Optional[Dict[str, Any]] = None,
         return_dict: bool = True,
         **kwargs,
@@ -1805,13 +1849,30 @@ class OVModelTransformerLTX2(OVPipelinePart):
             if value is not None and not torch.equal(torch.as_tensor(value), torch.as_tensor(audio_timestep)):
                 raise ValueError(
                     f"`{name}` differs from the scalar timestep, which the exported LTX-2 transformer "
-                    "cannot represent (the graph was traced with them tied together). This happens "
-                    "with `use_cross_timestep=True`, which the OpenVINO export does not support."
+                    "cannot represent (the graph was traced with them tied together)."
                 )
 
-        # T2V passes a scalar timestep [B]; the IR expects [B, S]. Broadcast to match.
+        # The export traces `use_cross_timestep=True`, the diffusers pipelines' default. False only changes the
+        # result when the video timestep varies across tokens, and the IR cannot follow it there.
+        if (
+            not use_cross_timestep
+            and timestep is not None
+            and timestep.ndim == 2
+            and not torch.equal(timestep, timestep[:, :1].expand_as(timestep))
+            and not self._warned_no_cross_timestep_false
+        ):
+            logger.warning(
+                "`use_cross_timestep=False` is not supported by the exported LTX-2 transformer, which was traced "
+                "with `use_cross_timestep=True`, so the cross-modality noise level is used instead."
+            )
+            OVModelTransformerLTX2._warned_no_cross_timestep_false = True
+
+        # T2V passes a scalar timestep [B]. The IR takes a per-token [B, S] timestep, which I2V needs (its
+        # conditioning frames are already denoised), but a [B, 1] one broadcasts over the tokens. Feeding that
+        # computes the AdaLN modulation once per sample instead of for every token, which saves ~9 GiB of GPU
+        # memory for LTX-2.3 at 640x480x17.
         if timestep is not None and timestep.ndim == 1 and self._timestep_rank == 2:
-            timestep = timestep.unsqueeze(-1).expand(-1, hidden_states.shape[1]).contiguous()
+            timestep = timestep.unsqueeze(-1)
 
         # `share_inputs=True` reads raw buffers, so stride-0 views (e.g. `t.expand(batch)`) must be materialized.
         if timestep is not None:
@@ -1837,22 +1898,18 @@ class OVModelTransformerLTX2(OVPipelinePart):
             model_inputs["encoder_attention_mask"] = encoder_attention_mask
         if audio_encoder_attention_mask is not None:
             model_inputs["audio_encoder_attention_mask"] = audio_encoder_attention_mask
-        if num_frames is not None:
-            model_inputs["num_frames"] = num_frames
-        if height is not None:
-            model_inputs["height"] = height
-        if width is not None:
-            model_inputs["width"] = width
-        if fps is not None:
-            if not isinstance(fps, torch.Tensor):
-                fps = torch.tensor(float(fps))
-            model_inputs["fps"] = fps
-        if audio_num_frames is not None:
-            model_inputs["audio_num_frames"] = audio_num_frames
-        if video_coords is not None:
-            model_inputs["video_coords"] = video_coords
-        if audio_coords is not None:
-            model_inputs["audio_coords"] = audio_coords
+
+        # Mirror the reference transformer, which builds the coordinates when they are not given.
+        batch_size = hidden_states.shape[0]
+        if video_coords is None:
+            video_coords = self.rope.prepare_video_coords(
+                batch_size, num_frames, height, width, hidden_states.device, fps=24.0 if fps is None else fps
+            )
+        if audio_coords is None:
+            audio_coords = self.audio_rope.prepare_audio_coords(
+                batch_size, audio_num_frames, audio_hidden_states.device
+            )
+        model_inputs.update(compute_ltx2_rope_inputs(self._rope_modules, video_coords, audio_coords))
 
         # Modality isolation guidance and spatio-temporal guidance are extra transformer passes the
         # pipeline runs alongside the CFG one, selected with Python flags. The export turns them into
@@ -1899,16 +1956,38 @@ class OVModelTransformerLTX2(OVPipelinePart):
                 "guidance, or pass `stg_scale=0.0` (and `audio_stg_scale=0.0`) to disable it."
             )
 
-        ov_outputs = self.request(model_inputs, share_inputs=True).to_dict()
-
-        model_outputs = {}
-        for key, value in ov_outputs.items():
-            model_outputs[next(iter(key.names))] = torch.from_numpy(value)
+        # Like OpenVINO GenAI, run the batch in passes of `_pass_batch_size` samples rather than at once:
+        # under classifier-free guidance the diffusers pipeline doubles the batch (negative + positive
+        # prompt), and running the two halves one after the other halves the transformer's activation
+        # memory, which is ~3 GiB per sample for LTX-2.3 at 640x480x17. The samples do not interact.
+        batch_size = hidden_states.shape[0]
+        pass_batch = self._pass_batch_size or 1
+        if batch_size % pass_batch != 0:
+            raise ValueError(
+                f"The LTX-2 transformer is reshaped to a static batch of {pass_batch}, which does not divide "
+                f"the batch of {batch_size} it was called with."
+            )
+        unbatched = {"cross_modality_gate", "stg_perturbation_mask"}
+        outputs = []
+        for start in range(0, batch_size, pass_batch):
+            pass_inputs = {
+                name: value if name in unbatched else value[start : start + pass_batch]
+                for name, value in model_inputs.items()
+            }
+            ov_outputs = self.request(pass_inputs, share_inputs=True).to_dict()
+            outputs.append({next(iter(key.names)): torch.from_numpy(value) for key, value in ov_outputs.items()})
+        model_outputs = {name: torch.cat([output[name] for output in outputs]) for name in outputs[0]}
 
         if return_dict:
             return model_outputs
 
         return (model_outputs.get("out_sample"), model_outputs.get("audio_out_sample"))
+
+    @property
+    def _pass_batch_size(self):
+        # Samples per transformer pass: the static batch `reshape` set, else one at a time (None).
+        dim = self.model.input("hidden_states").get_partial_shape()[0]
+        return dim.get_length() if dim.is_static else None
 
     @property
     def _ov_input_names(self):
@@ -1934,6 +2013,32 @@ class OVModelTransformerLTX2(OVPipelinePart):
 
 
 class OVModelConnectors(OVPipelinePart):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        _check_ltx2_rope_inputs(
+            self,
+            [
+                f"{connector}_rotary_{part}"
+                for connector in ("video_connector", "audio_connector")
+                for part in ("cos", "sin")
+            ],
+        )
+        # Weight-free RoPE modules of the two connectors, built from the exported config. Their (cos, sin)
+        # are graph inputs, computed here on the host since f16 cannot resolve the rotary angles.
+        from diffusers.pipelines.ltx2.connectors import LTX2RotaryPosEmbed1d
+
+        self._ropes = {}
+        for connector in ("video_connector", "audio_connector"):
+            heads = self.config.get(f"{connector}_num_attention_heads", 30)
+            self._ropes[connector] = LTX2RotaryPosEmbed1d(
+                heads * self.config.get(f"{connector}_attention_head_dim", 128),
+                base_seq_len=self.config.get("connector_rope_base_seq_len", 4096),
+                theta=self.config.get("rope_theta", 10000.0),
+                double_precision=self.config.get("rope_double_precision", True),
+                rope_type=self.config.get("rope_type", "interleaved"),
+                num_attention_heads=heads,
+            )
+
     def forward(
         self,
         text_encoder_hidden_states: torch.FloatTensor,
@@ -1956,13 +2061,20 @@ class OVModelConnectors(OVPipelinePart):
             "text_encoder_hidden_states": text_encoder_hidden_states,
             "attention_mask": attention_mask,
         }
+        batch_size, seq_len = text_encoder_hidden_states.shape[:2]
+        for connector, rope in self._ropes.items():
+            cos, sin = rope(batch_size, seq_len, device="cpu")
+            model_inputs[f"{connector}_rotary_cos"] = cos.float().contiguous()
+            model_inputs[f"{connector}_rotary_sin"] = sin.float().contiguous()
 
         ov_outputs = self.request(model_inputs, share_inputs=True).to_dict()
 
         # Return in the fixed order expected by the diffusers pipeline unpacking:
         # connector_prompt_embeds, connector_audio_prompt_embeds, connector_attention_mask
         output_names = ["video_text_embedding", "audio_text_embedding", "connector_attention_mask"]
-        named = {next(iter(k.names)): torch.from_numpy(v) for k, v in ov_outputs.items()}
+        # An output port can carry several tensor names (e.g. after `reshape()` or when the IR was re-saved), and
+        # `port.names` is an unordered set, so register every name instead of picking an arbitrary one.
+        named = {name: torch.from_numpy(v) for k, v in ov_outputs.items() for name in k.names}
         return tuple(named[name] for name in output_names)
 
 
@@ -2055,6 +2167,33 @@ class OVModelVocoder(OVPipelinePart):
 
     def __call__(self, mel_spectrograms):
         return self.forward(mel_spectrograms)
+
+
+class OVModelDurationHead(OVPipelinePart):
+    """OV wrapper for the LTX-2.5 duration head, which predicts a video length from connector tokens."""
+
+    def forward(self, video_tokens, audio_tokens):
+        # Both inputs are required: an IR cannot make one optional, and the pipeline always has both.
+        if video_tokens is None or audio_tokens is None:
+            raise ValueError(
+                "`OVModelDurationHead` requires both `video_tokens` and `audio_tokens`; the exported IR takes "
+                "both connector streams."
+            )
+        self.compile()
+        model_inputs = {"video_tokens": video_tokens, "audio_tokens": audio_tokens}
+        ov_outputs = self.request(model_inputs, share_inputs=True).to_dict()
+        outputs = {next(iter(key.names)): torch.from_numpy(value) for key, value in ov_outputs.items()}
+        # Seconds: the `.exp()` off the log-duration regression is inside the graph.
+        return outputs.get("duration", next(iter(outputs.values())))
+
+    def __call__(self, video_tokens=None, audio_tokens=None):
+        return self.forward(video_tokens, audio_tokens)
+
+    if is_diffusers_version(">=", "0.40.0"):
+        # Borrowed rather than reimplemented. `predict_num_frames` only calls `self(...)` and then does pure
+        # Python -- clamp to [min_seconds, max_seconds], snap to the `k * temporal_compression_ratio + 1`
+        # grid, snap up when flooring undershoots. Reimplementing it is how the two sides drift.
+        predict_num_frames = LTX2DurationHead.predict_num_frames
 
 
 class OVModelVaeDecoder(OVPipelinePart):
@@ -2464,6 +2603,8 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
     # Shared base rather than i2v subclassing t2v: LTX2ImageToVideoPipeline does not subclass
     # LTX2Pipeline, so subclassing would resolve `prepare_latents` to the text-to-video version.
     _is_ltx_pipeline = True
+    # Class-level, so the distilled-transformer notice below is emitted once per process.
+    _warned_ltx2_5_distilled_defaults = False
 
     @classproperty
     def _all_ov_model_paths(cls) -> Dict[str, str]:
@@ -2474,13 +2615,20 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
             "connectors": os.path.join(DIFFUSION_MODEL_CONNECTORS_SUBFOLDER, OV_XML_FILE_NAME),
             "audio_vae_decoder": os.path.join(DIFFUSION_MODEL_AUDIO_VAE_DECODER_SUBFOLDER, OV_XML_FILE_NAME),
             "vocoder": os.path.join(DIFFUSION_MODEL_VOCODER_SUBFOLDER, OV_XML_FILE_NAME),
+            # LTX-2.5 onwards; absent from 2.0/2.3 exports, where the path simply does not resolve.
+            "duration_head": os.path.join(DIFFUSION_MODEL_DURATION_HEAD_SUBFOLDER, OV_XML_FILE_NAME),
         }
         return models_paths
 
     @property
     def _ov_model_names(self) -> List[str]:
         """Return list of OV submodel names for quantization."""
-        return list(self._all_ov_model_paths.keys())
+        # `duration_head` only when it was actually loaded: it is LTX-2.5 onwards, and the names here
+        # are looked up in `ov_models`, which is keyed by the loaded components.
+        names = [name for name in self._all_ov_model_paths if name != "duration_head"]
+        if self.duration_head is not None:
+            names.append("duration_head")
+        return names
 
     @property
     def ov_models(self) -> Dict[str, Union[openvino.Model, openvino.CompiledModel]]:
@@ -2496,8 +2644,10 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
         connectors: Optional[openvino.Model] = None,
         audio_vae_decoder: Optional[openvino.Model] = None,
         vocoder: Optional[openvino.Model] = None,
+        duration_head: Optional[openvino.Model] = None,
         vae_encoder: Optional[openvino.Model] = None,
         tokenizer: Optional[CLIPTokenizer] = None,
+        processor: Optional[Any] = None,
         device: str = "CPU",
         compile: bool = True,
         compile_only: bool = False,
@@ -2525,45 +2675,6 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
         )
         if self.transformer is None:
             raise ValueError("`transformer` model should be provided for pipeline work")
-
-        # Create rope objects for coordinate preparation (used by pipeline, not by OV model)
-        from diffusers.models.transformers.transformer_ltx2 import LTX2AudioVideoRotaryPosEmbed
-
-        t_config = self.transformer.config
-        self.transformer.rope = LTX2AudioVideoRotaryPosEmbed(
-            dim=t_config.get("num_attention_heads", 32) * t_config.get("attention_head_dim", 128),
-            base_num_frames=t_config.get("pos_embed_max_pos", 20),
-            base_height=t_config.get("base_height", 2048),
-            base_width=t_config.get("base_width", 2048),
-            patch_size=t_config.get("patch_size", 1),
-            patch_size_t=t_config.get("patch_size_t", 1),
-            theta=t_config.get("rope_theta", 10000.0),
-            causal_offset=t_config.get("causal_offset", 1),
-            modality="video",
-            double_precision=t_config.get("rope_double_precision", True),
-            rope_type=t_config.get("rope_type", "split"),
-            num_attention_heads=t_config.get("num_attention_heads", 32),
-            scale_factors=tuple(t_config.get("vae_scale_factors", [8, 32, 32])),
-            sampling_rate=t_config.get("audio_sampling_rate", 16000),
-            hop_length=t_config.get("audio_hop_length", 160),
-        )
-        self.transformer.audio_rope = LTX2AudioVideoRotaryPosEmbed(
-            dim=t_config.get("audio_num_attention_heads", 32) * t_config.get("audio_attention_head_dim", 64),
-            base_num_frames=t_config.get("audio_pos_embed_max_pos", 20),
-            base_height=t_config.get("base_height", 2048),
-            base_width=t_config.get("base_width", 2048),
-            patch_size=t_config.get("audio_patch_size", 1),
-            patch_size_t=t_config.get("audio_patch_size_t", 1),
-            theta=t_config.get("rope_theta", 10000.0),
-            causal_offset=t_config.get("causal_offset", 1),
-            modality="audio",
-            double_precision=t_config.get("rope_double_precision", True),
-            rope_type=t_config.get("rope_type", "split"),
-            num_attention_heads=t_config.get("audio_num_attention_heads", 32),
-            scale_factors=[t_config.get("audio_scale_factor", 4)],
-            sampling_rate=t_config.get("audio_sampling_rate", 16000),
-            hop_length=t_config.get("audio_hop_length", 160),
-        )
 
         self.vae_decoder = OVModelVaeDecoder(vae_decoder, self, DIFFUSION_MODEL_VAE_DECODER_SUBFOLDER)
         # vae_encoder is exported for both tasks but only loaded for image-to-video (None otherwise).
@@ -2598,6 +2709,11 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
         self.tokenizer_2 = None
         self.tokenizer_3 = None
         self.feature_extractor = None
+        # LTX-2.5 registers a `Gemma4Processor` for the prompt enhancer. It has to be held here even when
+        # the enhancer itself is not loaded, or `_save_pretrained` drops the `processor/` folder while
+        # `model_index.json` keeps naming it, and the round-trip fails on reload.
+        self.processor = processor
+        self.prompt_enhancer = self._load_prompt_enhancer(compile=compile and not compile_only)
 
         # Get latents_mean/std from vae_decoder config or audio_vae_decoder config
         vae_cfg = self.vae_decoder.config
@@ -2624,6 +2740,13 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
 
         vocoder = OVModelVocoder(vocoder, self, DIFFUSION_MODEL_VOCODER_SUBFOLDER)
 
+        # LTX-2.5 onwards. Absent from 2.0/2.3 exports, where `__call__` keeps its fixed 121-frame default.
+        self.duration_head = (
+            OVModelDurationHead(duration_head, self, DIFFUSION_MODEL_DURATION_HEAD_SUBFOLDER)
+            if isinstance(duration_head, (openvino.Model, openvino.CompiledModel))
+            else None
+        )
+
         # Register the OV submodels via diffusers' pipeline init; this sets self.audio_vae,
         # self.vocoder, self.connectors, self.transformer, ... and registers them in self.config.
         diffusers_pipeline_args = {
@@ -2636,6 +2759,16 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
             "transformer": self.transformer,
             "vocoder": vocoder,
         }
+        if self.processor is not None:
+            # Same reason as `duration_head`: `LTX2Pipeline.__init__` on diffusers<0.40 has no such parameter.
+            diffusers_pipeline_args["processor"] = self.processor
+        if self.prompt_enhancer is not None:
+            diffusers_pipeline_args["prompt_enhancer"] = self.prompt_enhancer
+        if self.duration_head is not None:
+            # Only when present: `__call__` reads `getattr(self, "duration_head", None)` to decide whether an
+            # omitted `num_frames` means auto-duration, and `LTX2Pipeline.__init__` on diffusers<0.40 has no
+            # such parameter.
+            diffusers_pipeline_args["duration_head"] = self.duration_head
         self.auto_model_class.__init__(self, **diffusers_pipeline_args)
 
         # This must exist because properties like batch_size check them
@@ -2652,12 +2785,59 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
         if compile and not self._compile_only:
             self.compile()
 
+    def _load_prompt_enhancer(self, compile: bool = True):
+        """Load LTX-2.5's optional prompt enhancer from the `prompt_enhancer/` subfolder, if it was exported.
+
+        It is a `Gemma4ForConditionalGeneration` VLM, exported as several IRs into its own subfolder rather
+        than as one of the pipeline's components, so it is loaded by `OVModelForVisualCausalLM` rather than
+        coming through `_from_pretrained`'s component map. `enhance_prompt` needs only `.to(device)` and
+        `.generate(...)` from it, both of which that class provides.
+        """
+        model_dir = self.model_save_dir
+        if model_dir is None:
+            return None
+        if isinstance(model_dir, TemporaryDirectory):
+            model_dir = model_dir.name
+        enhancer_dir = Path(model_dir) / DIFFUSION_MODEL_PROMPT_ENHANCER_SUBFOLDER
+        if not enhancer_dir.is_dir():
+            return None
+
+        # Imported here: `modeling_visual_language` imports this module, so a top-level import cycles.
+        from .modeling_visual_language import OVModelForVisualCausalLM
+
+        return OVModelForVisualCausalLM.from_pretrained(
+            enhancer_dir,
+            device=self._device,
+            ov_config=self.ov_config,
+            compile=compile,
+        )
+
     @property
     def _execution_device(self):
         return torch.device("cpu")
 
     def maybe_free_model_hooks(self):
         pass
+
+    def __call__(self, *args, **kwargs):
+        # Lightricks/LTX-2.5-Diffusers ships a distilled transformer in `transformer/` (the full one is in
+        # `transformer_full/`). Nothing in its config tells them apart, but the export keeps the folder it was loaded
+        # from, so a call without `sigmas` -- the pipeline defaults, tuned for full models -- can be pointed out.
+        source = str(getattr(self.transformer, "config", {}).get("_name_or_path", "")).replace("\\", "/").rstrip("/")
+        if (
+            "sigmas" not in kwargs
+            and "LTX-2.5-Diffusers" in source
+            and source.endswith("/transformer")
+            and not _OVLTX2Base._warned_ltx2_5_distilled_defaults
+        ):
+            logger.warning(
+                "This LTX-2.5 export uses the distilled transformer, which is meant to run with "
+                "`sigmas=DISTILLED_SIGMA_VALUES` and guidance off (`guidance_scale=1.0`, `audio_guidance_scale=1.0`, "
+                "`stg_scale=0.0`, `audio_stg_scale=0.0`, `modality_scale=1.0`, `audio_modality_scale=1.0`). The current "
+                "call uses the pipeline defaults, which are tuned for full models."
+            )
+            _OVLTX2Base._warned_ltx2_5_distilled_defaults = True
+        return super().__call__(*args, **kwargs)
 
     @property
     def components(self) -> Dict[str, Any]:
@@ -2677,6 +2857,8 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
             comp["audio_vae_decoder"] = self.audio_vae
         if self.vocoder is not None:
             comp["vocoder"] = self.vocoder
+        if getattr(self, "duration_head", None) is not None:
+            comp["duration_head"] = self.duration_head
         return comp
 
     def _reshape_transformer(
@@ -2685,15 +2867,23 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
         if batch_size == -1 or num_images_per_prompt == -1:
             batch_size = -1
         else:
-            batch_size *= num_images_per_prompt * 2
+            # Classifier-free guidance doubles the batch, but the transformer runs the two halves in
+            # separate passes (see `OVModelTransformerLTX2.forward`), so it is sized for one half.
+            batch_size *= num_images_per_prompt
 
         shapes = {}
-        scalar_inputs = {"height", "width", "num_frames", "fps", "audio_num_frames", "rope_interpolation_scale"}
+        # `stg_perturbation_mask` holds one weight per block, not per sample, so it keeps its length.
+        fixed_shape_inputs = {"rope_interpolation_scale", "stg_perturbation_mask"}
+        rope_inputs = {name for names in LTX2_ROPE_INPUTS.values() for name in names}
         for inputs in model.inputs:
             shapes[inputs] = inputs.get_partial_shape()
             name = inputs.get_any_name()
-            if name in scalar_inputs:
+            if name in fixed_shape_inputs:
                 shapes[inputs] = inputs.get_partial_shape()
+            elif name in rope_inputs:
+                # Keep the exported head split and rotary width static; only the batch is re-set
+                # (the token axis is dynamic already).
+                shapes[inputs][0] = batch_size
             elif inputs.get_partial_shape().rank.get_length() >= 2:
                 shapes[inputs][0] = batch_size
                 for i in range(1, inputs.get_partial_shape().rank.get_length()):
@@ -2709,9 +2899,14 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
         self.transformer.model = self._reshape_transformer(
             self.transformer.model, batch_size, height, width, num_images_per_prompt, num_frames=num_frames
         )
-        # Reshape vae_decoder with proper height/width
+        known_batch = batch_size > 0 and num_images_per_prompt > 0
+        # The VAE decoder runs on all `batch_size * num_images_per_prompt` videos at once
         self.vae_decoder.model = self._reshape_vae_decoder(
-            self.vae_decoder.model, height, width, num_images_per_prompt, num_frames=num_frames
+            self.vae_decoder.model,
+            height,
+            width,
+            batch_size * num_images_per_prompt if known_batch else -1,
+            num_frames=num_frames,
         )
         # Reshape vae_encoder (image-to-video only) with pixel-space height/width; the encoder
         # treats the conditioning image as a single frame (num_frames handled inside).
@@ -2722,11 +2917,12 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
         # Reshape text_encoder with batch_size only (tokenizer_max_length stays dynamic for Gemma)
         if self.text_encoder is not None:
             self.text_encoder.model = self._reshape_text_encoder(self.text_encoder.model, batch_size, -1)
-        known_batch = batch_size > 0 and num_images_per_prompt > 0
         # The connectors run on the concatenated negative+positive prompts, so they see twice the
         # batch under classifier-free guidance. The audio VAE and the vocoder run after the
         # denoising loop, where the guidance halves have already been merged back, so they see the
-        # plain batch.
+        # plain batch. The duration head is deliberately absent: it is always fed a single row
+        # (`video_tokens[:1]` off the positive half), which no `batch_size * num_images_per_prompt`
+        # expression reproduces, so it is left fully dynamic.
         guided_batch = batch_size * num_images_per_prompt * 2 if known_batch else -1
         plain_batch = batch_size * num_images_per_prompt if known_batch else -1
         for ov_model_attr, effective_batch in [
@@ -2741,6 +2937,9 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
                     rank = inputs.get_partial_shape().rank.get_length()
                     if rank >= 1:
                         shapes[inputs][0] = effective_batch
+                    # Keep the exported head split and rotary width of the connectors' RoPE inputs.
+                    if "_rotary_" in inputs.get_any_name():
+                        continue
                     for i in range(1, rank):
                         shapes[inputs][i] = -1
                 ov_model_attr.model.reshape(shapes)
@@ -2823,6 +3022,29 @@ class OVLTX2ImageToVideoPipeline(_OVLTX2Base, LTX2ImageToVideoPipeline):
         models_paths = _OVLTX2Base._all_ov_model_paths
         models_paths["vae_encoder"] = os.path.join(DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER, OV_XML_FILE_NAME)
         return models_paths
+
+
+class OVLTX2ConditionPipeline(_OVLTX2Base, LTX2ConditionPipeline):
+    """
+    LTX-2 generation conditioned on images or videos placed at given frames (`LTX2VideoCondition`): video-to-video
+    with the input video at frame 0 and a `strength` below 1, keyframes, or first-last-frame interpolation. Exported
+    as `video-to-video`, with the same submodels as text-to-video and image-to-video, so their exports load into it.
+    """
+
+    main_input_name = "prompt"
+    export_feature = "video-to-video"
+    auto_model_class = LTX2ConditionPipeline
+
+    @classproperty
+    def _all_ov_model_paths(cls) -> Dict[str, str]:
+        models_paths = _OVLTX2Base._all_ov_model_paths
+        models_paths["vae_encoder"] = os.path.join(DIFFUSION_MODEL_VAE_ENCODER_SUBFOLDER, OV_XML_FILE_NAME)
+        return models_paths
+
+    def _reshape_vae_encoder(self, model, batch_size=-1, height=-1, width=-1, num_frames=-1):
+        # Every condition is encoded on its own, at batch 1 (its latents are expanded to the batch afterwards) and
+        # with its own frame count -- one for an image, its length for a video -- so the frame axis stays dynamic.
+        return super()._reshape_vae_encoder(model, 1, height, width, num_frames=-1)
 
 
 class OVQwenImagePipeline(OVDiffusionPipeline, OVTextualInversionLoaderMixin, QwenImagePipeline):
@@ -3370,6 +3592,7 @@ if is_diffusers_version(">=", "0.38.0"):
     OV_IMAGE2VIDEO_PIPELINES_MAPPING["ltx2"] = OVLTX2ImageToVideoPipeline
     SUPPORTED_OV_PIPELINES.append(OVLTX2Pipeline)
     SUPPORTED_OV_PIPELINES.append(OVLTX2ImageToVideoPipeline)
+    SUPPORTED_OV_PIPELINES.append(OVLTX2ConditionPipeline)
 
 if is_diffusers_version(">=", "0.29.0"):
     SUPPORTED_OV_PIPELINES.extend(

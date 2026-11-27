@@ -11,12 +11,14 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+import contextlib
 import dataclasses
 import inspect
 
 # ruff: noqa
 
 import itertools
+import json
 import logging
 import unittest
 from collections import defaultdict
@@ -30,6 +32,7 @@ import torch
 from PIL import Image
 from parameterized import parameterized
 import nncf
+import openvino as ov
 from transformers import (
     AutoTokenizer,
     AutoProcessor,
@@ -76,8 +79,12 @@ from optimum.intel.openvino.configuration import (
     _DEFAULT_4BIT_WQ_CONFIGS,
     _DEFAULT_4BIT_WQ_CONFIG,
     _DEFAULT_8BIT_WQ_CONFIGS,
+    _DEFAULT_8BIT_WQ_CONFIGS_FOR_OLDER_NNCF,
+    _get_missing_nncf_version,
     _quantization_config_from_dict,
+    get_default_quantization_config,
     _GPTOSSQuantizationConfig,
+    _MiniCPMOCRQuantizationConfig,
 )
 from optimum.intel.openvino.modeling_visual_language import _OVNanoLlavaForCausalLM
 from optimum.intel.openvino.utils import TemporaryDirectory
@@ -87,6 +94,7 @@ from optimum.intel.openvino.quantization import InferRequestWrapper, OVCalibrati
 from optimum.exporters.openvino import main_export
 from optimum.intel.utils.import_utils import (
     is_datasets_version,
+    is_diffusers_version,
     is_nncf_version,
     is_openvino_version,
     is_qwen_tts_available,
@@ -1202,6 +1210,10 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelForVisualCausalLM, "mistral3", False),
         (OVModelForVisualCausalLM, "ministral3", False),
         (OVModelForVisualCausalLM, "minicpmv4_7", False),
+        (OVModelForVisualCausalLM, "minicpm_ocr", False),
+        (OVModelForCausalLM, "lfm3", True),
+        (OVModelForVisualCausalLM, "lfm3_vl", True),
+        (OVModelForVisualCausalLM, "lfm3_omni", True),
     ]
 
     # gemma3n openvino>=2026.2.0 because it needs erfinv operation,
@@ -1258,7 +1270,8 @@ class OVWeightCompressionTest(unittest.TestCase):
             OVLTX2Pipeline,
             "ltx2.3",
             8,
-            _DEFAULT_8BIT_WQ_CONFIGS["diffusers/LTX-2.3-Diffusers"],
+            # The config for older NNCF versions: any NNCF version compresses the tiny model with it
+            _DEFAULT_8BIT_WQ_CONFIGS_FOR_OLDER_NNCF["diffusers/LTX-2.3-Diffusers"],
             {
                 "transformer": {"int8": 124},
                 "text_encoder": {"int8": 30},
@@ -1300,6 +1313,25 @@ class OVWeightCompressionTest(unittest.TestCase):
             },
         ),
     ]
+
+    if is_transformers_version(">=", "5.10.0") and is_diffusers_version(">=", "0.40.0"):
+        DEFAULT_COMPRESSION_CONFIGURATIONS.append(
+            (
+                OVLTX2Pipeline,
+                "ltx2.5",
+                8,
+                _DEFAULT_8BIT_WQ_CONFIGS_FOR_OLDER_NNCF["Lightricks/LTX-2.5-Diffusers"],
+                {
+                    "transformer": {"int8": 192},
+                    "text_encoder": {"int8": 28},
+                    "connectors": {},
+                    "vae_decoder": {},
+                    "audio_vae_decoder": {},
+                    "vocoder": {},
+                    "duration_head": {},
+                },
+            )
+        )
 
     # Qwen3-TTS resolves `quantization_config` itself rather than through the default-config table,
     # so the configs given here are the ones it applies for these `bits`. Compression is per
@@ -1736,6 +1768,19 @@ class OVWeightCompressionTest(unittest.TestCase):
             openvino_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
             self.assertEqual(openvino_config.quantization_config.to_dict(), ref_quantization_config.to_dict())
 
+    @unittest.skipIf(is_nncf_version("<", "3.5.0.dev0"), "NNCF version does not support scoped configs")
+    def test_ovmodel_4bit_compression_with_scoped_configs(self):
+        quantization_config = OVWeightQuantizationConfig(
+            bits=4,
+            sym=False,
+            group_size=32,
+            scoped_configs=[{"patterns": [".*mlp.*"], "bits": 8, "sym": False, "group_size": -1}],
+        )
+        model = OVModelForCausalLM.from_pretrained(
+            MODEL_NAMES["gpt2"], export=True, quantization_config=quantization_config
+        )
+        check_compression_state_per_model(self, model.ov_models, {"model": {"int8": 24, "int4": 20}})
+
     @parameterized.expand(((OVModelForCausalLM, "gpt2"),))
     def test_ovmodel_stateful_load_with_compressed_weights(self, model_cls, model_type):
         model = model_cls.from_pretrained(MODEL_NAMES[model_type], export=True, load_in_8bit=True, stateful=True)
@@ -1859,6 +1904,117 @@ class OVWeightCompressionTest(unittest.TestCase):
                     "backup_mode": None,
                 }
                 compress_weights_patch.assert_called_with(unittest.mock.ANY, **compression_params)
+
+    # The hub ids the default configs of the LTX-2 models are registered under, per tiny test model
+    LTX2_HUB_MODEL_IDS = {"ltx2.3": "diffusers/LTX-2.3-Diffusers"}
+    if is_transformers_version(">=", "5.10.0"):
+        LTX2_HUB_MODEL_IDS["ltx2.5"] = "Lightricks/LTX-2.5-Diffusers"
+
+    def get_ltx2_default_config_cases(hub_model_ids=LTX2_HUB_MODEL_IDS) -> list:
+        # (model type, installed NNCF version, `quantization_config` given to `from_pretrained`, int8 config registered
+        #  for the model, the config expected to be applied or None if nothing is compressed, whether a warning to
+        #  install the latest NNCF version is expected)
+        cases = []
+        for model_type, hub_model_id in hub_model_ids.items():
+            # The configs registered for the model: the int4 one, the default int8 one, tuned to keep the video
+            # quality, and the int8 one used instead with an NNCF version that does not support it
+            int4_config = _DEFAULT_4BIT_WQ_CONFIGS[hub_model_id]
+            int8_config = _DEFAULT_8BIT_WQ_CONFIGS[hub_model_id]
+            int8_config_for_older_nncf = _DEFAULT_8BIT_WQ_CONFIGS_FOR_OLDER_NNCF[hub_model_id]
+            cases.extend(
+                [
+                    # The tuned config is applied without a weight format, to the large transformer, connectors and
+                    # text encoder, and with an int8 weight format
+                    (model_type, "3.5.0", None, int8_config, int8_config, False),
+                    (model_type, "3.5.0", {"bits": 8}, int8_config, int8_config, False),
+                    # An older NNCF version does not support it: nothing is compressed by default, and the config for
+                    # older NNCF versions is applied with an int8 weight format
+                    (model_type, "3.4.0", None, int8_config, None, True),
+                    (model_type, "3.4.0", {"bits": 8}, int8_config, int8_config_for_older_nncf, True),
+                    # A registered config that any NNCF version supports, e.g. a per-channel one, is applied by
+                    # default too
+                    (model_type, "3.4.0", None, int8_config_for_older_nncf, int8_config_for_older_nncf, False),
+                    # The int4 config is applied with an int4 weight format, whatever the NNCF version: group-wise
+                    # int4 weight compression does not need a newer one
+                    (model_type, "3.5.0", {"bits": 4}, int8_config, int4_config, False),
+                    (model_type, "3.4.0", {"bits": 4}, int8_config, int4_config, False),
+                ]
+            )
+        return cases
+
+    @parameterized.expand(
+        get_ltx2_default_config_cases() if is_diffusers_version(">=", "0.40.0") else [],
+        skip_on_empty=True,
+    )
+    def test_ovmodel_default_ltx2_config(
+        self, model_type, nncf_version, quantization_config, registered_config, applied_config, expect_warning
+    ):
+        # Note, NNCF is not run, the `compress_weights` function only records the arguments it receives and attaches them to the model.
+        def compress_weights(model, **kwargs):
+            arguments = {
+                "mode": kwargs["mode"].value,
+                "group_size": kwargs["group_size"],
+                "ignored_patterns": sorted(kwargs["ignored_scope"].patterns),
+            }
+            model.set_rt_info(json.dumps(arguments), ["test", "compress_weights"])
+            return model
+
+        from optimum.exporters.openvino.__main__ import logger as main_export_logger
+        from optimum.intel.openvino.configuration import logger as configuration_logger
+
+        model_id = MODEL_NAMES[model_type]
+        hub_model_id = self.LTX2_HUB_MODEL_IDS[model_type]
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(
+                unittest.mock.patch.dict(
+                    "optimum.intel.openvino.configuration._DEFAULT_4BIT_WQ_CONFIGS",
+                    {model_id: _DEFAULT_4BIT_WQ_CONFIGS[hub_model_id]},
+                )
+            )
+            stack.enter_context(
+                unittest.mock.patch.dict(
+                    "optimum.intel.openvino.configuration._DEFAULT_8BIT_WQ_CONFIGS", {model_id: registered_config}
+                )
+            )
+            stack.enter_context(
+                unittest.mock.patch.dict(
+                    "optimum.intel.openvino.configuration._DEFAULT_8BIT_WQ_CONFIGS_FOR_OLDER_NNCF",
+                    {model_id: _DEFAULT_8BIT_WQ_CONFIGS_FOR_OLDER_NNCF[hub_model_id]},
+                )
+            )
+            stack.enter_context(unittest.mock.patch("optimum.intel.utils.import_utils._nncf_version", nncf_version))
+            # The real transformer, connectors and text encoder are above the size threshold, unlike the tiny ones
+            stack.enter_context(unittest.mock.patch("optimum.exporters.openvino.__main__._MAX_UNCOMPRESSED_SIZE", 0))
+            compress_weights_patch = stack.enter_context(
+                unittest.mock.patch("nncf.compress_weights", side_effect=compress_weights)
+            )
+            warning_patches = [
+                stack.enter_context(unittest.mock.patch.object(logger, "warning"))
+                for logger in (main_export_logger, configuration_logger)
+            ]
+            model = OVLTX2Pipeline.from_pretrained(
+                model_id, export=True, compile=False, device=OPENVINO_DEVICE, quantization_config=quantization_config
+            )
+
+        actual_arguments = {
+            ov_model_name: json.loads(ov_model.get_rt_info(["test", "compress_weights"]).value)
+            for ov_model_name, ov_model in model.ov_models.items()
+            if ov_model.has_rt_info(["test", "compress_weights"])
+        }
+        expected_configs = {} if applied_config is None else applied_config["quantization_configs"]
+        expected_arguments = {
+            ov_model_name: {
+                "mode": f"int{config['bits']}_{'sym' if config.get('sym') else 'asym'}",
+                "group_size": config.get("group_size"),
+                "ignored_patterns": sorted(config.get("ignored_scope", {}).get("patterns", [])),
+            }
+            for ov_model_name, config in expected_configs.items()
+        }
+        self.assertEqual(expected_arguments, actual_arguments)
+        # Each compressed submodel is compressed once
+        self.assertEqual(len(expected_configs), compress_weights_patch.call_count)
+        warnings = [call.args[0] for patch in warning_patches for call in patch.call_args_list]
+        self.assertEqual(int(expect_warning), len([warning for warning in warnings if "nncf>=3.5.0" in warning]))
 
     @parameterized.expand([(MODEL_NAMES["gpt2"],)])
     def test_dataset_seq_len_option(self, model_id):
@@ -2348,10 +2504,17 @@ class OVQuantizationConfigTest(unittest.TestCase):
                 quantization_config2=OVWeightQuantizationConfig(bits=8),
             ),
         ),
+        (
+            _MiniCPMOCRQuantizationConfig(
+                first_stage=OVWeightQuantizationConfig(bits=4, group_size=16, dataset="wikitext2", num_samples=2),
+                second_stage=OVWeightQuantizationConfig(bits=8, weight_only=True),
+            ),
+        ),
     )
 
     QUANTIZATION_CONFIG_DICTS = (
         (dict(bits=8, sym=True), OVWeightQuantizationConfig, None),
+        (dict(bits=8, sym=True, group_size=32), OVWeightQuantizationConfig, None),
         (
             dict(
                 dataset="wikitext2",
@@ -2450,9 +2613,24 @@ class OVQuantizationConfigTest(unittest.TestCase):
             _GPTOSSQuantizationConfig,
             None,
         ),
+        (
+            dict(
+                config_class="minicpm_ocr",
+                first_stage=dict(bits=4, group_size=16, dataset="wikitext2"),
+                second_stage=dict(bits=8, weight_only=True),
+            ),
+            _MiniCPMOCRQuantizationConfig,
+            None,
+        ),
+        (dict(config_class="minicpm_ocr"), _MiniCPMOCRQuantizationConfig, None),
     )
 
     QUANTIZATION_CONFIGS_WITH_KWARGS = (
+        (
+            OVWeightQuantizationConfig,
+            {"bits": 8, "sym": True, "group_size": 32},
+            {"mode": nncf.CompressWeightsMode.INT8_SYM, "group_size": 32},
+        ),
         (
             OVWeightQuantizationConfig,
             {
@@ -2540,6 +2718,18 @@ class OVQuantizationConfigTest(unittest.TestCase):
             loaded_ov_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
             self.compare_objects(ov_config.quantization_config, loaded_ov_config.quantization_config)
 
+    @unittest.skipIf(is_nncf_version("<", "3.5.0.dev0"), "NNCF version does not support scoped configs")
+    def test_config_serialization_with_scoped_configs(self):
+        quantization_config = OVWeightQuantizationConfig(
+            bits=4,
+            scoped_configs=[{"patterns": [".*self_attn.*"], "bits": 8, "sym": False, "group_size": -1}],
+        )
+        ov_config = OVConfig(quantization_config=quantization_config)
+        with TemporaryDirectory() as tmp_dir:
+            ov_config.save_pretrained(tmp_dir)
+            loaded_ov_config = OVConfig.from_pretrained(tmp_dir, device=OPENVINO_DEVICE)
+            self.compare_objects(ov_config.quantization_config, loaded_ov_config.quantization_config)
+
     @parameterized.expand(QUANTIZATION_CONFIG_DICTS)
     def test_config_from_dict(self, quantization_config: dict, config_type: type, warning_log: Union[str, None]):
         from optimum.intel.openvino.configuration import logger as configuration_logger
@@ -2559,6 +2749,28 @@ class OVQuantizationConfigTest(unittest.TestCase):
         custom_configuration = self.DEFAULT_CONFIGURATIONS[config_id]
         prepared_config = _quantization_config_from_dict(custom_configuration)
         self.compare_config_dict_to_config_object(custom_configuration, prepared_config)
+
+    @parameterized.expand(_DEFAULT_8BIT_WQ_CONFIGS)
+    def test_named_default_8bit_configurations(self, config_id: str):
+        custom_configuration = _DEFAULT_8BIT_WQ_CONFIGS[config_id]
+        prepared_config = _quantization_config_from_dict(custom_configuration)
+        self.compare_config_dict_to_config_object(custom_configuration, prepared_config)
+
+    @parameterized.expand(
+        [
+            # (installed NNCF version, quantization config, the NNCF version expected to be missing)
+            # Group-wise int8 weight compression needs the NNCF 3.5.0 release: a development build may predate it
+            ("3.4.0", {"bits": 8, "group_size": 32}, "3.5.0"),
+            ("3.5.0.dev0+74dc78a2f", {"bits": 8, "group_size": 32}, "3.5.0"),
+            ("3.5.0", {"bits": 8, "group_size": 32}, None),
+            # Per-channel int8 and group-wise int4 weight compression do not need it
+            ("3.4.0", {"bits": 8, "group_size": -1}, None),
+            ("3.4.0", {"bits": 4, "group_size": 128}, None),
+        ]
+    )
+    def test_missing_nncf_version(self, nncf_version, quantization_config, expected_version):
+        with unittest.mock.patch("optimum.intel.utils.import_utils._nncf_version", nncf_version):
+            self.assertEqual(expected_version, _get_missing_nncf_version(quantization_config))
 
     def test_for_no_short_id_duplicates(self):
         short_ids = set()
@@ -2608,6 +2820,21 @@ class OVQuantizationConfigTest(unittest.TestCase):
             expected_kwargs = {"param1": "value1", "param2": "new_value2", "param3": "value3", dataset_key: None}
 
             mock_method.assert_called_once_with(mock_model, **expected_kwargs)
+
+    @parameterized.expand(
+        [
+            ("not_a_list", {"patterns": [".*self_attn.*"]}),
+            ("not_a_dict", [["patterns", [".*self_attn.*"]]]),
+            ("unknown_key", [{"patterns": [".*self_attn.*"], "mode": "int8_asym"}]),
+            ("invalid_bits", [{"patterns": [".*self_attn.*"], "bits": 5}]),
+            ("invalid_sym", [{"patterns": [".*self_attn.*"], "bits": 2, "sym": False}]),
+            ("invalid_group_size", [{"patterns": [".*self_attn.*"], "group_size": 0}]),
+        ]
+    )
+    @unittest.skipIf(is_nncf_version("<", "3.5.0.dev0"), "NNCF version does not support scoped configs")
+    def test_invalid_scoped_configs(self, _, scoped_configs):
+        with self.assertRaises(ValueError):
+            OVWeightQuantizationConfig(bits=4, scoped_configs=scoped_configs)
 
     def compare_config_dict_to_config_object(self, config_dict: dict, config_obj: OVQuantizationConfigBase):
         if "quantization_configs" in config_dict:

@@ -45,7 +45,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Setup Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.11"
 
@@ -96,7 +96,7 @@ jobs:
           # one of them is named after its model type.
           pytest tests/openvino/test_exporters_cli.py -k "qwen3_tts" --durations=0
           pytest tests/openvino/test_export.py -k "qwen3_tts" --durations=0
-          pytest tests/openvino/test_seq2seq.py -k "qwen3_tts" --durations=0
+          pytest tests/openvino/test_tts.py -k "qwen3_tts" --durations=0
           pytest tests/openvino/test_transformations.py -k "qwen3_tts" --durations=0
           pytest tests/openvino/test_cb_compatible.py -k "qwen3_tts" --durations=0
 
@@ -117,3 +117,22 @@ jobs:
         run: |
           uv pip install transformers==5.15 datasets
           pytest tests/openvino/test_dflash.py --durations=0
+          pytest tests/openvino/test_cb_compatible.py -k "dflash or dspark" --durations=0
+
+      - if: ${{ matrix.test-pattern == '*export*' }}
+        name: Test LFM3
+        run: |
+          uv pip install transformers==5.20.0
+          RUN_SLOW=true pytest tests/openvino/test_{cb_compatible,decoder,export,exporters_cli,quantization,seq2seq,transformations}.py -k "lfm3 and not lfm3_vl and not lfm3_omni" --durations=0
+
+      - if: ${{ matrix.test-pattern == '*export*' }}
+        name: Test LFM3-VL
+        run: |
+          uv pip install transformers==5.20.0
+          RUN_SLOW=true pytest tests/openvino/test_{cb_compatible,decoder,export,exporters_cli,quantization,seq2seq,transformations}.py -k "lfm3_vl" --durations=0
+
+      - if: ${{ matrix.test-pattern == '*export*' }}
+        name: Test LFM3-Omni
+        run: |
+          uv pip install transformers==5.20.0
+          RUN_SLOW=true pytest tests/openvino/test_{cb_compatible,decoder,export,exporters_cli,quantization,seq2seq,transformations}.py -k "lfm3_omni" --durations=0

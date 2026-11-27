@@ -14,7 +14,7 @@ import threading
 import types
 import warnings
 from abc import abstractmethod
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
@@ -32,12 +32,20 @@ from transformers import (
     AutoImageProcessor,
     AutoModel,
     AutoModelForImageTextToText,
+    AutoModelForSequenceClassification,
     GenerationConfig,
     GenerationMixin,
     PretrainedConfig,
     PreTrainedTokenizer,
 )
-from transformers.modeling_outputs import BaseModelOutputWithPooling
+from transformers.generation.logits_process import (
+    MinPLogitsWarper,
+    RepetitionPenaltyLogitsProcessor,
+    TemperatureLogitsWarper,
+    TopKLogitsWarper,
+    TopPLogitsWarper,
+)
+from transformers.modeling_outputs import BaseModelOutputWithPooling, SequenceClassifierOutput
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLModel
 from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLModel
 from transformers.utils import ModelOutput
@@ -55,6 +63,7 @@ from optimum.exporters.openvino.utils import save_config
 from optimum.intel.openvino.configuration import OVConfig, OVQuantizationConfigBase, OVWeightQuantizationConfig
 from optimum.intel.openvino.modeling_base import OVBaseModel, OVModelPart
 from optimum.intel.openvino.modeling_decoder import CausalLMOutputWithPast, OVModelForCausalLM
+from optimum.intel.openvino.modeling_dflash import OVDFlashTargetMixin, OVStatefulCacheProxy
 from optimum.intel.openvino.utils import (
     OV_LANGUAGE_MODEL_NAME,
     OV_TEXT_EMBEDDINGS_MODEL_NAME,
@@ -83,11 +92,7 @@ else:
 
 
 if is_transformers_version(">=", "5.2"):
-    from transformers.models.qwen3_5.modeling_qwen3_5 import (
-        Qwen3_5Model,
-        Qwen3_5VisionModel,
-        Qwen3_5VisionRotaryEmbedding,
-    )
+    from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5Model
 
 if is_transformers_version(">=", "5.18"):
     from transformers.models.minicpmv4_7.modeling_minicpmv4_7 import MiniCPMV4_7Model
@@ -314,6 +319,18 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
         past_key_values = ((),)
         self._past_length += inputs["inputs_embeds"].shape[1]
 
+        # DFlash speculative decoding needs two things a plain forward does not provide:
+        # the target's hidden states at the drafter's `target_layer_ids`, and a cache the
+        # verifier can roll back after a rejected block.
+        dflash_hidden_states = None
+        if getattr(self, "_dflash_hidden_state_names", None):
+            # Keyed like transformers' `hidden_states` tuple (entry 0 is the embeddings), so layer `i` is at `i + 1`.
+            dflash_hidden_states = {
+                layer_id + 1: torch.from_numpy(self.request.get_tensor(name).data).clone().to(self.device)
+                for layer_id, name in zip(self._dflash_layer_ids, self._dflash_hidden_state_names)
+            }
+            past_key_values = OVStatefulCacheProxy(self)
+
         collecting = getattr(self, "_collecting_hidden_states", False)
         hidden_states_out = None
         if collecting and "hidden_states" in self.output_names:
@@ -324,7 +341,10 @@ class OVModelWithEmbedForCausalLM(OVModelForCausalLM):
             ihs = self.request.get_tensor("intermediate_hidden_states").data
             intermediate_hidden = torch.from_numpy(ihs).clone().to(self.device)
 
-        result = CausalLMOutputWithPast(logits=logits, past_key_values=past_key_values)
+        # transformers' `DFlashTokenCandidateGenerator` reads the target's hidden states from `hidden_states`. it is None outside DFlash
+        result = CausalLMOutputWithPast(
+            logits=logits, past_key_values=past_key_values, hidden_states=dflash_hidden_states
+        )
         result.last_hidden_state = hidden_states_out
         result.intermediate_hidden_state = intermediate_hidden
         return result
@@ -476,15 +496,35 @@ class OVQwen3AudioEncoder(OVAudioEncoder):
         chunk_lengths[tail_chunk_index] = feature_lens % (n_window * 2)
         chunk_lengths[chunk_lengths == 0] = n_window * 2
 
-        chunk_list = audio_flat.T.split(chunk_lengths.tolist(), dim=0)
-        padded_feature = torch.nn.utils.rnn.pad_sequence(chunk_list, batch_first=True).transpose(1, 2)
-        chunk_output_lens = _get_feat_extract_output_lengths(chunk_lengths)
+        R = n_window_infer // (n_window * 2)
+        chunk_list = list(audio_flat.T.split(chunk_lengths.tolist(), dim=0))
+        real_output_lens = _get_feat_extract_output_lengths(chunk_lengths).tolist()
+        pad_chunk_frames = int(chunk_lengths.max())
+        num_mels = audio_flat.shape[0]
+
+        # Pad every audio's chunk count up to a multiple of R = n_window_infer // (n_window * 2),
+        # by appending empty (fully masked) conv chunks. The appended chunks carry no valid tokens
+        # and are dropped again by `_compact_features`, so they do not change the output.
+        padded_chunk_list = []
+        padded_chunk_output_lens = []
+        cursor = 0
+        for audio_chunk_count in chunk_num.tolist():
+            for _ in range(audio_chunk_count):
+                padded_chunk_list.append(chunk_list[cursor])
+                padded_chunk_output_lens.append(real_output_lens[cursor])
+                cursor += 1
+            for _ in range((-audio_chunk_count) % R):
+                padded_chunk_list.append(audio_flat.new_zeros(pad_chunk_frames, num_mels))
+                padded_chunk_output_lens.append(0)
+
+        padded_feature = torch.nn.utils.rnn.pad_sequence(padded_chunk_list, batch_first=True).transpose(1, 2)
+        chunk_output_lens = torch.tensor(padded_chunk_output_lens, dtype=torch.long)
         padded_mask_after_cnn = torch.nn.utils.rnn.pad_sequence(
-            [torch.ones(length, dtype=torch.bool) for length in chunk_output_lens],
+            [torch.ones(length, dtype=torch.bool) for length in padded_chunk_output_lens],
             batch_first=True,
         )
 
-        window_aftercnn = padded_mask_after_cnn.shape[-1] * (n_window_infer // (n_window * 2))
+        window_aftercnn = padded_mask_after_cnn.shape[-1] * R
         cu_chunk_lens = [0]
         for cnn_len in aftercnn_lens:
             cnn_len_val = cnn_len.item()
@@ -850,7 +890,7 @@ MODEL_PARTS_CLS_MAPPING = {
 }
 
 
-class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
+class OVModelForVisualCausalLM(OVBaseModel, OVDFlashTargetMixin, GenerationMixin):
     export_feature = "image-text-to-text"
     additional_parts = []
     auto_model_class = AutoModelForImageTextToText
@@ -894,7 +934,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         self._supports_cache_class = False
         self.main_input_name = "input_ids"
         self._compile_only = kwargs.get("compile_only", False)
-        self.export_feature = kwargs.get("export_feature", "image-text-to-text")
+        self.export_feature = kwargs.get("export_feature", type(self).export_feature)
 
         for part in self.additional_parts:
             setattr(self, f"{part}_model", kwargs.get(part))
@@ -951,6 +991,10 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
         save_config(self.config, save_directory)
 
     @classmethod
+    def _get_model_class(cls, config: PretrainedConfig):
+        return MODEL_TYPE_TO_CLS_MAPPING[config.model_type]
+
+    @classmethod
     def _from_pretrained(
         cls,
         model_id: Union[str, Path],
@@ -999,7 +1043,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             trust_remote_code (`bool`, *optional*, defaults to `False`):
                 Whether to trust remote code when loading model tokenizer/processor during quantization.
         """
-        model_cls = MODEL_TYPE_TO_CLS_MAPPING[config.model_type]
+        model_cls = cls._get_model_class(config)
         model_file_names = model_cls._all_ov_model_paths.copy()
         for k in tuple(model_file_names):
             model_file_names[f"{k}_bin"] = model_file_names[k].replace(".xml", ".bin")
@@ -1295,6 +1339,7 @@ class OVModelForVisualCausalLM(OVBaseModel, GenerationMixin):
             audio_embed_sizes=audio_embed_sizes,
             audio_attention_mask=audio_attention_mask,
             input_mode=input_mode,
+            temporal_ids=temporal_ids,
             **kwargs,
         )
 
@@ -1647,6 +1692,7 @@ class _OVLlavaForCausalLM(OVModelForVisualCausalLM):
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
         video: Optional["VideoInput"] = None,
+        video_temporal_ids: Optional[List[List[int]]] = None,
         audio: Optional[np.ndarray] = None,
     ):
         if processor is None:
@@ -2571,6 +2617,7 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         if input_ids is not None and input_ids.shape[1] == 1:
             return None
         tgt_sizes = kwargs["tgt_sizes"]
+        temporal_ids = kwargs.get("temporal_ids")
         pixel_values_list = pixel_values
         vision_hidden_states = []
         all_pixel_values = []
@@ -2606,14 +2653,17 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
                     pixel_values=all_pixel_values, patch_attention_mask=patch_attn_mask, position_ids=position_ids
                 )[0]
             )
-            vision_embedding = self.resampling(vision_embedding, tgt_sizes)
+            temporal_groups = None
+            if temporal_ids is not None:
+                temporal_groups = [group for sample_groups in temporal_ids for group in sample_groups]
+            vision_embedding = self.resampling(vision_embedding, tgt_sizes, temporal_groups)
 
             start = 0
-            for pixel_value in pixel_values_list:
-                img_cnt = len(pixel_value)
-                if img_cnt > 0:
-                    vision_hidden_states.append(vision_embedding[start : start + img_cnt])
-                    start += img_cnt
+            for sample_idx, pixel_value in enumerate(pixel_values_list):
+                output_count = len(temporal_ids[sample_idx]) if temporal_ids is not None else len(pixel_value)
+                if output_count > 0:
+                    vision_hidden_states.append(vision_embedding[start : start + output_count])
+                    start += output_count
                 else:
                     vision_hidden_states.append([])
         else:  # no image
@@ -2622,7 +2672,7 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
                 vision_hidden_states.append(dummy_feature)
         return vision_hidden_states
 
-    def resampling(self, x, tgt_sizes):
+    def resampling(self, x, tgt_sizes, temporal_groups=None):
         bs = x.shape[0]
 
         patch_len = tgt_sizes[:, 0] * tgt_sizes[:, 1]
@@ -2641,6 +2691,50 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         pos_embed = torch.nn.utils.rnn.pad_sequence(pos_embed, batch_first=True, padding_value=0.0).permute(
             1, 0, 2
         )  # BLD => L * B * D
+        # A temporal group is represented by one fixed set of resampler query tokens, so concatenate
+        # its frame features and positions before inference instead of producing tokens for every frame.
+        if temporal_groups is not None:
+            group_features = []
+            group_positions = []
+            group_masks = []
+            frame_start = 0
+            for group in temporal_groups:
+                group_ids = [int(temporal_id) for temporal_id in group]
+                if not group_ids:
+                    raise ValueError("Temporal groups must not be empty")
+                frame_end = frame_start + len(group_ids)
+                if frame_end > bs:
+                    raise ValueError("Temporal groups contain more frames than were encoded")
+
+                group_pos_embed = pos_embed[:, frame_start:frame_end].permute(1, 0, 2)
+                temporal_positions = np.asarray([max(temporal_id, 0) for temporal_id in group_ids], dtype=np.float32)
+                temporal_embed = self._get_1d_sincos_pos_embed_from_grid_new(
+                    self.embed_dim, temporal_positions[:, None]
+                ).squeeze(1)
+                temporal_embed[np.asarray(group_ids) < 0] = 0
+                group_pos_embed += torch.from_numpy(temporal_embed).to(group_pos_embed.dtype).unsqueeze(1)
+
+                group_features.append(x[frame_start:frame_end].reshape(-1, x.shape[-1]))
+                group_positions.append(group_pos_embed.reshape(-1, self.embed_dim))
+                group_masks.append(key_padding_mask[frame_start:frame_end].reshape(-1))
+                frame_start = frame_end
+
+            if frame_start != bs:
+                raise ValueError(f"Temporal groups cover {frame_start} frames, but {bs} were encoded")
+
+            image_feature = torch.nn.utils.rnn.pad_sequence(group_features, batch_first=True, padding_value=0.0)
+            pos_embed = torch.nn.utils.rnn.pad_sequence(group_positions, batch_first=True, padding_value=0.0).permute(
+                1, 0, 2
+            )
+            key_padding_mask = torch.nn.utils.rnn.pad_sequence(group_masks, batch_first=True, padding_value=True)
+            return torch.from_numpy(
+                self.resampler(
+                    image_feature=image_feature,
+                    pos_embed=pos_embed,
+                    key_padding_mask=key_padding_mask,
+                )
+            )
+
         res = torch.from_numpy(self.resampler(image_feature=x, pos_embed=pos_embed, key_padding_mask=key_padding_mask))
         return res
 
@@ -2760,14 +2854,57 @@ class _OVMiniCPMVForCausalLM(OVModelForVisualCausalLM):
         tokenizer: Optional[PreTrainedTokenizer] = None,
         config: Optional[PretrainedConfig] = None,
         video: Optional["VideoInput"] = None,
+        video_temporal_ids: Optional[List[List[int]]] = None,
         audio: Optional[np.ndarray] = None,
     ):
         if processor is None:
             raise ValueError("Processor is required.")
-        if video is not None:
-            raise ValueError("Video input is not supported")
         if audio is not None:
             raise ValueError("Audio input is not supported")
+        if video is not None and (getattr(config, "version", 0) or 0) >= 4.5:
+            from PIL import Image as PILImage
+
+            video_frames = [
+                frame if isinstance(frame, PILImage.Image) else PILImage.fromarray(np.asarray(frame))
+                for frame in video
+            ]
+            if len(video_frames) == 0:
+                raise ValueError("Video input must contain at least one frame")
+
+            image_inputs = [] if image is None else image if isinstance(image, list) else [image]
+            visual_inputs = image_inputs + video_frames
+            temporal_ids = [[-1] for _ in image_inputs]
+            if video_temporal_ids is None:
+                temporal_ids.extend(
+                    list(range(group_start, min(group_start + 6, len(video_frames))))
+                    for group_start in range(0, len(video_frames), 6)
+                )
+            else:
+                if sum(len(group) for group in video_temporal_ids) != len(video_frames):
+                    raise ValueError("video_temporal_ids must contain one ID for every video frame")
+                temporal_ids.extend(video_temporal_ids)
+            messages = [
+                {
+                    "role": "user",
+                    "content": "(<image>./</image>)" * len(visual_inputs) + "\n" + text,
+                }
+            ]
+            chat_template_processor = (
+                processor if getattr(processor, "chat_template", None) is not None else processor.tokenizer
+            )
+            prompt = chat_template_processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            inputs = processor(
+                prompt,
+                visual_inputs,
+                temporal_ids=temporal_ids,
+                max_slice_nums=1,
+                use_image_id=False,
+                return_tensors="pt",
+            )
+            inputs.pop("image_sizes", None)
+            return inputs
+        if video is not None:
+            raise ValueError("Video input is not supported")
         if getattr(processor, "chat_template", None) is not None:
             messages = [{"role": "user", "content": text if image is None else "(<image>./</image>)\n" + text}]
             prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
@@ -5298,12 +5435,18 @@ class _OVQwen3OmniMoeForCausalLM(OVModelForVisualCausalLM):
         return thinker_result, waveform.float()
 
 
+# any-to-any models (text, image, video, audio in; text and speech out) served by OVModelForMultimodalLM
+MULTIMODAL_LM_MODEL_TYPES = ("qwen3_omni_moe", "lfm3_omni")
+
+
 class OVModelForMultimodalLM(OVBaseModel, GenerationMixin):
     export_feature = "image-text-to-text"
     auto_model_class = transformers_auto_class
 
-    def __init__(self, *, _inner: _OVQwen3OmniMoeForCausalLM, **kwargs):
+    def __init__(self, *, _inner: Union["_OVQwen3OmniMoeForCausalLM", "_OVLfm3OmniForCausalLM"], **kwargs):
         object.__setattr__(self, "_inner", _inner)
+        # the inputs of the wrapped architecture, also when called on the instance without a config
+        object.__setattr__(self, "preprocess_inputs", type(_inner).preprocess_inputs)
 
         self.config = _inner.config
         self.model_save_dir = _inner.model_save_dir
@@ -5378,6 +5521,10 @@ class OVModelForMultimodalLM(OVBaseModel, GenerationMixin):
         return _OVQwen3OmniMoeForCausalLM._all_ov_model_paths.copy()
 
     @property
+    def _ov_model_paths(self) -> Dict[str, str]:
+        return self._inner._ov_model_paths
+
+    @property
     def ov_models(self) -> Dict[str, Union[openvino.Model, openvino.CompiledModel]]:
         return self._inner.ov_models
 
@@ -5447,9 +5594,9 @@ class OVModelForMultimodalLM(OVBaseModel, GenerationMixin):
         config: PretrainedConfig,
         **kwargs,
     ):
-        if getattr(config, "model_type", None) != "qwen3_omni_moe":
+        if getattr(config, "model_type", None) not in MULTIMODAL_LM_MODEL_TYPES:
             raise ValueError(
-                f"OVModelForMultimodalLM only supports qwen3_omni_moe models, "
+                f"OVModelForMultimodalLM only supports {', '.join(MULTIMODAL_LM_MODEL_TYPES)} models, "
                 f"but got config.model_type={getattr(config, 'model_type', None)!r}. "
                 f"Use OVModelForVisualCausalLM for other vision-language architectures."
             )
@@ -5463,9 +5610,9 @@ class OVModelForMultimodalLM(OVBaseModel, GenerationMixin):
         config: PretrainedConfig,
         **kwargs,
     ):
-        if getattr(config, "model_type", None) != "qwen3_omni_moe":
+        if getattr(config, "model_type", None) not in MULTIMODAL_LM_MODEL_TYPES:
             raise ValueError(
-                f"OVModelForMultimodalLM only supports qwen3_omni_moe models, "
+                f"OVModelForMultimodalLM only supports {', '.join(MULTIMODAL_LM_MODEL_TYPES)} models, "
                 f"but got config.model_type={getattr(config, 'model_type', None)!r}. "
                 f"Use OVModelForVisualCausalLM for other vision-language architectures."
             )
@@ -7583,10 +7730,41 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM):
         self.num_grid_per_side = int(config.vision_config.num_position_embeddings**0.5)
         self.spatial_merge_size = config.vision_config.spatial_merge_size
         head_dim = config.vision_config.hidden_size // config.vision_config.num_heads
-        self.rotary_pos_emb = Qwen3_5VisionRotaryEmbedding(head_dim // 2)
+        # axial vision RoPE over head_dim // 2 (theta 10000), computed here: the transformers rotary module and
+        # `rot_pos_emb` changed interface in later versions
+        rotary_dim = head_dim // 2
+        self.vision_rope_inv_freq = 1.0 / (10000.0 ** (torch.arange(0, rotary_dim, 2, dtype=torch.float) / rotary_dim))
 
     def __setattr__(self, name, value):
         OVModelForVisualCausalLM.__setattr__(self, name, value)
+
+    # Adapted from Qwen3_5VisionModel.rot_pos_emb (transformers 5.2)
+    def rot_pos_emb(self, grid_thw):
+        merge_size = self.spatial_merge_size
+        grid_thw_list = grid_thw.tolist()
+
+        max_hw = max(max(h, w) for _, h, w in grid_thw_list)
+        freq_table = torch.outer(
+            torch.arange(max_hw, dtype=torch.float), self.vision_rope_inv_freq
+        )  # (max_hw, dim // 2)
+
+        pos_ids = []
+        for num_frames, height, width in grid_thw_list:
+            merged_h, merged_w = height // merge_size, width // merge_size
+            # full-resolution (row, col) of every patch, ordered merge_size x merge_size block by block
+            row_idx = (
+                torch.arange(merged_h)[:, None, None, None] * merge_size
+                + torch.arange(merge_size)[None, None, :, None]
+            )
+            col_idx = (
+                torch.arange(merged_w)[None, :, None, None] * merge_size
+                + torch.arange(merge_size)[None, None, None, :]
+            )
+            row_idx = row_idx.expand(merged_h, merged_w, merge_size, merge_size).reshape(-1)
+            col_idx = col_idx.expand(merged_h, merged_w, merge_size, merge_size).reshape(-1)
+            pos_ids.append(torch.stack((row_idx, col_idx), dim=-1).repeat(num_frames, 1))
+
+        return freq_table[torch.cat(pos_ids)].flatten(1)
 
     def prepare_inputs_for_generation(
         self,
@@ -7969,7 +8147,75 @@ class _OVQwen3_5ForCausalLM(OVModelForVisualCausalLM):
 if is_transformers_version(">=", "5.2"):
     _OVQwen3_5ForCausalLM.get_placeholder_mask = Qwen3_5Model.get_placeholder_mask
     _OVQwen3_5ForCausalLM.get_rope_index = Qwen3_5Model.get_rope_index
-    _OVQwen3_5ForCausalLM.rot_pos_emb = getattr(Qwen3_5VisionModel, "rot_pos_emb", None)
+
+
+class OVModelForVisualSequenceClassification(OVModelForVisualCausalLM):
+    """
+    OpenVINO runtime for vision-language models with a sequence classification head (`AutoModelForSequenceClassification`
+    of a VLM, e.g. reward models). The model parts are the ones of `OVModelForVisualCausalLM`, but the language model ends
+    in the classification head: one forward pass gives the class logits of every token, and the logits of the last non-pad
+    token are the result, as in transformers' `GenericForSequenceClassification`. Nothing is generated.
+    """
+
+    export_feature = "text-classification"
+    auto_model_class = AutoModelForSequenceClassification
+
+    @classmethod
+    def _get_model_class(cls, config: PretrainedConfig):
+        if config.model_type not in SEQUENCE_CLASSIFICATION_MODEL_TYPE_TO_CLS_MAPPING:
+            raise ValueError(
+                f"{config.model_type} is not supported by {cls.__name__}, supported model types: "
+                f"{list(SEQUENCE_CLASSIFICATION_MODEL_TYPE_TO_CLS_MAPPING)}"
+            )
+        return SEQUENCE_CLASSIFICATION_MODEL_TYPE_TO_CLS_MAPPING[config.model_type]
+
+    def forward(
+        self,
+        input_ids: torch.LongTensor,
+        attention_mask: Optional[torch.LongTensor] = None,
+        pixel_values: Optional[torch.FloatTensor] = None,
+        **kwargs,
+    ) -> SequenceClassifierOutput:
+        inputs_embeds, attention_mask, position_ids, *_ = self.get_multimodal_embeddings(
+            input_ids, pixel_values, attention_mask=attention_mask, **kwargs
+        )
+        # without past_key_values the language model starts from a fresh state
+        logits = self.language_model(
+            None, inputs_embeds=inputs_embeds, attention_mask=attention_mask, position_ids=position_ids
+        ).logits
+
+        # the rightmost non-pad token, padding on either side; the last token without a pad token id
+        pad_token_id = self.config.get_text_config().pad_token_id
+        if pad_token_id is None:
+            if input_ids.shape[0] != 1:
+                raise ValueError("Cannot handle batch sizes > 1 if no padding token is defined.")
+            last_token = torch.full((input_ids.shape[0],), -1)
+        else:
+            is_token = (input_ids != pad_token_id).int()
+            last_token = (torch.arange(input_ids.shape[-1]) * is_token).argmax(-1)
+        return SequenceClassifierOutput(logits=logits[torch.arange(input_ids.shape[0]), last_token])
+
+    def generate(self, *args, **kwargs):
+        raise NotImplementedError(f"{self.__class__.__name__} classifies, it does not generate.")
+
+
+class _OVQwen3_5ForSequenceClassification(OVModelForVisualSequenceClassification, _OVQwen3_5ForCausalLM):
+    """
+    Qwen3_5ForSequenceClassification: the Qwen3.5 vision and text embeddings and M-RoPE positions of
+    `_OVQwen3_5ForCausalLM`, classified by `OVModelForVisualSequenceClassification.forward`.
+    """
+
+    def __init__(self, *args, **kwargs):
+        if is_transformers_version("<", "5.14.0"):
+            raise ImportError("Qwen3_5ForSequenceClassification requires transformers >= 5.14.0.")
+        super().__init__(*args, **kwargs)
+
+    def forward(self, *args, **kwargs) -> SequenceClassifierOutput:
+        # every call is a new prompt: compute its M-RoPE positions instead of reusing the cached rope deltas
+        self.rope_deltas = None
+        return super().forward(*args, **kwargs)
+
+
 if is_transformers_version(">=", "5.15"):
     _OVQwen3_5ForCausalLM.get_vision_position_ids = Qwen3_5Model.get_vision_position_ids
 
@@ -7980,9 +8226,10 @@ class _OVMuseGlimmerForCausalLM(OVModelForVisualCausalLM):
     The vision stack is exported as a single graph that consumes flattened patches
     ``pixel_values`` ``[num_patches, patch_dim]`` plus ``image_grid_thw``
     ``[num_images, 3]`` and returns the projected per-token features
-    ``[num_out_tokens, text_hidden]`` (vision tower -> adapter -> projection ->
-    perception norm, with the 2x2 patch merge). Features are scattered into the
-    positions of the ``<image>`` / ``<video>`` tokens in the prompt.
+    ``[num_out_tokens, text_hidden]`` (vision tower -> adapter -> projection, with
+    the 2x2 patch merge). Both embedding IRs return raw features; this class scatters
+    vision features into text features and the language-model IR applies their shared
+    RMS normalization.
     """
 
     def get_experts_implementation(self):
@@ -8025,9 +8272,13 @@ class _OVMuseGlimmerForCausalLM(OVModelForVisualCausalLM):
     ):
         inputs_embeds = self.get_text_embeddings(input_ids)
         inputs_embeds = torch.from_numpy(inputs_embeds) if isinstance(inputs_embeds, np.ndarray) else inputs_embeds
-        is_prefill = input_ids is not None and input_ids.shape[1] != 1
-        # Images and videos share the same vision graph (video_grid_thw plays the role
-        # of image_grid_thw); each modality is scattered into its own placeholder token.
+        # An empty KV cache identifies the prefill. The token count does not: under
+        # speculative decoding a continuation step verifies a whole block at once.
+        past_key_values = kwargs.get("past_key_values")
+        is_prefill = past_key_values is None or self.language_model._get_past_length(past_key_values) == 0
+        # Both component IRs return raw features. Images and videos share the same vision
+        # graph (video_grid_thw plays the role of image_grid_thw); each modality is
+        # scattered into its placeholder token before the language model normalizes rows.
         if is_prefill and pixel_values is not None:
             image_embeds = self.get_vision_embeddings(pixel_values, input_ids=input_ids, image_grid_thw=image_grid_thw)
             if image_embeds is not None:
@@ -8065,10 +8316,12 @@ class _OVMuseGlimmerForCausalLM(OVModelForVisualCausalLM):
         content.append({"type": "text", "text": text})
         messages = [{"role": "user", "content": content}]
         prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        # The chat template already starts with BOS; the tokenizer would add a second one.
         inputs = processor(
             text=prompt,
             images=[image] if image is not None else None,
             videos=[video] if video is not None else None,
+            add_special_tokens=False,
             return_tensors="pt",
         )
         return inputs
@@ -8082,6 +8335,10 @@ class _OVMiniCPMV4_7ForCausalLM(OVModelForVisualCausalLM):
     tensors are computed here. The canvas M-RoPE positions are computed once at prefill with the transformers
     `get_rope_index` and extended with the cached `rope_deltas` while decoding.
     """
+
+    # visual tokens get canvas M-RoPE positions from `get_rope_index`, otherwise text positions
+    _canvas_rope = True
+    _supported_downsample_modes = ("16x",)
 
     def __init__(
         self,
@@ -8110,8 +8367,12 @@ class _OVMiniCPMV4_7ForCausalLM(OVModelForVisualCausalLM):
             quantization_config=quantization_config,
             **kwargs,
         )
-        if config.downsample_mode != "16x":
-            raise NotImplementedError(f"Only the 16x downsample mode is supported, got {config.downsample_mode}.")
+        if config.downsample_mode not in self._supported_downsample_modes:
+            raise NotImplementedError(
+                f"Supported downsample modes: {self._supported_downsample_modes}, got {config.downsample_mode}."
+            )
+        # the "4x" downsample mode skips the ViT window merger, see MiniCPMV4_6Model.get_image_features
+        self.use_vit_merger = config.downsample_mode != "4x"
         vision_config = config.vision_config
         self.patch_size = vision_config.patch_size
         self.num_patches_per_side = vision_config.image_size // vision_config.patch_size
@@ -8130,35 +8391,30 @@ class _OVMiniCPMV4_7ForCausalLM(OVModelForVisualCausalLM):
             start += num_patches
 
             crop_size = torch.tensor([[height, width]])
-            position_ids = get_vision_nearest_position_ids(crop_size, self.num_patches_per_side)
-            window_index, window_cu_seqlens = get_vision_window_index(
-                torch.nn.functional.pad(crop_size, (1, 0), value=1),
-                spatial_merge_size=1,
-                window_size=self.window_size,
-                patch_size=1,
-            )
-            if (window_cu_seqlens.diff() != self.window_size**2).any():
-                raise ValueError(f"Crop grid ({height}, {width}) must be divisible by the window size.")
-            # merge_index: token order for the final merger. The ViT window merger leaves a (height / window_h,
-            # width / window_w) grid; regroup it so that every merge_h x merge_w block is contiguous (MiniCPMV4_7Merger)
-            grid_h, grid_w = height // self.window_kernel_size[0], width // self.window_kernel_size[1]
+            index_inputs = {"position_ids": get_vision_nearest_position_ids(crop_size, self.num_patches_per_side)}
+            grid_h, grid_w = height, width
+            if self.use_vit_merger:
+                window_index, window_cu_seqlens = get_vision_window_index(
+                    torch.nn.functional.pad(crop_size, (1, 0), value=1),
+                    spatial_merge_size=1,
+                    window_size=self.window_size,
+                    patch_size=1,
+                )
+                if (window_cu_seqlens.diff() != self.window_size**2).any():
+                    raise ValueError(f"Crop grid ({height}, {width}) must be divisible by the window size.")
+                index_inputs["window_index"] = window_index
+                # the ViT window merger leaves a (height / window_h, width / window_w) grid
+                grid_h, grid_w = height // self.window_kernel_size[0], width // self.window_kernel_size[1]
+            # merge_index: token order for the final merger, the grid regrouped so that every merge_h x merge_w block
+            # is contiguous (MiniCPMV4_7Merger)
             merge_h, merge_w = self.merge_kernel_size
-            merge_index = (
+            index_inputs["merge_index"] = (
                 torch.arange(grid_h * grid_w)
                 .view(grid_h // merge_h, merge_h, grid_w // merge_w, merge_w)
                 .permute(0, 2, 1, 3)
                 .reshape(-1)
             )
-            features.append(
-                torch.from_numpy(
-                    self.vision_embeddings(
-                        crop,
-                        position_ids=position_ids,
-                        window_index=window_index,
-                        merge_index=merge_index,
-                    )[0]
-                )
-            )
+            features.append(torch.from_numpy(self.vision_embeddings(crop, **index_inputs)[0]))
         return torch.cat(features, dim=0)
 
     def get_image_features(self, pixel_values, target_sizes):
@@ -8230,7 +8486,7 @@ class _OVMiniCPMV4_7ForCausalLM(OVModelForVisualCausalLM):
 
         batch_size, seq_len = input_ids.shape
         has_multimodal = target_sizes is not None or target_sizes_videos is not None
-        if is_prefill and has_multimodal and mm_token_type_ids is not None:
+        if is_prefill and has_multimodal and mm_token_type_ids is not None and self._canvas_rope:
             position_ids, self.rope_deltas = self.get_rope_index(
                 input_ids,
                 mm_token_type_ids=mm_token_type_ids,
@@ -8349,6 +8605,564 @@ if is_transformers_version(">=", "5.18.0"):
     _OVMiniCPMV4_7ForCausalLM._frame_end_idx = staticmethod(MiniCPMV4_7Model._frame_end_idx)
 
 
+class _OVMiniCPMOcrForCausalLM(_OVMiniCPMV4_7ForCausalLM):
+    """
+    OpenVINO runtime for MiniCPM-OCR (MiniCPM-V 4.6 architecture, native transformers implementation).
+
+    Runs the MiniCPM-V 4.7 graphs, but the visual tokens take plain text positions (the same on the three M-RoPE
+    axes), as the language model has no canvas M-RoPE. The checkpoints use the "4x" downsample mode, which skips the
+    ViT window merger.
+    """
+
+    _canvas_rope = False
+    _supported_downsample_modes = ("4x", "16x")
+
+
+class _OVLfm3VlForCausalLM(OVModelForVisualCausalLM):
+    """
+    LFM3-VL (remote code, LiquidAI/lfm3-vl-1.9b-rl). Images and videos are preprocessed Qwen-style (flattened
+    patches + `*_grid_thw`); the vision encoder treats every temporal patch as an independent 2D image whose
+    projected features replace the `<|image|>` / `<|video|>` placeholder tokens. The language model is a hybrid
+    conv / attention model with 1D positions, so no rope index computation is needed.
+    """
+
+    def get_vision_embeddings(self, pixel_values, grid_thw=None, **kwargs):
+        if grid_thw is None:
+            raise ValueError("`image_grid_thw` / `video_grid_thw` is required with pixel values for LFM3-VL")
+        # LFM3-VL keeps the merge size in its flat config, LFM3-Omni as the projector downsample factor
+        merge = getattr(self.config, "vision_spatial_merge_size", None) or self.config.downsample_factor
+        pixel_values = torch.as_tensor(pixel_values, dtype=torch.float32)
+        features = []
+        offset = 0
+        for temporal, height, width in grid_thw.tolist():
+            num_patches = temporal * height * width
+            patches = pixel_values[offset : offset + num_patches]
+            offset += num_patches
+            # the image processor emits patches in merge-block-major order, the vision model expects raster order
+            patches = patches.view(temporal, height // merge, width // merge, merge, merge, -1)
+            patches = patches.permute(0, 1, 3, 2, 4, 5).reshape(temporal, height, width, -1)
+            image_features = torch.from_numpy(self.vision_embeddings(patches).last_hidden_state)
+            features.append(image_features.reshape(-1, image_features.shape[-1]))
+        if offset != pixel_values.shape[0]:
+            raise ValueError("pixel values and grid_thw disagree")
+        return torch.cat(features, dim=0)
+
+    def get_multimodal_embeddings(
+        self,
+        input_ids,
+        pixel_values=None,
+        attention_mask=None,
+        position_ids=None,
+        pixel_values_videos=None,
+        image_grid_thw=None,
+        video_grid_thw=None,
+        **kwargs,
+    ):
+        inputs_embeds = kwargs.pop("inputs_embeds", None)
+        if inputs_embeds is None:
+            inputs_embeds = torch.from_numpy(self.get_text_embeddings(input_ids))
+        for values, grid_thw, token_id in (
+            (pixel_values, image_grid_thw, self.config.image_token_id),
+            (pixel_values_videos, video_grid_thw, self.config.video_token_id),
+        ):
+            if values is None:
+                continue
+            visual_embeds = self.get_vision_embeddings(values, grid_thw)
+            visual_mask = input_ids == token_id
+            if int(visual_mask.sum()) != visual_embeds.shape[0]:
+                raise ValueError("visual token count does not match projected visual features")
+            inputs_embeds[visual_mask] = visual_embeds.to(inputs_embeds.dtype)
+        return inputs_embeds, attention_mask, position_ids
+
+    def prepare_inputs_for_generation(
+        self,
+        input_ids,
+        past_key_values=None,
+        inputs_embeds=None,
+        pixel_values=None,
+        attention_mask=None,
+        **kwargs,
+    ):
+        model_inputs = super().prepare_inputs_for_generation(
+            input_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=inputs_embeds,
+            pixel_values=pixel_values,
+            attention_mask=attention_mask,
+            **kwargs,
+        )
+        if past_key_values is not None:
+            # visual features are merged into the prompt only at the prefill step
+            model_inputs["pixel_values"] = None
+            model_inputs["pixel_values_videos"] = None
+        return model_inputs
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        if audio is not None:
+            raise ValueError("Audio input is not supported")
+        content = []
+        if image is not None:
+            content.append({"type": "image"})
+        if video is not None:
+            content.append({"type": "video"})
+        content.append({"type": "text", "text": text})
+        # thinking is disabled as in the LFM3-VL model card usage example
+        text_prompt = processor.apply_chat_template(
+            [{"role": "user", "content": content}], tokenize=False, add_generation_prompt=True, enable_thinking=False
+        )
+        return processor(text=[text_prompt], images=image, videos=video, return_tensors="pt")
+
+
+class OVLfm3OmniAudioOutEmbeddings(OVModelPart):
+    """LFM3-Omni speech frame embeddings: `codes` (num_frames, num_codebooks) -> (num_frames, hidden_size)."""
+
+    _model_name = "audio_out_embeddings"
+
+    def forward(self, codes):
+        self.compile()
+        return torch.from_numpy(self.request({"codes": codes})[0])
+
+
+class OVLfm3OmniDepthDecoder(OVModelPart):
+    """One MaskGIT pass of the LFM3-Omni depth decoder: the logits of the 12 codebooks of a speech frame."""
+
+    _model_name = "depth_decoder"
+
+    def forward(self, hidden_states, codes, masked):
+        self.compile()
+        result = self.request({"hidden_states": hidden_states, "codes": codes, "masked": masked})
+        return torch.from_numpy(result[0])
+
+
+class OVLfm3OmniAudioDecoder(OVModelPart):
+    """Liquid Codec decoder of LFM3-Omni: `audio_codes` (batch_size, num_codebooks, num_frames) -> 24 kHz audio."""
+
+    _model_name = "audio_decoder"
+
+    def forward(self, audio_codes):
+        self.compile()
+        return torch.from_numpy(self.request({"audio_codes": audio_codes})[0])
+
+
+MODEL_PARTS_CLS_MAPPING.update(
+    {
+        "audio_out_embeddings": OVLfm3OmniAudioOutEmbeddings,
+        "depth_decoder": OVLfm3OmniDepthDecoder,
+        "audio_decoder": OVLfm3OmniAudioDecoder,
+    }
+)
+
+
+@dataclass
+class Lfm3OmniGenerateOutput(ModelOutput):
+    """
+    Output of `generate` of LFM3-Omni, as returned by the remote model: the prompt followed by the generated text
+    slots (an `<|audio_out|>` token per speech frame), the codes of the speech frames (`-1` padded) and the valid
+    lengths of both.
+    """
+
+    sequences: Optional[torch.LongTensor] = None
+    audio_codes: Optional[torch.LongTensor] = None
+    sequence_lengths: Optional[torch.LongTensor] = None
+    audio_lengths: Optional[torch.LongTensor] = None
+
+
+class _OVLfm3OmniForCausalLM(_OVLfm3VlForCausalLM):
+    """
+    LFM3-Omni (remote code, LiquidAI/LFM3-Omni-2.2B): the LFM3-VL vision tower and LFM3 language model plus a
+    speech encoder, and speech output through a depth decoder that samples the 12 codebooks of a speech frame from
+    the language model hidden state, decoded to 24 kHz audio by the Liquid Codec decoder (`decode_audio`).
+
+    `generate` reimplements the text / speech state machine of the remote model for a single prompt. With the same
+    torch seed, sampling consumes the random generator in the same order as the remote model.
+    """
+
+    additional_parts = ["audio_encoder", "audio_out_embeddings", "depth_decoder", "audio_decoder"]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # the depth decoder needs the last hidden state of the language model at every step
+        self.language_model._collecting_hidden_states = True
+
+    @property
+    def has_talker(self) -> bool:
+        # speech output, as Qwen3-Omni's talker: the depth decoder samples speech frames, the codec decodes them
+        return self.depth_decoder is not None and self.audio_decoder is not None
+
+    def get_audio_features(self, input_features, feature_attention_mask=None):
+        # the clips are encoded one by one without padding: the encoder is causal and masks the padding, so the
+        # features of the valid frames are the same as for the padded batch of the remote model
+        features = []
+        for index in range(input_features.shape[0]):
+            num_frames = input_features.shape[-1]
+            if feature_attention_mask is not None:
+                num_frames = int(feature_attention_mask[index].sum())
+            clip = torch.as_tensor(input_features[index : index + 1, :, :num_frames], dtype=torch.float32)
+            features.append(torch.from_numpy(self.audio_encoder(input_features=clip))[0])
+        return torch.cat(features, dim=0)
+
+    def get_multimodal_embeddings(
+        self,
+        input_ids,
+        pixel_values=None,
+        attention_mask=None,
+        position_ids=None,
+        input_features=None,
+        feature_attention_mask=None,
+        audio_out_codes=None,
+        **kwargs,
+    ):
+        inputs_embeds, attention_mask, position_ids = super().get_multimodal_embeddings(
+            input_ids, pixel_values=pixel_values, attention_mask=attention_mask, position_ids=position_ids, **kwargs
+        )
+        for features, token_id in (
+            (input_features, self.config.audio_token_id),
+            (audio_out_codes, self.config.audio_out_token_id),
+        ):
+            mask = input_ids == token_id
+            if features is None:
+                if bool(mask.any()) and token_id == self.config.audio_out_token_id:
+                    raise ValueError("audio_out placeholders require `audio_out_codes`")
+                if bool(mask.any()):
+                    raise ValueError("audio placeholders require `input_features`")
+                continue
+            if token_id == self.config.audio_token_id:
+                embeds = self.get_audio_features(features, feature_attention_mask)
+            else:
+                embeds = self.audio_out_embeddings(torch.as_tensor(features, dtype=torch.int64))
+            if int(mask.sum()) != embeds.shape[0]:
+                raise ValueError(f"{int(mask.sum())} placeholder tokens {token_id} but {embeds.shape[0]} features")
+            inputs_embeds[mask] = embeds.to(inputs_embeds.dtype)
+        return inputs_embeds, attention_mask, position_ids
+
+    def decode_audio(self, audio_codes):
+        """Decodes speech frames `(batch_size, num_codebooks, num_frames)` to 24 kHz audio `(batch_size, samples)`."""
+        return self.audio_decoder(torch.as_tensor(audio_codes, dtype=torch.int64))
+
+    @staticmethod
+    def _build_warpers(temperature, top_k, top_p=None, min_p=None):
+        if temperature == 0 or (temperature is None and not top_k):
+            return []
+        warpers = []
+        if temperature:
+            warpers.append(TemperatureLogitsWarper(float(temperature)))
+        if top_k:
+            warpers.append(TopKLogitsWarper(int(top_k)))
+        if top_p is not None and top_p < 1.0:
+            warpers.append(TopPLogitsWarper(float(top_p)))
+        if min_p:
+            warpers.append(MinPLogitsWarper(float(min_p)))
+        return warpers
+
+    @staticmethod
+    def _sample(logits, repetition_penalty, history, suppress, warpers):
+        scores = logits.float()[None].clone()
+        if repetition_penalty is not None and repetition_penalty != 1.0 and history is not None:
+            scores = RepetitionPenaltyLogitsProcessor(float(repetition_penalty))(history.reshape(1, -1), scores)
+        if suppress:
+            scores[:, list(suppress)] = -float("inf")
+        if not warpers:
+            return scores.argmax(-1)
+        for warper in warpers:
+            scores = warper(None, scores)
+        return torch.multinomial(scores.softmax(-1), 1)[0]
+
+    def sample_audio_frame(self, hidden_state, repetition_penalty, history, warpers):
+        """Samples the codes of one speech frame, revealing the codebooks in a random order over the MaskGIT passes."""
+        config = self.config
+        hidden_state = hidden_state.reshape(1, -1).numpy()
+        codes = torch.zeros((1, config.num_codebooks), dtype=torch.long)
+        revealed = torch.zeros_like(codes, dtype=torch.bool)
+        order = torch.stack([torch.randperm(config.num_codebooks)])
+        for pick in order.split(config.maskgit_schedule, dim=1):
+            logits = self.depth_decoder(hidden_state, codes.numpy(), (~revealed).numpy())
+            for index in pick[0].tolist():
+                codebook_history = None if history is None else history[:, index]
+                codes[0, index] = self._sample(logits[0, index], repetition_penalty, codebook_history, (), warpers)
+            revealed.scatter_(1, pick, True)
+        return codes[0]
+
+    def _language_model_step(self, inputs_embeds, attention_mask, first_step):
+        outputs = self.language_model.forward(
+            input_ids=None,
+            inputs_embeds=inputs_embeds,
+            attention_mask=attention_mask,
+            past_key_values=None if first_step else ((),),
+        )
+        return outputs.logits[:, -1], outputs.last_hidden_state[:, -1]
+
+    def generate(
+        self,
+        input_ids: torch.LongTensor,
+        attention_mask: Optional[torch.LongTensor] = None,
+        pixel_values: Optional[torch.FloatTensor] = None,
+        image_grid_thw: Optional[torch.LongTensor] = None,
+        pixel_values_videos: Optional[torch.FloatTensor] = None,
+        video_grid_thw: Optional[torch.LongTensor] = None,
+        input_features: Optional[torch.FloatTensor] = None,
+        feature_attention_mask: Optional[torch.Tensor] = None,
+        audio_out_codes: Optional[torch.LongTensor] = None,
+        generation_config: Optional[GenerationConfig] = None,
+        generation_mode: Optional[str] = None,
+        audio_temperature: Optional[float] = None,
+        audio_top_k: Optional[int] = None,
+        audio_repetition_penalty: Optional[float] = None,
+        audio_repetition_window: int = 64,
+        text_repetition_window: int = 32,
+        suppress_mixed: bool = False,
+        suppress_audio_out: bool = False,
+        return_audio_eos: bool = False,
+        streamer=None,
+        **kwargs,
+    ):
+        """
+        Generates text and / or speech as the remote `Lfm3OmniForConditionalGeneration.generate`: the mode (text,
+        speech or interleaved) follows the last prompt token or `generation_mode`. As the other OpenVINO visual
+        language models it returns the sequences (prompt + generated text slots); with `return_dict_in_generate=True`
+        it returns `Lfm3OmniGenerateOutput` with the speech frames too (the remote model returns it by default).
+
+        With `return_audio=True` (the any-to-any call of `OVModelForMultimodalLM`, as for Qwen3-Omni) it returns
+        `(sequences, waveform)`: the answer in text and speech, interleaved unless `generation_mode` is given
+        (`"audio"` for speech only, e.g. TTS), the 24 kHz waveform of shape `(1, 1, num_samples)` or `None` without
+        speech. Speech is then sampled as recommended by the model card unless set: `audio_temperature=0.4`,
+        `audio_repetition_penalty=1.2`.
+        """
+        if input_ids.ndim != 2 or input_ids.shape[0] != 1:
+            raise ValueError("LFM3-Omni OpenVINO generation supports a single prompt (batch size 1)")
+        return_audio = kwargs.pop("return_audio", False)
+        if return_audio:
+            if not self.has_talker:
+                raise ValueError("return_audio=True needs the depth decoder and audio decoder models")
+            generation_mode = generation_mode if generation_mode is not None else "interleaved"
+            # greedy speech decoding degenerates
+            audio_temperature = audio_temperature if audio_temperature is not None else 0.4
+            audio_repetition_penalty = audio_repetition_penalty if audio_repetition_penalty is not None else 1.2
+        return_dict = kwargs.pop("return_dict_in_generate", None)
+        if return_dict is None and generation_config is not None:
+            return_dict = generation_config.return_dict_in_generate
+        plain_sequences = not return_dict
+        generation_config = copy.deepcopy(
+            generation_config if generation_config is not None else self.generation_config
+        )
+        generation_config.update(**kwargs)
+        if (generation_config.num_beams or 1) != 1 or (generation_config.num_return_sequences or 1) != 1:
+            raise ValueError("LFM3-Omni supports one greedy or sampled continuation per prompt")
+        config = self.config
+        if attention_mask is None:
+            attention_mask = torch.ones_like(input_ids)
+        do_sample = generation_config.do_sample
+        text_warpers = self._build_warpers(
+            generation_config.temperature if do_sample else None,
+            generation_config.top_k if do_sample else None,
+            generation_config.top_p if do_sample else None,
+            generation_config.min_p if do_sample else None,
+        )
+        audio_warpers = self._build_warpers(audio_temperature, audio_top_k)
+        eos_ids = generation_config.eos_token_id
+        if eos_ids is None:
+            eos_ids = config.text_config.eos_token_id
+        eos_ids = list(eos_ids) if isinstance(eos_ids, (list, tuple)) else [eos_ids]
+        pad_token_id = generation_config.pad_token_id
+        if pad_token_id is None:
+            pad_token_id = (
+                config.text_config.pad_token_id if config.text_config.pad_token_id is not None else eos_ids[0]
+            )
+        suppress = [config.audio_token_id, config.audio_out_token_id, config.image_token_id, config.video_token_id]
+        suppress += [
+            token
+            for flag, token in (
+                (suppress_mixed, config.mixed_start_token_id),
+                (suppress_audio_out, config.audio_start_token_id),
+            )
+            if flag
+        ]
+
+        text_mode, audio_mode, interleaved_mode = "text", "audio", "interleaved"
+        if generation_mode is None:
+            last_token = int(input_ids[0, -1])
+            if last_token in (config.audio_start_token_id, config.audio_out_token_id):
+                mode = audio_mode
+            elif last_token == config.mixed_start_token_id:
+                mode = interleaved_mode
+            else:
+                mode = text_mode
+        else:
+            mode = str(getattr(generation_mode, "value", generation_mode))
+            if mode not in (text_mode, audio_mode, interleaved_mode):
+                raise ValueError(f"Unknown generation_mode {generation_mode}")
+            # speech always follows its marker in training; append the one the requested mode needs
+            markers = {
+                audio_mode: (config.audio_start_token_id, config.audio_out_token_id),
+                interleaved_mode: (config.mixed_start_token_id,),
+            }
+            if mode in markers and int(input_ids[0, -1]) not in markers[mode]:
+                input_ids = torch.cat((input_ids, input_ids.new_full((1, 1), markers[mode][0])), 1)
+                attention_mask = torch.cat((attention_mask, attention_mask.new_ones((1, 1))), 1)
+
+        max_new_tokens = generation_config.max_new_tokens
+        if max_new_tokens is None:
+            max_new_tokens = generation_config.max_length - input_ids.shape[1]
+
+        inputs_embeds, attention_mask, _ = self.get_multimodal_embeddings(
+            input_ids,
+            pixel_values=pixel_values,
+            attention_mask=attention_mask,
+            pixel_values_videos=pixel_values_videos,
+            image_grid_thw=image_grid_thw,
+            video_grid_thw=video_grid_thw,
+            input_features=input_features,
+            feature_attention_mask=feature_attention_mask,
+            audio_out_codes=audio_out_codes,
+        )
+        if generation_mode is None and audio_out_codes is not None:
+            # a replayed terminal frame resumes the text phase
+            if int(input_ids[0, -1]) == config.audio_out_token_id and bool(
+                (audio_out_codes[-1] == config.audio_eos_code).any()
+            ):
+                mode = text_mode
+        logits, hidden = self._language_model_step(inputs_embeds, attention_mask, first_step=True)
+        if streamer is not None:
+            streamer.put(input_ids)
+
+        text_out, frames = [], []
+        text_history = deque(maxlen=text_repetition_window)
+        audio_history = deque(maxlen=audio_repetition_window)
+        slots_left = config.interleaved_n_text
+        speaking, text_done = False, False
+        for step in range(max_new_tokens):
+            interleaving = mode == interleaved_mode
+            finished = False
+            if mode == audio_mode or (interleaving and speaking):
+                history = torch.stack(tuple(audio_history)) if audio_history else None
+                codes = self.sample_audio_frame(hidden[0], audio_repetition_penalty, history, audio_warpers)
+                is_eos = bool((codes == config.audio_eos_code).any())
+                if is_eos:
+                    codes = torch.full_like(codes, config.audio_eos_code)
+                    mode = text_mode
+                else:
+                    audio_history.append(codes)
+                if not is_eos or return_audio_eos:
+                    frames.append(codes)
+                    text_out.append(config.audio_out_token_id)
+                next_embeds = self.audio_out_embeddings(codes[None].numpy())[None]
+            else:
+                history = torch.stack(tuple(text_history)) if text_history else None
+                token = self._sample(logits[0], generation_config.repetition_penalty, history, suppress, text_warpers)
+                token_id = int(token)
+                text_history.append(token)
+                text_out.append(token_id)
+                if streamer is not None:
+                    streamer.put(token.view(1, 1))
+                if token_id == config.text_end_token_id:
+                    # inside an interleaved block it ends the text and starts the audio tail; otherwise the turn
+                    if interleaving:
+                        text_done, speaking = True, True
+                    else:
+                        finished = True
+                elif token_id in eos_ids:
+                    finished = True
+                elif interleaving:
+                    pass
+                elif token_id == config.audio_start_token_id:
+                    mode = audio_mode
+                elif token_id == config.mixed_start_token_id:
+                    mode = interleaved_mode
+                    slots_left, speaking, text_done = config.interleaved_n_text, False, False
+                next_embeds = torch.from_numpy(self.get_text_embeddings(token.view(1, 1)))
+            if interleaving and not text_done:
+                slots_left -= 1
+                if slots_left == 0:
+                    speaking = not speaking
+                    slots_left = config.interleaved_n_audio if speaking else config.interleaved_n_text
+            if finished or step == max_new_tokens - 1:
+                # the last sampled slot needs no hidden state
+                break
+            attention_mask = torch.cat((attention_mask, attention_mask.new_ones((1, 1))), dim=1)
+            logits, hidden = self._language_model_step(next_embeds, attention_mask, first_step=False)
+        if streamer is not None:
+            streamer.end()
+
+        generated = input_ids.new_tensor(text_out, dtype=input_ids.dtype).reshape(1, -1)
+        audio_codes = input_ids.new_full((1, config.num_codebooks, len(frames)), -1)
+        if frames:
+            audio_codes[0] = torch.stack(frames, dim=-1)
+        output = Lfm3OmniGenerateOutput(
+            sequences=torch.cat((input_ids, generated), dim=1),
+            audio_codes=audio_codes,
+            sequence_lengths=input_ids.new_tensor([input_ids.shape[1] + len(text_out)]),
+            audio_lengths=input_ids.new_tensor([len(frames)]),
+        )
+        if return_audio:
+            waveform = self.decode_audio(audio_codes)[:, None] if frames else None
+            return output.sequences, waveform
+        return output.sequences if plain_sequences else output
+
+    @staticmethod
+    def preprocess_inputs(
+        text: str,
+        image: Optional["Image"] = None,
+        processor: Optional[AutoImageProcessor] = None,
+        tokenizer: Optional[PreTrainedTokenizer] = None,
+        config: Optional[PretrainedConfig] = None,
+        video: Optional["VideoInput"] = None,
+        audio: Optional[np.ndarray] = None,
+    ):
+        if processor is None:
+            raise ValueError("Processor is required.")
+        content = []
+        if image is not None:
+            content.append({"type": "image"})
+        if video is not None:
+            content.append({"type": "video"})
+        if audio is not None:
+            content.append({"type": "audio"})
+        content.append({"type": "text", "text": text})
+        text_prompt = processor.apply_chat_template(
+            [{"role": "user", "content": content}], tokenize=False, add_generation_prompt=True
+        )
+        video_kwargs = {}
+        if video is not None:
+            # the prompt carries frame timestamps: a path / URL is decoded with its own metadata, decoded frames come
+            # as a (frames, VideoMetadata) pair
+            if isinstance(video, tuple):
+                video, metadata = video
+                video_kwargs = {"video_metadata": [metadata]}
+            elif not isinstance(video, str):
+                from transformers.video_utils import VideoMetadata
+
+                num_frames = len(video)
+                logger.warning(
+                    "LFM3-Omni video frames were passed without their metadata: the frame timestamps assume 1 frame "
+                    "per second, pass a (frames, VideoMetadata) pair or a video path for the real timing."
+                )
+                video_kwargs = {
+                    "video_metadata": [
+                        VideoMetadata(total_num_frames=num_frames, fps=1.0, frames_indices=list(range(num_frames)))
+                    ]
+                }
+        audio_kwargs = {}
+        if audio is not None:
+            # a waveform at the feature extractor rate (16 kHz), or an (audio, sampling_rate) pair
+            sampling_rate = processor.feature_extractor.sampling_rate
+            if isinstance(audio, tuple):
+                audio, sampling_rate = audio
+            audio_kwargs = {"audio": [np.asarray(audio, dtype=np.float32)], "sampling_rate": sampling_rate}
+        return processor(
+            text=[text_prompt], images=image, videos=video, return_tensors="pt", **video_kwargs, **audio_kwargs
+        )
+
+
 MODEL_TYPE_TO_CLS_MAPPING = {
     "muse_glimmer": _OVMuseGlimmerForCausalLM,
     "llava": _OVLlavaForCausalLM,
@@ -8357,6 +9171,7 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "mistral3": _OVMistral3ForCausalLM,
     "minicpmv": _OVMiniCPMVForCausalLM,
     "minicpmv4_7": _OVMiniCPMV4_7ForCausalLM,
+    "minicpm_ocr": _OVMiniCPMOcrForCausalLM,
     "llava-qwen2": _OVNanoLlavaForCausalLM,
     "maira2": _OVMaira2ForCausalLM,
     "phi3_v": _OVPhi3VisionForCausalLM,
@@ -8384,4 +9199,10 @@ MODEL_TYPE_TO_CLS_MAPPING = {
     "minicpmo": _OVMiniCPMOForCausalLM,
     "videochat_flash_qwen": _OVVideoChatFlashQwenForCausalLM,
     "deepseek_ocr2": _OVDeepseekOCR2ForCausalLM,
+    "lfm3_vl": _OVLfm3VlForCausalLM,
+    "lfm3_omni": _OVLfm3OmniForCausalLM,
+}
+
+SEQUENCE_CLASSIFICATION_MODEL_TYPE_TO_CLS_MAPPING = {
+    "qwen3_5": _OVQwen3_5ForSequenceClassification,
 }

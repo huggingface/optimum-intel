@@ -139,7 +139,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "zamba2",
         "lfm2",
         "lfm2_moe",
+        "lfm3",
         "qwen3_next",
+        "nemotron_h",
     )
     SUPPORTED_ARCHITECTURES += SUPPORTED_SSM_ARCHITECTURES
     # filter architectures depending on min/max transformers supported versions
@@ -179,6 +181,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "gpt_neox": 5,
         "lfm2": 1,
         "lfm2_moe": 2,
+        "lfm3": 3,
         "llama": 2,
         "llama4": 5,
         "marian": 2,
@@ -223,6 +226,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "granite": 6,
         "granitemoe": 6,
         "granitemoehybrid": 1,
+        "nemotron_h": 2,
         "glm": 28,
         "mistral-nemo": 8,
         "minicpm3": 6,
@@ -316,6 +320,8 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             "qwen3_omni_moe_talker_text",
             "muse_glimmer_text",
         }
+        # muse_glimmer_assistant is a DFlash drafter without an lm_head, tested in test_dflash.py and test_genai.py
+        supported_architectures.discard("muse_glimmer_assistant")
 
         supported_architectures -= ONNX_SUPPORTED_ARCHITECTURES
         untested_architectures = supported_architectures - tested_architectures
@@ -371,7 +377,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
                 self.assertIsInstance(ov_outputs.cache_params.conv_states, list)
                 self.assertIsInstance(ov_outputs.cache_params.ssm_states, list)
                 self.assertTrue(len(ov_outputs.cache_params.conv_states) > 0)
-                if model_arch not in ["lfm2", "lfm2_moe"]:
+                if model_arch not in ["lfm2", "lfm2_moe", "lfm3"]:
                     self.assertTrue(len(ov_outputs.cache_params.ssm_states) > 0)
         else:
             self.assertTrue("past_key_values" in ov_outputs)
@@ -450,7 +456,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             # LFM2 fails with beam search, issue link: https://github.com/huggingface/transformers/issues/42257
             # CVS-177964 GraniteMoeHybrid, Qwen3-Next fail due to lack of support for beam search for hybrid models in OpenVINO
             # For this support, we expect changes in IRs to have connected beam_idx with Mamba/Linear attention states
-            num_beams=1 if model_arch in ["chatglm4", "lfm2", "granitemoehybrid", "qwen3_next"] else 2,
+            num_beams=1
+            if model_arch in ["chatglm4", "lfm2", "lfm3", "granitemoehybrid", "qwen3_next", "nemotron_h"]
+            else 2,
             do_sample=False,
         )
 
@@ -524,7 +532,10 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             model_id, use_cache=True, compile=False, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, **model_kwargs
         )
         model.eval()
-        model.config.encoder_no_repeat_ngram_size = 0
+        if is_transformers_version(">=", "5.20"):
+            model.generation_config.encoder_no_repeat_ngram_size = 0
+        else:
+            model.config.encoder_no_repeat_ngram_size = 0
         model.to("cpu")
         model.half()
         model.compile()
@@ -697,7 +708,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         # LFM2, LFM2-MoE and GraniteMoeHybrid generate wrong output with beam search, ticket: CVS-185664
         # Hybrid recurrent/attention models lack beam search support in OpenVINO (beam_idx not connected
         # to the Mamba/recurrent states), see CVS-177964.
-        if model_arch in ["lfm2", "lfm2_moe", "granitemoehybrid"]:
+        if model_arch in ["lfm2", "lfm2_moe", "lfm3", "granitemoehybrid", "qwen3_next", "nemotron_h"]:
             return
 
         # TODO: add back once https://huggingface.co/katuni4ka/tiny-random-minicpm3/discussions/1 merged (for all models) as current modeling incompatible with transformers >= v4.49
@@ -725,7 +736,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             eos_token_id=None,
         )
 
-        if model_arch in ["minicpm", "internlm2"]:
+        if model_arch in ["minicpm", "internlm2", "gpt_oss", "gpt_oss_mxfp4"]:
             beam_sample_gen_config.top_k = 1
 
         group_beam_search_gen_config = GenerationConfig(
@@ -920,7 +931,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         gc.collect()
 
     # not including zamba2 - the Mamba mixer's torch_forward crashes on the second chunk
-    HYBRID_ARCHITECTURES = ["granitemoehybrid", "lfm2", "qwen3_next"]
+    HYBRID_ARCHITECTURES = ["granitemoehybrid", "lfm2", "lfm3", "qwen3_next", "nemotron_h"]
 
     # filter architectures depending on min/max transformers supported versions
     HYBRID_ARCHITECTURES = [
@@ -937,14 +948,15 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         """
         model_id = MODEL_NAMES[model_arch]
         tokenizer = self.get_tokenizer(model_arch)
+        trust_remote_code = model_arch in REMOTE_CODE_MODELS
 
         ov_model = OVModelForCausalLM.from_pretrained(
-            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+            model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE, trust_remote_code=trust_remote_code
         )
         self.assertTrue(ov_model.stateful, "Hybrid model should be exported as stateful")
 
         set_seed(SEED)
-        transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=trust_remote_code)
 
         ov_model.generation_config.eos_token_id = None
         transformers_model.generation_config.eos_token_id = None
@@ -1023,6 +1035,39 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             ),
             f"Chunked prefill OV vs transformers mismatch:\n"
             f"  max diff: {(ov_logits - tf_logits).abs().max().item()}",
+        )
+
+        del transformers_model
+        del ov_model
+        gc.collect()
+
+    MAMBA2_HYBRID_ARCHITECTURES = [
+        arch for arch in ["granitemoehybrid", "nemotron_h"] if arch in get_supported_model_for_library("transformers")
+    ]
+
+    @parameterized.expand(MAMBA2_HYBRID_ARCHITECTURES, skip_on_empty=True)
+    def test_mamba2_hybrid_padded_batch_without_cache(self, model_arch):
+        """
+        Without cache inputs, the Mamba2 mixers of hybrid models must still zero the hidden states of padding tokens,
+        so that a left-padded prompt gives the same logits as in transformers.
+        """
+        model_id = MODEL_NAMES[model_arch]
+        tokenizer = self.get_tokenizer(model_arch)
+        tokens = tokenizer(["The quick brown fox jumps over the", "This is me"], return_tensors="pt", padding=True)
+        self.assertFalse(bool(tokens["attention_mask"].all()), "The batch is expected to contain padding")
+
+        ov_model = OVModelForCausalLM.from_pretrained(
+            model_id, export=True, use_cache=False, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+        transformers_model = AutoModelForCausalLM.from_pretrained(model_id)
+        with torch.no_grad():
+            transformers_logits = transformers_model(**tokens).logits
+        ov_logits = ov_model(**tokens).logits
+
+        not_padding = tokens["attention_mask"].bool()
+        self.assertTrue(
+            torch.allclose(ov_logits[not_padding], transformers_logits[not_padding], atol=1e-4),
+            f"Max diff: {(ov_logits[not_padding] - transformers_logits[not_padding]).abs().max().item()}",
         )
 
         del transformers_model

@@ -161,6 +161,106 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "MulAddToFMA",
         ],
     },
+    # The MoE transformations depend on the experts patch, see below. The Mamba2 fusions (FuseSSMLoop,
+    # SelectiveSSMFusion) are only registered in SDPA -> PagedAttention, so they are checked in test_cb_compatible.py
+    "nemotron_h": {
+        "model_class": "OVModelForCausalLM",
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+        ],
+        "compile": [
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "CausalMaskPreprocessFusion",
+            "CommonDecompositions",
+            "ConvertMatMulToFC",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+        ],
+    },
+    # hybrid short conv + full / sliding window attention, sandwich RMSNorm, per-layer-type RoPE
+    "lfm3": {
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+            "TransposeMatMul",
+            "DecompressionHandling",
+        ],
+        "compile": [
+            "RMSFusion",
+            "RoPEFusion",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "CausalMaskPreprocessFusion",
+            "ConvertBroadcast3",
+            "ConvertMatMulToFC",
+            "ConvertToCPUSpecificOpset",
+            "ConvertToSwishCPU",
+            "Snippets",
+            "Tokenization",
+        ],
+    },
+    # same language model as lfm3, plus the vision encoder (2D RoPE attention, depthwise conv) and projector
+    "lfm3_vl": {
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+            "TransposeMatMul",
+            "CommonFusions",
+            "DecompressionHandling",
+        ],
+        "compile": [
+            "RMSFusion",
+            "RoPEFusion",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "CausalMaskPreprocessFusion",
+            "BroadcastMatMulFusion",
+            "MultiplyFusions",
+            "FullyConnectedBiasFusion",
+            "ConvertBroadcast3",
+            "ConvertMatMulToFC",
+            "ConvertToCPUSpecificOpset",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+            "Snippets",
+            "Tokenization",
+        ],
+    },
+    # the LFM3-VL language model and vision encoder, plus the speech encoder, depth decoder and codec decoder
+    "lfm3_omni": {
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+            "TransposeMatMul",
+            "CommonFusions",
+            "DecompressionHandling",
+        ],
+        "compile": [
+            "RMSFusion",
+            "RoPEFusion",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "CausalMaskPreprocessFusion",
+            "BroadcastMatMulFusion",
+            "MultiplyFusions",
+            "FullyConnectedBiasFusion",
+            "ConvertBroadcast3",
+            "ConvertMatMulToFC",
+            "ConvertToCPUSpecificOpset",
+            "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+            "Snippets",
+            "Tokenization",
+        ],
+    },
     "qwen3_5_moe": {
         "convert": [
             "SDPAFusion",
@@ -320,6 +420,23 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "ConvertToSwishCPU",
         ],
     },
+    "muse_glimmer_assistant": {
+        "model_class": "OVAssistantForCausalLM",
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+        ],
+        "compile": [
+            "StatefulSDPAFusion",
+            "CommonDecompositions",
+            "ConvertBroadcast3",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusion",
+            "RMSFusion",
+            "ConvertMatMulToFC",
+            "ConvertToSwishCPU",
+        ],
+    },
     "minicpmv4_7": {
         "convert": [
             "SDPAFusion",
@@ -343,6 +460,30 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "ConvertTiledMoeBlockToGatherMatmuls",
             "ConvertMatMulToFC",
             "ConvertToPowerStatic",
+            "ConvertToSwishCPU",
+        ],
+    },
+    "minicpm_ocr": {
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+            "CommonFusions",
+            "TransposeConvert",
+        ],
+        "compile": [
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "CommonDecompositions",
+            "MultiplyFusions",
+            "ConvertSoftMax8ToSoftMax1",
+            "ConvertBroadcast3",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "RMSFusion",
+            "GatedDeltaNetFusion",
+            "ConvertMatMulToFC",
             "ConvertToSwishCPU",
         ],
     },
@@ -406,6 +547,14 @@ if is_transformers_version(">=", "5.0.0"):
         ]
     )
 
+# From transformers 5.13, the NemotronH experts use the grouped MatMul patch and become GatherMatmul.
+# Before that they use ov_batched_mm: its transposed expert weights give TransposeMatMul, and its non-gated experts
+# (up -> relu2 -> down) do not match ConvertTiledMoeBlockToGatherMatmuls
+if is_transformers_version(">=", "5.13"):
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["nemotron_h"]["compile"].append("ConvertGroupedMatMulToGatherMatmul")
+else:
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["nemotron_h"]["convert"].append("TransposeMatMul")
+
 
 # filter architectures depending on min/max transformers supported versions
 # Architectures exported through an out-of-tree library are not part of the transformers set,
@@ -417,6 +566,34 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
     for arch, v in ARCH_TO_EXPECTED_TRANSFORMATIONS.items()
     if arch in get_supported_model_for_library("transformers") or _NON_TRANSFORMERS_ARCHS.get(arch, False)
 }
+
+
+# DFlash and DSpark drafts have the model type of their backbone decoder (qwen3), so they are added after the
+# transformers filter above. They load through OVModelForCausalLM, as in test_exporters_cli.
+_DFLASH_DRAFT_TRANSFORMATIONS = {
+    "model_class": "OVModelForCausalLM",
+    "convert": [
+        "SDPAFusion",
+        "MakeStateful",
+    ],
+    "compile": [
+        "StatefulSDPAFusion",
+        "SDPASubgraphFusion",
+        "CommonDecompositions",
+        "ConvertBroadcast3",
+        "RoPEFusionGPTNEOX",
+        "RoPEFusionPreprocess",
+        "RoPEFusion",
+        "RMSFusion",
+        "ConvertMatMulToFC",
+        "ConvertToSwishCPU",
+    ],
+}
+ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_dflash"] = _DFLASH_DRAFT_TRANSFORMATIONS
+ARCH_TO_EXPECTED_TRANSFORMATIONS["qwen3_dflash2"] = _DFLASH_DRAFT_TRANSFORMATIONS
+# DSpark drafts describe their RoPE in the rope_parameters of transformers 5, which earlier versions misread.
+if is_transformers_version(">=", "5"):
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["minicpmv4_7_dspark"] = _DFLASH_DRAFT_TRANSFORMATIONS
 
 
 # Diffusion architectures are loaded through a pipeline class and live in the diffusers library (not
@@ -494,6 +671,21 @@ if is_diffusers_version(">=", "0.38.0"):
             "Tokenization",
         ],
     }
+
+if is_diffusers_version(">=", "0.40.0"):
+    _ltx2 = ARCH_TO_EXPECTED_TRANSFORMATIONS["ltx2"]
+    ARCH_TO_EXPECTED_TRANSFORMATIONS["ltx2.3"] = {
+        "model_class": "OVLTX2Pipeline",
+        "convert": list(_ltx2["convert"]),
+        "compile": list(_ltx2["compile"]),
+    }
+    if is_transformers_version(">=", "5.10.0"):
+        ARCH_TO_EXPECTED_TRANSFORMATIONS["ltx2.5"] = {
+            "model_class": "OVLTX2Pipeline",
+            # TransposeConvert has nothing to match in the LTX-2.5 export
+            "convert": [t for t in _ltx2["convert"] if t != "TransposeConvert"],
+            "compile": list(_ltx2["compile"]),
+        }
 
 
 if is_diffusers_version(">=", "0.33.0"):

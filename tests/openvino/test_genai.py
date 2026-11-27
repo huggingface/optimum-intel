@@ -45,6 +45,7 @@ from transformers import (
 )
 import test_decoder as _test_decoder
 import test_seq2seq as _test_seq2seq
+import test_tts as _test_tts
 from utils_tests import (
     DFLASH_MODELS,
     DFLASH_VLM_MODELS,
@@ -352,6 +353,7 @@ _GENAI_VLM_UNSUPPORTED_ARCHITECTURES = (
     "llama4",
     "maira2",
     "minicpmv",  # transformers output is empty with tiny model on transformers 4.57
+    "minicpm_v4_5",  # tokenizer argument unsupported by this generic test
     "smolvlm",
     "videochat_flash_qwen",  # GenAI requires video input; image-only not supported
     "qwen3_omni_moe",
@@ -584,7 +586,7 @@ class Speech2TextPipelineTestCase(unittest.TestCase):
 
 @pytest.mark.skipif(OPENVINO_DEVICE == "NPU", reason="Text2Speech test is not yet supported on NPU")
 class Text2SpeechPipelineTestCase(unittest.TestCase):
-    SUPPORTED_ARCHITECTURES = _test_seq2seq.OVModelForTextToSpeechSeq2SeqIntegrationTest.SUPPORTED_ARCHITECTURES
+    SUPPORTED_ARCHITECTURES = _test_tts.OVModelForTextToSpeechSeq2SeqIntegrationTest.SUPPORTED_ARCHITECTURES
     VOCODER = "fxmarty/speecht5-hifigan-tiny"
 
     GEN_KWARGS = {
@@ -660,7 +662,7 @@ class Text2SpeechPipelineTestCase(unittest.TestCase):
         torch.testing.assert_close(transformers_output, genai_output, rtol=1e-2, atol=1e-3)
 
 
-# NOTE: DFlash has been merged to 2026.4 release
+# NOTE: DFlash has been updated in 2026.5 release
 @pytest.mark.skipif(sys.platform == "win32", reason="Access violation on Windows")
 @pytest.mark.skipif(OPENVINO_DEVICE == "NPU", reason="Speculative decoding tests are not yet supported on NPU")
 class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
@@ -677,7 +679,7 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
 
     SPECULATIVE_DECODING_MODELS = _filter_models(
         [(model_arch, model_pair, "Eagle3", "2026.0") for model_arch, model_pair in EAGLE3_MODELS.items()]
-        + [(model_arch, model_pair, "DFlash", "2026.4") for model_arch, model_pair in DFLASH_MODELS.items()]
+        + [(model_arch, model_pair, "DFlash", "2026.5") for model_arch, model_pair in DFLASH_MODELS.items()]
     )
     SPECULATIVE_DECODING_VLM_MODELS = _filter_models(
         [
@@ -685,7 +687,7 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
             for model_arch, model_pair in EAGLE3_VLM_MODELS.items()
         ]
         + [
-            (model_arch, model_pair, "DFlash", "2026.4", "text-generation-with-past")
+            (model_arch, model_pair, "DFlash", "2026.5", "text-generation-with-past")
             for model_arch, model_pair in DFLASH_VLM_MODELS.items()
         ]
         + [
@@ -706,6 +708,10 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
     ):
         if is_openvino_version("<", min_openvino_version):
             self.skipTest(f"{speculative_decoding_type} requires openvino-genai >= {min_openvino_version}")
+        # TODO: enable once openvinotoolkit/openvino.genai#4847 is merged. Until then GenAI supports only the vanilla
+        # Markov head and rejects the draft.
+        if model_arch == "qwen3_dflash2":
+            self.skipTest("DFlash v2 drafts require openvinotoolkit/openvino.genai#4847")
 
         draft_model_name, target_model_name = model_pair
         draft_model_id, target_model_id = MODEL_NAMES[draft_model_name], MODEL_NAMES[target_model_name]
@@ -736,10 +742,6 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
         # Phase 1: generate with speculative decoding
         ov_draft_model = draft_model(draft_model_path, "CPU")
         speculative_pipeline_kwargs = dict(TEST_CONFIG)
-        if speculative_decoding_type == "DFlash":
-            scheduler_config = SchedulerConfig()
-            scheduler_config.enable_prefix_caching = False
-            speculative_pipeline_kwargs["scheduler_config"] = scheduler_config
         ov_speculative_pipe = LLMPipeline(
             main_model_path,
             OPENVINO_DEVICE,
@@ -757,10 +759,6 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
 
         # Phase 2: generate without speculative decoding
         baseline_pipeline_kwargs = dict(TEST_CONFIG)
-        if speculative_decoding_type == "DFlash":
-            scheduler_config = SchedulerConfig()
-            scheduler_config.enable_prefix_caching = False
-            baseline_pipeline_kwargs["scheduler_config"] = scheduler_config
         ov_pipe = LLMPipeline(main_model_path, OPENVINO_DEVICE, **baseline_pipeline_kwargs)
         genai_output = str(
             ov_pipe.generate(prompt, echo=True, apply_chat_template=False, ignore_eos=True, **self.GEN_KWARGS)
@@ -817,10 +815,11 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
         inputs = {"videos": [ov.Tensor(rng.integers(0, 256, size=(5, 32, 32, 3), dtype=np.uint8))]}
         question = "Why is this video funny?"
 
-        # Qwen3.5 is a linear-attention model; both DFlash and MTP verifier speculative decoding
-        # require prefix caching to be disabled.
+        # Before 2026.5, MTP verifier speculative decoding on linear-attention models
+        # requires prefix caching to be disabled.
+        disable_prefix_caching = speculative_decoding_type == "MTP" and is_openvino_version("<", "2026.5")
         speculative_pipeline_kwargs = dict(TEST_CONFIG)
-        if speculative_decoding_type in ("DFlash", "MTP"):
+        if disable_prefix_caching:
             scheduler_config = SchedulerConfig()
             scheduler_config.enable_prefix_caching = False
             speculative_pipeline_kwargs["scheduler_config"] = scheduler_config
@@ -850,7 +849,7 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
 
         # Phase 2: generate without speculative decoding
         baseline_pipeline_kwargs = dict(TEST_CONFIG)
-        if speculative_decoding_type in ("DFlash", "MTP"):
+        if disable_prefix_caching:
             scheduler_config = SchedulerConfig()
             scheduler_config.enable_prefix_caching = False
             baseline_pipeline_kwargs["scheduler_config"] = scheduler_config

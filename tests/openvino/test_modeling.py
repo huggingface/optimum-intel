@@ -18,6 +18,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Dict, Generator
+from unittest.mock import patch
 
 import numpy as np
 import open_clip  # type: ignore
@@ -609,6 +610,25 @@ class OVModelIntegrationTest(unittest.TestCase):
         del model
         gc.collect()
 
+    @parameterized.expand(("local_files_only", "offline_mode"))
+    def test_infer_export_when_loading_local_dir_offline(self, mode):
+        # A local PyTorch checkpoint must still be exported when the Hub can't be reached
+        model_id = MODEL_NAMES["gpt2"]
+        model = AutoModelForCausalLM.from_pretrained(model_id)
+        with TemporaryDirectory() as tmpdirname:
+            model.save_pretrained(tmpdirname)
+            if mode == "offline_mode":
+                with patch("optimum.intel.openvino.modeling_base.is_offline_mode", return_value=True):
+                    ov_model = OVModelForCausalLM.from_pretrained(tmpdirname, device=OPENVINO_DEVICE)
+            else:
+                ov_model = OVModelForCausalLM.from_pretrained(
+                    tmpdirname, local_files_only=True, device=OPENVINO_DEVICE
+                )
+            self.assertIsInstance(ov_model, OVModelForCausalLM)
+        del ov_model
+        del model
+        gc.collect()
+
     def test_find_files_matching_pattern(self):
         model_id = "echarlaix/tiny-random-PhiForCausalLM"
         pattern = r"(.*)?openvino(.*)?\_model(.*)?.xml$"
@@ -785,6 +805,9 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
         "squeezebert",
     )
 
+    if is_model_type_transformers_compatible("eurobert"):
+        SUPPORTED_ARCHITECTURES += ("eurobert",)
+
     # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
     if is_transformers_version("<", "5"):
         SUPPORTED_ARCHITECTURES += ("flaubert", "xlm")
@@ -797,6 +820,7 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
             model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
         )
         self.assertIsInstance(ov_model.config, PretrainedConfig)
+        set_seed(SEED)
         transformers_model = AutoModelForSequenceClassification.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         inputs = "This is a sample input"
@@ -837,6 +861,7 @@ class OVModelForSequenceClassificationIntegrationTest(unittest.TestCase):
         self.assertGreaterEqual(outputs[0]["score"], 0.0)
         self.assertIsInstance(outputs[0]["label"], str)
 
+        set_seed(SEED)
         ov_pipe = optimum_pipeline("text-classification", model_id, accelerator="openvino")
         ov_outputs = ov_pipe(inputs)
         atol = 1e-4 if model_arch not in ["flaubert", "squeezebert"] else 0.08
@@ -967,6 +992,9 @@ class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
         "roberta",
     )
 
+    if is_model_type_transformers_compatible("eurobert"):
+        SUPPORTED_ARCHITECTURES += ("eurobert",)
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch):
         model_id = MODEL_NAMES[model_arch]
@@ -975,6 +1003,7 @@ class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
             model_id, export=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
         )
         self.assertIsInstance(ov_model.config, PretrainedConfig)
+        set_seed(SEED)
         transformers_model = AutoModelForTokenClassification.from_pretrained(model_id)
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         inputs = "This is a sample input"
@@ -1006,6 +1035,7 @@ class OVModelForTokenClassificationIntegrationTest(unittest.TestCase):
         outputs = pipe(inputs)
         self.assertEqual(pipe.device, model.device)
         self.assertTrue(all(item["score"] > 0.0 for item in outputs))
+        set_seed(SEED)
         ov_pipe = optimum_pipeline("token-classification", model_id, accelerator="openvino")
         ov_outputs = ov_pipe(inputs)
         self.assertEqual(outputs[-1]["score"], ov_outputs[-1]["score"])
@@ -1042,6 +1072,8 @@ class OVModelForFeatureExtractionIntegrationTest(unittest.TestCase):
         "sentence-transformers-bert",
         "qwen3",
     )
+    if is_model_type_transformers_compatible("eurobert"):
+        SUPPORTED_ARCHITECTURES += ("eurobert",)
     if is_model_type_transformers_compatible("qwen3_vl"):
         SUPPORTED_ARCHITECTURES += ("qwen3_vl_embedding",)
 
@@ -1142,6 +1174,9 @@ class OVModelForMaskedLMIntegrationTest(unittest.TestCase):
         "squeezebert",
         "xlm-roberta",
     )
+
+    if is_model_type_transformers_compatible("eurobert"):
+        SUPPORTED_ARCHITECTURES += ("eurobert",)
 
     # TODO: add fix for v5 and update MAX_TRANSFORMERS_VERSION accordingly
     if is_transformers_version("<", "5"):
@@ -1300,6 +1335,20 @@ class OVModelForImageClassificationIntegrationTest(unittest.TestCase):
             ov_model.save_pretrained(model_save_path)
             model = OVModelForImageClassification.from_pretrained(model_save_path, device=OPENVINO_DEVICE)
             model(pixel_values=torch.zeros((5, 3, model.config.image_size, model.config.image_size)))
+        gc.collect()
+
+    @parameterized.expand(TIMM_MODELS)
+    def test_timm_local_load_kwargs(self, model_id):
+        ov_model = OVModelForImageClassification.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
+        with TemporaryDirectory() as tmpdirname:
+            ov_model.save_pretrained(tmpdirname)
+            model = OVModelForImageClassification.from_pretrained(
+                tmpdirname, device=OPENVINO_DEVICE, compile=False, ov_config=F32_CONFIG
+            )
+            self.assertIsNone(model.request)
+            self.assertEqual(model.ov_config["INFERENCE_PRECISION_HINT"], F32_CONFIG["INFERENCE_PRECISION_HINT"])
+            model(pixel_values=torch.zeros((5, 3, model.config.image_size, model.config.image_size)))
+            self.assertEqual(model.request.get_property("INFERENCE_PRECISION_HINT").to_string(), "f32")
         gc.collect()
 
 

@@ -42,6 +42,24 @@ class OVASRTest(unittest.TestCase):
         audio_data = (0.5 * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
         return audio_data, sample_rate
 
+    def _generate_varying_audio_data(self):
+        """Speech-like signal whose spectral content varies across attention windows.
+
+        Generates a 120-second linear signal with an instantaneous frequency
+        sweeping from 200 Hz to 3000 Hz at a 16 kHz sample rate. This provides
+        varying spectral content across attention windows.
+        """
+        np.random.seed(SEED)
+        sample_rate = 16000
+        duration = 120
+        t = np.linspace(0, duration, sample_rate * duration, endpoint=False)
+        f0, f1 = 200.0, 3000.0
+        sweep_rate = (f1 - f0) / duration
+        instantaneous_phase = 2 * np.pi * (f0 * t + 0.5 * sweep_rate * t**2)
+        envelope = 0.5 * (1.0 + 0.5 * np.sin(2 * np.pi * 0.5 * t))
+        audio_data = (envelope * np.sin(instantaneous_phase)).astype(np.float32)
+        return audio_data, sample_rate
+
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     @pytest.mark.skipif(
         is_transformers_version("<", "4.57") or is_transformers_version(">=", "4.58"),
@@ -131,6 +149,237 @@ class OVASRTest(unittest.TestCase):
         self.assertEqual(ref["pt_text"], ov_text)
 
         del ref["pt_model"]
+        del ov_model
+        gc.collect()
+
+    @pytest.mark.skipif(
+        is_transformers_version("<", "4.57") or is_transformers_version(">=", "4.58"),
+        reason="Currently, we support Qwen3-ASR and FunASR only for transformers==4.57 since they are trust-remote-code models.",
+    )
+    def test_fun_asr_audio_features_truncated_to_prompt_length(self):
+        """Regression test for the FunASR OpenVINO decoder runaway / WER inflation.
+
+        The exported audio encoder emits one feature per frame, which can be longer than the
+        number of audio placeholder tokens the prompt reserves (``fake_token_len`` in native
+        FunASR). Native inference splices only the first ``fake_token_len`` adaptor frames into
+        the LLM input embeddings. The OpenVINO path used to instead *expand* the audio
+        placeholder run up to the full encoder length, feeding extra, misaligned audio frames
+        into the decoder. On some utterances this made greedy decoding fall into a repetition
+        loop (e.g. "shame on you ... on you on you ...") and inflated WER. The fix truncates the
+        encoder features to the prompt's placeholder count; this test asserts that invariant.
+        """
+        from optimum.intel.openvino import modeling_seq2seq
+
+        model_id = MODEL_NAMES["fun_asr"]
+        set_seed(SEED)
+        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
+            model_id, export=True, trust_remote_code=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+        audio_token_id = getattr(ov_model.config, "audio_token_id", 0)
+
+        audio_data, sample_rate = self._generate_audio_data()
+        inputs = ov_model.preprocess_input(audio_data, sample_rate, language="中文")
+        input_features = inputs["input_features"]
+
+        # Number of audio feature frames produced by the exported encoder.
+        encoder_outputs = ov_model.encoder(input_ids=input_features)
+        enc_hidden = (
+            encoder_outputs.last_hidden_state if hasattr(encoder_outputs, "last_hidden_state") else encoder_outputs[0]
+        )
+        num_encoder_features = enc_hidden.shape[1]
+        self.assertGreater(num_encoder_features, 1)
+
+        # Build a prompt whose audio placeholder run is shorter than the encoder output,
+        # reproducing the native situation where fake_token_len < encoder length.
+        target_audio_tokens = max(1, num_encoder_features // 2)
+        self.assertLess(target_audio_tokens, num_encoder_features)
+        decoder_input_ids = torch.tensor(
+            [[1, 2, 3] + [audio_token_id] * target_audio_tokens + [4, 5]], dtype=torch.long
+        )
+        decoder_attention_mask = torch.ones_like(decoder_input_ids)
+
+        # Capture what the FunASR forward passes down to the base seq2seq forward.
+        captured = {}
+        orig_forward = modeling_seq2seq.OVModelForSpeechSeq2Seq.forward
+
+        def capturing_forward(self, *args, **kwargs):
+            did = kwargs.get("decoder_input_ids")
+            enc_out = kwargs.get("encoder_outputs")
+            enc_h = enc_out.last_hidden_state if hasattr(enc_out, "last_hidden_state") else enc_out[0]
+            captured["audio_count"] = int((did == audio_token_id).sum(dim=-1).max())
+            captured["encoder_len"] = int(torch.as_tensor(enc_h).shape[1])
+            return orig_forward(self, *args, **kwargs)
+
+        modeling_seq2seq.OVModelForSpeechSeq2Seq.forward = capturing_forward
+        try:
+            ov_model.forward(
+                input_features=input_features,
+                decoder_input_ids=decoder_input_ids,
+                decoder_attention_mask=decoder_attention_mask,
+            )
+        finally:
+            modeling_seq2seq.OVModelForSpeechSeq2Seq.forward = orig_forward
+
+        # Native behavior: the placeholder run is kept as-is (NOT expanded to the encoder
+        # length) and the encoder features are truncated to match the placeholder count.
+        self.assertEqual(captured["audio_count"], target_audio_tokens)
+        self.assertEqual(captured["encoder_len"], target_audio_tokens)
+        self.assertNotEqual(captured["encoder_len"], num_encoder_features)
+
+        del ov_model
+        gc.collect()
+
+    @pytest.mark.skipif(
+        is_transformers_version("<", "4.57") or is_transformers_version(">=", "4.58"),
+        reason="Currently, we support FunASR only for transformers==4.57 since it is a trust-remote-code model.",
+    )
+    def test_fun_asr_activations_scale_factor(self):
+        # The Fun-ASR-Nano decoder overflows fp16 on GPU without activation scaling, and the GPU plugin
+        # ignores the default 8.0 for LLM-like models, so the decoder must carry a non-default value.
+        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
+            MODEL_NAMES["fun_asr"], export=True, trust_remote_code=True, compile=False
+        )
+        decoder_rt_info = ov_model.decoder.model.get_rt_info()
+        self.assertEqual(decoder_rt_info["runtime_options"]["ACTIVATIONS_SCALE_FACTOR"].value, "4.0")
+        self.assertFalse(ov_model.encoder.model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"]))
+
+        del ov_model
+        gc.collect()
+
+    @pytest.mark.skipif(
+        is_transformers_version("<", "4.57") or is_transformers_version(">=", "4.58"),
+        reason="Currently, we support Qwen3-ASR only for transformers==4.57 since it is a trust-remote-code model.",
+    )
+    def test_qwen3_asr_audio_encoder_cross_chunk_attention(self):
+        """Regression test for Qwen3-ASR cross-chunk audio-encoder attention.
+
+        The exported audio encoder convolves each ``n_window * 2`` frame window as a separate batch
+        element, but the reference encoder (``qwen_asr``) groups the post-convolution tokens of all
+        conv chunks inside one ``n_window_infer`` window into a single attention sequence, so tokens
+        attend across conv chunks within a window (and are isolated between windows). A per-chunk
+        export limits self-attention to a single chunk and drops this cross-chunk attention. This
+        test asserts (1) the exported encoder reproduces the reference audio features, and (2) that
+        attention genuinely crosses conv chunks inside a window while staying isolated across
+        windows.
+        """
+        from qwen_asr.core.transformers_backend.modeling_qwen3_asr import (
+            Qwen3ASRAudioAttention,
+            Qwen3ASRForConditionalGeneration,
+        )
+
+        model_id = MODEL_NAMES["qwen3_asr"]
+        set_seed(SEED)
+
+        processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
+        audio_data, sample_rate = self._generate_varying_audio_data()
+        text_prompt = processor.apply_chat_template(
+            [
+                {"role": "system", "content": ""},
+                {"role": "user", "content": [{"type": "audio", "audio": ""}]},
+            ],
+            add_generation_prompt=True,
+            tokenize=False,
+        )
+        inputs = processor(text=text_prompt, audio=audio_data, sampling_rate=sample_rate, return_tensors="pt")
+        input_features = inputs["input_features"]
+        feature_attention_mask = inputs["feature_attention_mask"]
+
+        pt_model = Qwen3ASRForConditionalGeneration.from_pretrained(model_id, trust_remote_code=True).eval()
+        orig_attn_forward = Qwen3ASRAudioAttention.forward
+
+        # Qwen3ASRAudioAttention.forward is patched to enable windowed path, as
+        # original `_attn_implementation="flash_attention_2"` which uses windowed path
+        # requires CUDA. The patched block-diagonal mask produces identical windowing.
+        def windowed_attn_forward(self, hidden_states, cu_seqlens=None, attention_mask=None, **kwargs):
+            if attention_mask is None and cu_seqlens is not None:
+                seq_length = hidden_states.shape[0]
+                attention_mask = torch.full(
+                    (1, 1, seq_length, seq_length),
+                    torch.finfo(hidden_states.dtype).min,
+                    dtype=hidden_states.dtype,
+                    device=hidden_states.device,
+                )
+                for i in range(1, len(cu_seqlens)):
+                    start, end = int(cu_seqlens[i - 1]), int(cu_seqlens[i])
+                    attention_mask[..., start:end, start:end] = 0
+            return orig_attn_forward(
+                self, hidden_states, cu_seqlens=cu_seqlens, attention_mask=attention_mask, **kwargs
+            )
+
+        audio_tower = pt_model.thinker.audio_tower
+        audio_tower.config._attn_implementation = "eager"
+        for layer in audio_tower.layers:
+            layer.self_attn.config._attn_implementation = "eager"
+        Qwen3ASRAudioAttention.forward = windowed_attn_forward
+        try:
+            with torch.no_grad():
+                ref_features = pt_model.thinker.get_audio_features(
+                    input_features, feature_attention_mask=feature_attention_mask
+                )
+        finally:
+            Qwen3ASRAudioAttention.forward = orig_attn_forward
+
+        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
+            model_id, export=True, trust_remote_code=True, ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+        encoder = ov_model.audio_encoder
+
+        ov_features, _ = encoder.encode(input_features, feature_attention_mask)
+        ov_features = torch.as_tensor(ov_features)
+
+        # (1) The exported encoder must reproduce the reference (cross-chunk) audio features.
+        # A per-chunk export diverges here because each window spans several conv chunks.
+        self.assertEqual(tuple(ov_features.shape), tuple(ref_features.shape))
+        max_abs_diff = float((ov_features - ref_features.to(ov_features.dtype)).abs().max())
+        self.assertLess(max_abs_diff, 1e-3, msg=f"OV audio features diverge from reference: {max_abs_diff}")
+
+        # (2) Explicit cross-chunk / window-isolation probe on the exported graph.
+        audio_config = getattr(getattr(ov_model.config, "thinker_config", ov_model.config), "audio_config", None)
+        chunks_per_window = audio_config.n_window_infer // (audio_config.n_window * 2)
+        self.assertGreaterEqual(chunks_per_window, 2, "fixture must group >=2 conv chunks per window")
+
+        enc_inputs, _, chunk_output_lens = encoder._prepare_inputs(input_features, feature_attention_mask)
+        num_chunks = enc_inputs["padded_feature"].shape[0]
+        self.assertGreater(num_chunks, chunks_per_window, "need conv chunks beyond the first window")
+
+        def run_raw(padded_feature):
+            local = dict(enc_inputs)
+            local["padded_feature"] = padded_feature
+            return torch.as_tensor(encoder.forward(**local))
+
+        base = run_raw(enc_inputs["padded_feature"])
+        len0 = int(chunk_output_lens[0])
+
+        # Perturb a chunk inside the SAME window as chunk 0 -> chunk 0 output must change.
+        same_window = enc_inputs["padded_feature"].clone()
+        same_window[1] = 10.0 * torch.randn_like(same_window[1]) + 20.0
+        same_change = float((base[0, :len0] - run_raw(same_window)[0, :len0]).abs().max())
+
+        # Perturb a chunk in a DIFFERENT window -> chunk 0 output must stay unchanged.
+        other_window = enc_inputs["padded_feature"].clone()
+        other_window[chunks_per_window] = 10.0 * torch.randn_like(other_window[chunks_per_window]) + 20.0
+        other_change = float((base[0, :len0] - run_raw(other_window)[0, :len0]).abs().max())
+
+        self.assertLess(other_change, 1e-6, "attention leaked across windows")
+        self.assertGreater(same_change, 1e-6, "cross-chunk attention missing within a window")
+        self.assertGreater(
+            same_change, 1e3 * other_change, "within-window response not dominated by cross-chunk attention"
+        )
+
+        del pt_model, ov_model
+        gc.collect()
+
+    @pytest.mark.skipif(
+        is_transformers_version("<", "4.57") or is_transformers_version(">=", "4.58"),
+        reason="Currently, we support FunASR only for transformers==4.57 since it is a trust-remote-code model.",
+    )
+    def test_sense_voice_activations_scale_factor(self):
+        ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
+            MODEL_NAMES["sense_voice"], export=True, trust_remote_code=True, compile=False
+        )
+        rt_info = ov_model.model.get_rt_info()
+        self.assertEqual(rt_info["runtime_options"]["ACTIVATIONS_SCALE_FACTOR"].value, "4.0")
+
         del ov_model
         gc.collect()
 

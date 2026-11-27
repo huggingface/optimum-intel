@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import json
+import shutil
 import subprocess
 import unittest
 from pathlib import Path
@@ -28,6 +29,7 @@ from transformers import (
     PreTrainedTokenizerFast,
     T5Tokenizer,
 )
+from transformers.utils import cached_file
 from utils_tests import (
     _ARCHITECTURES_TO_EXPECTED_INT8,
     HUB_MODEL_NAMES,
@@ -88,6 +90,7 @@ from optimum.intel.openvino.utils import (
 from optimum.intel.utils.import_utils import (
     compare_versions,
     is_compressed_tensors_available,
+    is_diffusers_version,
     is_openvino_tokenizers_available,
     is_openvino_version,
     is_qwen_tts_available,
@@ -139,6 +142,8 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("image-to-video", "ltx2"),
         ("text-to-video", "ltx2.3"),
         ("image-to-video", "ltx2.3"),
+        ("text-to-video", "ltx2.5"),
+        ("image-to-video", "ltx2.5"),
         ("feature-extraction", "sam"),
         ("text-to-audio", "speecht5"),
         ("zero-shot-image-classification", "clip"),
@@ -147,12 +152,17 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation", "lfm2"),
         ("text-generation-with-past", "lfm2"),
         ("text-generation-with-past", "granitemoehybrid"),
+        ("text-generation", "nemotron_h"),
+        ("text-generation-with-past", "nemotron_h"),
         ("text-generation-with-past", "smollm3"),
         ("text-generation-with-past", "hunyuan_v1_dense"),
         ("feature-extraction", "qwen3_vl_embedding"),
         ("text-generation-with-past", "qwen3_eagle3"),
         ("text-generation-with-past", "qwen3_dflash"),
+        ("text-generation-with-past", "muse_glimmer_assistant"),
         ("text-generation-with-past", "qwen3_deepspec_dflash"),
+        ("text-generation-with-past", "qwen3_dflash2"),
+        ("text-generation-with-past", "minicpmv4_7_dspark"),
         ("text-generation-with-past", "zamba2"),
         ("text-generation-with-past", "exaone4"),
         ("text-generation-with-past", "ouro"),
@@ -160,6 +170,10 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "qwen3_next"),
         ("text-generation", "lfm2_moe"),
         ("text-generation-with-past", "lfm2_moe"),
+        ("text-generation", "lfm3"),
+        ("text-generation-with-past", "lfm3"),
+        ("image-text-to-text", "lfm3_vl"),
+        ("image-text-to-text", "lfm3_omni"),
         ("text-generation-with-past", "mamba"),
         ("text-generation-with-past", "falcon_mamba"),
         ("text-to-image", "flux.2-klein"),
@@ -168,6 +182,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-to-image", "z-image"),
         ("image-text-to-text", "muse_glimmer"),
         ("image-text-to-text", "minicpmv4_7"),
+        ("image-text-to-text", "minicpm_ocr"),
     ]
     # filter architectures depending on min/max transformers supported versions
     SUPPORTED_ARCHITECTURES = [
@@ -175,6 +190,12 @@ class OVCLIExportTestCase(unittest.TestCase):
         for task, model_type in SUPPORTED_ARCHITECTURES
         if TEST_NAME_TO_MODEL_TYPE.get(model_type, model_type)
         in get_supported_model_for_library("transformers") | get_supported_model_for_library("diffusers")
+        and (
+            model_type != "ltx2.5"
+            or (is_transformers_version(">=", "5.10.0") and is_diffusers_version(">=", "0.40.0"))
+        )
+        # DSpark drafts describe their RoPE in the rope_parameters of transformers 5, which earlier versions misread.
+        and (model_type != "minicpmv4_7_dspark" or is_transformers_version(">=", "5"))
     ]
 
     # Add custom model types
@@ -212,6 +233,9 @@ class OVCLIExportTestCase(unittest.TestCase):
             2 if is_openvino_version(">=", "2026.0") else 0
         ),  # Tokenizers fail to convert on 2025.4, ticket: CVS-176880
         "lfm2_moe": 2,
+        "lfm3": 2,
+        "lfm3_vl": 2,
+        "lfm3_omni": 2,
         "llava": 2,
         "mistral3": 2,
         "ministral3": 2,
@@ -220,6 +244,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "ltx-video-0.9.5": 2,
         "ltx2": 2,
         "ltx2.3": 2,
+        "ltx2.5": 4,  # the text encoder's tokenizer plus the prompt enhancer's processor tokenizer
         "sam": 0,  # no tokenizer
         "speecht5": 2,
         "kokoro": 0,  # uses g2p, no tokenizer
@@ -233,12 +258,14 @@ class OVCLIExportTestCase(unittest.TestCase):
         "exaone4": 2,
         "bitnet": 2,
         "granitemoehybrid": 2,
+        "nemotron_h": 2,
         "smollm3": 2,
         "ouro": 2,
         "qwen3_vl_eagle3": 0,
         "qwen3_vl_embedding": 2,
         "muse_glimmer": 2,
         "minicpmv4_7": 2,
+        "minicpm_ocr": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
@@ -893,6 +920,27 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "vision_embeddings_model": {"int8": 28},
             },
         ),
+        (
+            "image-text-to-text",
+            "minicpm_ocr",
+            "int4 --group-size 8 --ratio 0.8",
+            {
+                "lm_model": {"int8": 36, "int4": 34},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 22},
+            },
+        ),
+        # data-aware, the recipe of the openbmb/MiniCPM-OCR-1.0 default int4 config
+        (
+            "image-text-to-text",
+            "minicpm_ocr",
+            "int4 --group-size 8 --ratio 0.8 --dataset textvqa --num-samples 1 --awq --scale-estimation",
+            {
+                "lm_model": {"int8": 28, "int4": 42},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 22},
+            },
+        ),
     ]
 
     # Pre-quantized compressed-tensors (AWQ pack-quantized) model. It is already quantized, so
@@ -1005,6 +1053,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "qwen2_5_vl",
                 "qwen3_vl",
                 "minicpmv4_7",
+                "minicpm_ocr",
             )
             if not is_model_type_transformers_compatible(model_type)
         }
@@ -1290,7 +1339,7 @@ class OVCLIExportTestCase(unittest.TestCase):
             expected_int8 = {k: {"int8": v} for k, v in expected_int8.items()}
             if task.startswith("text2text-generation") and (not task.endswith("with-past") or model.decoder.stateful):
                 del expected_int8["decoder_with_past"]
-            if task == "text-to-video" and model_type.startswith("ltx2"):
+            if task == "text-to-video" and model_type in ["ltx2", "ltx2.3", "ltx2.5"]:
                 # Only the LTX-2 image-to-video pipeline loads a VAE encoder, to encode the input image.
                 del expected_int8["vae_encoder"]
             check_compression_state_per_model(self, model.ov_models, expected_int8)
@@ -1710,3 +1759,101 @@ class OVCLIExportTestCase(unittest.TestCase):
             model = eval(_HEAD_TO_AUTOMODELS["stable-diffusion"]).from_pretrained(tmpdir, compile=False)
             for component in ["text_encoder", "tokenizer", "unet", "vae_encoder", "vae_decoder"]:
                 self.assertIsNotNone(getattr(model, component))
+
+    @parameterized.expand((("minicpmv4_7_dspark", "vanilla", "64"), ("qwen3_dflash2", "dflash2", "4")))
+    def test_exporters_cli_markov_head_package(self, model_name, markov_head_type, top_k):
+        import openvino as ov
+
+        if markov_head_type == "vanilla" and is_transformers_version("<", "5"):
+            self.skipTest("DSpark drafts require transformers>=5")
+        if markov_head_type == "dflash2" and is_transformers_version("<", "4.57"):
+            self.skipTest("DFlash-2 requires Transformers 4.57 or newer")
+
+        model_path = MODEL_NAMES[model_name]
+        config = json.loads(Path(cached_file(model_path, "config.json")).read_text())
+        # Both tiny drafts have Markov tables of rank 8 over the target vocabulary.
+        table_shape = [config["vocab_size"], 8]
+        float_types = {ov.Type.f32, ov.Type.bf16, ov.Type.f16}
+        cases = (
+            [],
+            ["--weight-format", "int8"],
+            ["--weight-format", "int4", "--group-size", "16"],
+            ["--weight-format", "fp16"],
+        )
+        checkpoint_types = None
+        for weight_args in cases:
+            with self.subTest(weight_args=weight_args), TemporaryDirectory() as tmpdir:
+                command = ["optimum-cli", "export", "openvino", "--model", model_path, *weight_args]
+                subprocess.run([*command, tmpdir], check=True)
+
+                core = ov.Core()
+                draft_model = core.read_model(Path(tmpdir) / "openvino_model.xml")
+                draft_rt_info = draft_model.get_rt_info()["dflash"]
+                self.assertEqual(draft_rt_info["markov_rank"].value, "8")
+                self.assertEqual(draft_rt_info["markov_head_type"].value, markov_head_type)
+                if markov_head_type == "dflash2":
+                    # The GPU activation scale of a DFlash-2 draft is DFlash metadata instead of a runtime option.
+                    self.assertEqual(draft_rt_info["gpu_min_activations_scale_factor"].value, "32.0")
+                    self.assertFalse(draft_model.has_rt_info(["runtime_options", "ACTIVATIONS_SCALE_FACTOR"]))
+                weight_format = weight_args[1] if weight_args else None
+                self.assertEqual(draft_model.has_rt_info(["nncf"]), weight_format in ("int8", "int4"))
+                if weight_format == "int4":
+                    # without --all-layers too: the draft has no lm_head for NNCF to keep in int8
+                    _, num_weight_nodes = get_num_quantized_nodes(draft_model)
+                    self.assertGreater(num_weight_nodes["int4"], 0)
+                    self.assertEqual(num_weight_nodes["int8"], 0)
+
+                self.assertEqual(
+                    sorted(path.name for path in Path(tmpdir).glob("openvino_*model.xml")),
+                    ["openvino_markov_head_model.xml", "openvino_model.xml"],
+                )
+                markov_model = core.read_model(Path(tmpdir) / "openvino_markov_head_model.xml")
+                markov_rt_info = markov_model.get_rt_info()["dflash"]
+                self.assertEqual(markov_rt_info["top_k"].value, top_k)
+                self.assertFalse(markov_model.has_rt_info(["runtime_options"]))
+                # The draft is exported stateful, its Markov head model is stateless.
+                self.assertGreater(len(draft_model.get_variables()), 0)
+                self.assertEqual(len(markov_model.get_variables()), 0)
+                # The Markov head model is never weight-compressed; a floating-point weight format still applies.
+                self.assertFalse(markov_model.has_rt_info(["nncf"]))
+                markov_types = {
+                    op.get_output_element_type(0)
+                    for op in markov_model.get_ops()
+                    if op.get_type_name() == "Constant" and list(op.get_output_shape(0)) == table_shape
+                }
+                if weight_format == "fp16":
+                    self.assertEqual(markov_types, {ov.Type.f16})
+                else:
+                    self.assertLessEqual(markov_types, float_types)
+                    checkpoint_types = checkpoint_types or markov_types
+                    self.assertEqual(markov_types, checkpoint_types)
+
+    @unittest.skipIf(is_transformers_version("<", "5"), reason="DSpark drafts require transformers>=5")
+    def test_exporters_cli_dspark_does_not_export_tokenizer(self):
+        draft_path = MODEL_NAMES["minicpmv4_7_dspark"]
+        with TemporaryDirectory() as draft_with_tokenizer:
+            # The published DSpark drafts have no tokenizer; this copy of the draft has the target's one.
+            for model_name_or_path, file_name in (
+                (draft_path, "config.json"),
+                (draft_path, "model.safetensors"),
+                (MODEL_NAMES["minicpmv4_7"], "tokenizer.json"),
+                (MODEL_NAMES["minicpmv4_7"], "tokenizer_config.json"),
+            ):
+                shutil.copy(cached_file(model_name_or_path, file_name), draft_with_tokenizer)
+            for with_tokenizer, model_path in ((False, draft_path), (True, draft_with_tokenizer)):
+                with self.subTest(with_tokenizer=with_tokenizer), TemporaryDirectory() as tmpdir:
+                    subprocess.run(
+                        [
+                            "optimum-cli",
+                            "export",
+                            "openvino",
+                            "--model",
+                            model_path,
+                            "--task",
+                            "text-generation-with-past",
+                            tmpdir,
+                        ],
+                        check=True,
+                    )
+                    self.assertTrue((Path(tmpdir) / "openvino_markov_head_model.xml").exists())
+                    self.assertEqual(sorted(path.name for path in Path(tmpdir).glob("*tokenizer*")), [])

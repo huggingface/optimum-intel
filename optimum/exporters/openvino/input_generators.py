@@ -17,10 +17,18 @@ from typing import Optional, Tuple
 
 import torch
 
+from optimum.exporters.openvino.dflash_utils import (
+    DFLASH_ARCHITECTURES,
+    config_architecture,
+    parse_and_validate_dflash_config,
+)
 from optimum.exporters.openvino.utils import (
     GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE,
     GRANITEMOEHYBRID_MAMBA_LAYER_TYPE,
-    is_ltx2_3_transformer_config,
+    LTX2_ROPE_INPUTS,
+    build_ltx2_rope_modules,
+    compute_ltx2_rope_inputs,
+    has_ltx2_extended_guidance_inputs,
 )
 from optimum.intel.utils.import_utils import is_diffusers_version
 from optimum.utils import (
@@ -225,9 +233,20 @@ class Eagle3DummyGenerator(DummyInputGenerator):
     This generator produces synthetic `hidden_states` tensors that mimic the
     intermediate hidden-state outputs of a *main (target) model*, which are
     required by the Eagle-3 draft model during speculative decoding.
+
+    It also generates the inputs of the Markov head model exported next to a DFlash draft, for both its dense
+    step and its Top-K lattice. The lattice inputs cover `batch_size` draft blocks of `sequence_length` rows
+    each, packed back to back.
     """
 
-    SUPPORTED_INPUT_NAMES = ("hidden_states",)
+    SUPPORTED_INPUT_NAMES = (
+        "hidden_states",
+        "prev_token_ids",  # previous tokens
+        "draft_logits",  # draft logits of all blocks
+        "draft_hidden_states",  # draft hidden states of all blocks
+        "anchor_token_ids",  # token before each block
+        "subsequence_begins",  # start row of each block
+    )
 
     def __init__(
         self,
@@ -240,10 +259,28 @@ class Eagle3DummyGenerator(DummyInputGenerator):
         self.batch_size = batch_size
         self.sequence_length = sequence_length
         self.hidden_size = normalized_config.hidden_size
-        dflash_config = getattr(normalized_config.config, "dflash_config", None) or normalized_config.config.to_dict()
+        self.vocab_size = getattr(normalized_config, "vocab_size", None)
+        if config_architecture(normalized_config.config) in DFLASH_ARCHITECTURES:
+            dflash_config = parse_and_validate_dflash_config(normalized_config.config).values
+        else:
+            dflash_config = (
+                getattr(normalized_config.config, "dflash_config", None) or normalized_config.config.to_dict()
+            )
         self.num_hidden_state_layers = len(dflash_config.get("target_layer_ids", [])) or 3
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name in ("prev_token_ids", "anchor_token_ids"):
+            return self.random_int_tensor(
+                (self.batch_size,), max_value=self.vocab_size, framework=framework, dtype=int_dtype
+            )
+        if input_name == "draft_logits":
+            shape = (self.batch_size * self.sequence_length, self.vocab_size)
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "draft_hidden_states":
+            shape = (self.batch_size * self.sequence_length, self.hidden_size)
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "subsequence_begins":
+            return torch.arange(self.batch_size + 1, dtype=DTYPE_MAPPER.pt(int_dtype)) * self.sequence_length
         # hidden_states is provided as a concatenation of hidden-layer outputs from the main model
         shape = (
             self.batch_size,
@@ -1042,11 +1079,6 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
         "audio_hidden_states",
         "encoder_hidden_states",
         "encoder_attention_mask",
-        "num_frames",
-        "height",
-        "width",
-        "fps",
-        "audio_num_frames",
         "video_coords",
         "audio_coords",
         "audio_encoder_hidden_states",
@@ -1055,6 +1087,7 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
         "audio_timestep",
         "cross_modality_gate",
         "stg_perturbation_mask",
+        *(name for names in LTX2_ROPE_INPUTS.values() for name in names),
     )
 
     def __init__(
@@ -1067,12 +1100,10 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
         width: int = 16,
         height: int = 8,
         num_frames: int = 2,
-        frame_rate: int = 24,
         **kwargs,
     ):
         super().__init__(task, normalized_config, batch_size, num_channels, width, height, **kwargs)
         self.num_frames = num_frames
-        self.frame_rate = frame_rate
         self.vae_scale_factors = normalized_config.config.vae_scale_factors
         self.audio_in_channels = normalized_config.config.audio_in_channels
         self.audio_scale_factor = normalized_config.config.audio_scale_factor
@@ -1098,7 +1129,9 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
                 normalized_config.config, "audio_cross_attention_dim", self.cross_attention_dim
             )
 
-        self.is_ltx2_3 = is_ltx2_3_transformer_config(normalized_config.config)
+        self.has_extended_guidance_inputs = has_ltx2_extended_guidance_inputs(normalized_config.config)
+        self.rope_modules = build_ltx2_rope_modules(normalized_config.config)
+        self._rope_inputs = None
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         import torch
@@ -1113,28 +1146,29 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
             return self.random_float_tensor(
                 [self.batch_size, audio_num_frames * audio_mel_bins, self.audio_in_channels]
             )
-        if input_name == "width":
-            return torch.tensor(self.width)
-        if input_name == "height":
-            return torch.tensor(self.height)
-        if input_name == "num_frames":
-            return torch.tensor(self.num_frames)
-        if input_name == "fps":
-            return torch.tensor(float(self.frame_rate))
-        if input_name == "audio_num_frames":
-            return torch.tensor(max(1, self.num_frames))
         if input_name == "video_coords":
             return self.random_float_tensor([self.batch_size, 3, self.num_frames * self.height * self.width, 2])
         if input_name == "audio_coords":
             audio_num_frames = max(1, self.num_frames)
             audio_mel_bins = 64 // self.audio_scale_factor
             return self.random_float_tensor([self.batch_size, 1, audio_num_frames * audio_mel_bins, 2])
+        if any(input_name in names for names in LTX2_ROPE_INPUTS.values()):
+            # Real cos/sin of the dummy coordinates, so their shapes follow the rotary layout
+            # (`rope_type`) and head split of the checkpoint, exactly as the runtime computes them.
+            if self._rope_inputs is None:
+                self._rope_inputs = compute_ltx2_rope_inputs(
+                    self.rope_modules,
+                    self.generate("video_coords", framework, int_dtype, float_dtype),
+                    self.generate("audio_coords", framework, int_dtype, float_dtype),
+                )
+            return self._rope_inputs[input_name]
         if input_name == "encoder_hidden_states":
             return self.random_float_tensor([self.batch_size, self.encoder_seq_length, self.text_embed_dim])
         if input_name == "encoder_attention_mask":
             # LTX-2.0 exported this as i64, from the generic seq2seq generator this one replaced.
             # Keeping the dtype avoids changing its IRs; the mask is only ever used arithmetically.
-            if not self.is_ltx2_3:
+            # Later architectures (2.3, 2.5) get f32.
+            if not self.has_extended_guidance_inputs:
                 return self.random_mask_tensor(
                     [self.batch_size, self.encoder_seq_length], framework=framework, dtype=int_dtype
                 )
@@ -1160,7 +1194,14 @@ class LTX2TransformerDummyInputGenerator(DummyVisionInputGenerator):
 
 
 class LTX2ConnectorsDummyInputGenerator(DummyVisionInputGenerator):
-    SUPPORTED_INPUT_NAMES = ("text_encoder_hidden_states", "attention_mask")
+    SUPPORTED_INPUT_NAMES = (
+        "text_encoder_hidden_states",
+        "attention_mask",
+        "video_connector_rotary_cos",
+        "video_connector_rotary_sin",
+        "audio_connector_rotary_cos",
+        "audio_connector_rotary_sin",
+    )
 
     def __init__(
         self,
@@ -1186,6 +1227,18 @@ class LTX2ConnectorsDummyInputGenerator(DummyVisionInputGenerator):
         self.caption_channels = normalized_config.config.caption_channels
         text_proj_in_factor = getattr(normalized_config.config, "text_proj_in_factor", 1)
         self.input_channels = self.caption_channels * text_proj_in_factor
+        self.rope_type = getattr(config, "rope_type", "interleaved")
+        # Per connector: (attention heads, head dim), from the `LTX2TextConnectors` defaults when absent.
+        self.connector_heads = {
+            "video_connector": (
+                getattr(config, "video_connector_num_attention_heads", 30),
+                getattr(config, "video_connector_attention_head_dim", 128),
+            ),
+            "audio_connector": (
+                getattr(config, "audio_connector_num_attention_heads", 30),
+                getattr(config, "audio_connector_attention_head_dim", 128),
+            ),
+        }
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name == "text_encoder_hidden_states":
@@ -1194,6 +1247,42 @@ class LTX2ConnectorsDummyInputGenerator(DummyVisionInputGenerator):
             import torch
 
             return torch.ones(self.batch_size, self.sequence_length, dtype=torch.float32)
+        if input_name.endswith(("_rotary_cos", "_rotary_sin")):
+            # Only the shape matters for tracing, as in the QwenImage2.1 transformer: the layout of
+            # `LTX2RotaryPosEmbed1d` for the connector's attention.
+            heads, head_dim = self.connector_heads[input_name.rsplit("_rotary_", 1)[0]]
+            if self.rope_type == "split":
+                shape = [self.batch_size, heads, self.sequence_length, head_dim // 2]
+            else:
+                shape = [self.batch_size, self.sequence_length, heads * head_dim]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        return super().generate(input_name, framework, int_dtype, float_dtype)
+
+
+class LTX2DurationHeadDummyInputGenerator(DummyVisionInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("video_tokens", "audio_tokens")
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config: NormalizedVisionConfig,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        super().__init__(task, normalized_config, batch_size, **kwargs)
+        self.sequence_length = sequence_length
+        # The head is fed the connector outputs verbatim, so these widths are pinned by the input
+        # projections' weights: no other width will run.
+        config = normalized_config.config
+        self.video_channels = config.video_cross_attention_dim
+        self.audio_channels = config.audio_cross_attention_dim
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "video_tokens":
+            return self.random_float_tensor([self.batch_size, self.sequence_length, self.video_channels])
+        if input_name == "audio_tokens":
+            return self.random_float_tensor([self.batch_size, self.sequence_length, self.audio_channels])
         return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
@@ -1298,6 +1387,7 @@ class DummyMiniCPMV4_7VisionInputGenerator(DummyVisionInputGenerator):
     """
     Dummy inputs for the per-crop MiniCPM-V 4.7 vision graph: the NaViT-packed patches of one crop plus the host-side
     index tensors (position embedding ids, 2x2 window order for the ViT merger and 2x2 order for the final merger).
+    Without the ViT merger ("4x" downsample mode) there is no window order and the final merger regroups the full grid.
     """
 
     SUPPORTED_INPUT_NAMES = ("pixel_values", "position_ids", "window_index", "merge_index")
@@ -1310,12 +1400,14 @@ class DummyMiniCPMV4_7VisionInputGenerator(DummyVisionInputGenerator):
         num_channels: int = DEFAULT_DUMMY_SHAPES["num_channels"],
         width: int = DEFAULT_DUMMY_SHAPES["width"],
         height: int = DEFAULT_DUMMY_SHAPES["height"],
+        use_vit_merger: bool = True,
         **kwargs,
     ):
         super().__init__(task, normalized_config, batch_size, num_channels, width, height)
         config = normalized_config.config
         self.patch_size = config.patch_size
         self.num_positions = (config.image_size // config.patch_size) ** 2
+        self.use_vit_merger = use_vit_merger
         # crop grid in patches, both sides divisible by 4 (2x2 window merge followed by 2x2 merge)
         self.grid_height = max(4, self.height // self.patch_size // 4 * 4)
         self.grid_width = max(4, self.width // self.patch_size // 4 * 4)
@@ -1340,6 +1432,8 @@ class DummyMiniCPMV4_7VisionInputGenerator(DummyVisionInputGenerator):
         if input_name == "window_index":
             return self._block_order(self.grid_height, self.grid_width)
         if input_name == "merge_index":
+            if not self.use_vit_merger:
+                return self._block_order(self.grid_height, self.grid_width)
             return self._block_order(self.grid_height // 2, self.grid_width // 2)
 
 
@@ -1576,6 +1670,25 @@ class DummyQwen3_5LMInputGenerator(DummyTextInputGenerator):
         if input_name == "position_ids":
             return generated_input.unsqueeze(0).expand(4, -1, -1)
         return generated_input
+
+
+class DummyQwen3_5SequenceClassificationLMInputGenerator(DummyQwen3_5LMInputGenerator):
+    """
+    (4, batch, seq) `position_ids` ([text, T, H, W]) and an `attention_mask` that covers the past and the current tokens,
+    the past length being the dummy cache length (`sequence_length`): the transformers `DynamicCache` used for the export
+    checks the mask against the cache length.
+    """
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "attention_mask":
+            return self.random_int_tensor(
+                shape=[self.batch_size, 2 * self.sequence_length],
+                min_value=1,
+                max_value=2,
+                framework=framework,
+                dtype=int_dtype,
+            )
+        return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
 class DummyQwen2VLVisionEmbedInputGenerator(DummyVisionInputGenerator):
@@ -2010,6 +2123,45 @@ class Zamba2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         return past_key_values
 
 
+class NemotronHDummyPastKeyValuesGenerator(Zamba2DummyPastKeyValuesGenerator):
+    """
+    Generates dummy cache_params inputs for NemotronH architectures, with the GraniteMoeHybrid layout:
+    conv and SSM states for each Mamba2 layer, followed by keys and values for each attention layer.
+    """
+
+    def __init__(
+        self,
+        task: str,
+        normalized_config,
+        batch_size: int = DEFAULT_DUMMY_SHAPES["batch_size"],
+        sequence_length: int = DEFAULT_DUMMY_SHAPES["sequence_length"],
+        **kwargs,
+    ):
+        # `Zamba2DummyPastKeyValuesGenerator.__init__` reads Zamba2 and GraniteMoeHybrid config attributes,
+        # so only the base initialization is reused and the cache dimensions are set from the NemotronH config.
+        DummyPastKeyValuesGenerator.__init__(
+            self,
+            task=task,
+            normalized_config=normalized_config,
+            batch_size=batch_size,
+            sequence_length=sequence_length,
+            **kwargs,
+        )
+
+        config = normalized_config.config
+        self.intermediate_size = config.mamba_num_heads * config.mamba_head_dim
+        self.conv_kernel_size = config.conv_kernel
+        self.mamba_d_state = config.ssm_state_size
+        self.n_mamba_heads = config.mamba_num_heads
+        self.mamba_ngroups = config.n_groups
+        self.mamba_headdim = config.mamba_head_dim
+        self.head_dim = config.head_dim
+        self.num_attention_heads = config.num_key_value_heads
+        self.num_attention_layers = config.layer_types.count(GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE)
+        self.num_mamba_layers = config.layer_types.count(GRANITEMOEHYBRID_MAMBA_LAYER_TYPE)
+        self.sequence_length = 0
+
+
 class Lfm2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
     """
     Generates dummy past_key_values inputs for Lfm2 architectures.
@@ -2041,6 +2193,7 @@ class Lfm2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
         self.conv_L_cache = self.normalized_config.conv_L_cache
         self.num_key_value_heads = self.normalized_config.num_key_value_heads
         self.num_hidden_layers = self.normalized_config.num_hidden_layers
+        self.head_dim = self.hidden_size // self.num_attention_heads
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         past_key_values = []
@@ -2055,7 +2208,7 @@ class Lfm2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
                 self.batch_size,
                 self.num_key_value_heads,
                 self.sequence_length,
-                self.hidden_size // self.num_attention_heads,
+                self.head_dim,
             )
 
             kv_shape = shape  # (self.batch_size, self.num_attention_heads, self.sequence_length, self.head_dim)
@@ -2065,6 +2218,99 @@ class Lfm2DummyPastKeyValuesGenerator(DummyPastKeyValuesGenerator):
             past_key_values.append(v)
 
         return past_key_values
+
+
+class Lfm3DummyPastKeyValuesGenerator(Lfm2DummyPastKeyValuesGenerator):
+    """
+    Generates the `cache_params` of the LFM3 language model, also the one of LFM3-VL and LFM3-Omni. Unlike LFM2, it has
+    `sliding_attention` layers, which keep a full KV cache too, and its head size can differ from the hidden size per
+    head.
+    """
+
+    def __init__(self, task, normalized_config, **kwargs):
+        super().__init__(task, normalized_config, **kwargs)
+        config = normalized_config.config
+        self.num_atten_layers = len(config.layer_types) - self.num_conv_layers
+        self.head_dim = getattr(config, "head_dim", None) or config.hidden_size // config.num_attention_heads
+
+
+class DummyLfm3VlInputGenerator(DummyInputGenerator):
+    """
+    Generates the `pixel_values` of the LFM3-VL and LFM3-Omni vision encoder, of shape (num_images, grid_height,
+    grid_width, patch_dim): Qwen-style flattened patches in raster order, one 2D patch grid per temporal patch.
+    """
+
+    SUPPORTED_INPUT_NAMES = ("pixel_values",)
+
+    # The grid size in merge blocks, so that it is divisible by the merge size. Any size works, height != width keeps
+    # the two axes from being mixed up in the traced graph.
+    GRID_HEIGHT_IN_MERGE_BLOCKS = 4
+    GRID_WIDTH_IN_MERGE_BLOCKS = 6
+
+    def __init__(self, task: str, normalized_config: NormalizedVisionConfig, batch_size: int = 2, **kwargs):
+        self.task = task
+        self.batch_size = batch_size
+        config = normalized_config.config
+        vision_config = getattr(config, "vision_config", None)
+        if vision_config is not None:
+            self.patch_dim = (
+                vision_config.in_channels * vision_config.temporal_patch_size * vision_config.patch_size**2
+            )
+            merge_size = config.downsample_factor
+        else:
+            # the LFM3-VL partner checkpoint (lfm3-vl-1.9b-rl) keeps the vision settings in its flat config
+            self.patch_dim = config.vision_patch_dim
+            merge_size = config.vision_spatial_merge_size
+        self.grid_height = self.GRID_HEIGHT_IN_MERGE_BLOCKS * merge_size
+        self.grid_width = self.GRID_WIDTH_IN_MERGE_BLOCKS * merge_size
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        shape = [self.batch_size, self.grid_height, self.grid_width, self.patch_dim]
+        return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+
+
+class DummyLfm3AudioInputGenerator(DummyInputGenerator):
+    """
+    Generates the inputs of the LFM3-Omni speech submodels: the speech encoder (`input_features`), the speech frame
+    embeddings and the depth decoder (`codes`, `hidden_states`, `masked`) and the codec decoder (`audio_codes`).
+    """
+
+    SUPPORTED_INPUT_NAMES = ("input_features", "codes", "hidden_states", "masked", "audio_codes")
+
+    # The speech encoder and the codec decoder are run per clip. Any length works; the number of log-mel frames is not
+    # a multiple of the stride (8) of the speech encoder downsampler.
+    NUM_CLIPS = 1
+    NUM_MEL_FRAMES = 59
+    NUM_SPEECH_FRAMES = 5
+
+    def __init__(self, task: str, normalized_config: NormalizedVisionConfig, batch_size: int = 2, **kwargs):
+        self.task = task
+        self.batch_size = batch_size
+        config = normalized_config.config
+        self.num_mel_bins = config.audio_encoder_config.num_mel_bins
+        self.hidden_size = config.text_config.hidden_size
+        self.num_codebooks = config.num_codebooks
+        self.codebook_size = config.codebook_size
+        self.audio_eos_code = config.audio_eos_code
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "input_features":
+            shape = [self.NUM_CLIPS, self.num_mel_bins, self.NUM_MEL_FRAMES]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "hidden_states":
+            shape = [self.batch_size, self.hidden_size]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "codes":
+            shape = [self.batch_size, self.num_codebooks]
+            return self.random_int_tensor(shape, max_value=self.codebook_size, framework=framework, dtype=int_dtype)
+        if input_name == "masked":
+            # the first pass of the depth decoder: all the codebooks of the frame are hidden
+            return torch.ones((self.batch_size, self.num_codebooks), dtype=torch.bool)
+        if input_name == "audio_codes":
+            # the end-of-speech code is never passed to the codec
+            shape = [self.NUM_CLIPS, self.num_codebooks, self.NUM_SPEECH_FRAMES]
+            return self.random_int_tensor(shape, max_value=self.audio_eos_code, framework=framework, dtype=int_dtype)
+        raise ValueError(f"Unsupported input {input_name} for {self.__class__.__name__}")
 
 
 class DummyVideoChatFlashQwenInputGenerator(DummyVisionInputGenerator):
@@ -2362,35 +2608,32 @@ class DummyQwen3OmniMoeAudioInputGenerator(DummyInputGenerator):
         batch_size: int = 3,
         **kwargs,
     ):
-        self.batch_size = batch_size
         audio_config = normalized_config.config
         self.num_mels = getattr(audio_config, "num_mel_bins", 128)
         self.time_in = 200  # Mel spectrogram frames (~12.5s audio)
         self.aftercnn_time = self.time_in // 8  # After 3 stride-2 conv layers
         n_window = audio_config.n_window
         n_window_infer = audio_config.n_window_infer
-        window_aftercnn = self.aftercnn_time * (n_window_infer // (n_window * 2))
-        num_full = self.aftercnn_time // window_aftercnn
-        single_batch_chunks = [window_aftercnn] * num_full
-        remainder = self.aftercnn_time % window_aftercnn
-        if remainder != 0:
-            single_batch_chunks.append(remainder)
-        cu_chunk_lens = single_batch_chunks * self.batch_size
+        self.chunks_per_window = n_window_infer // (n_window * 2)
+        self.num_windows = 2
+        self.num_chunks = self.num_windows * self.chunks_per_window
+        window_aftercnn = self.aftercnn_time * self.chunks_per_window
         cumsum = [0]
-        for length in cu_chunk_lens:
-            cumsum.append(cumsum[-1] + length)
+        for _ in range(self.num_windows):
+            cumsum.append(cumsum[-1] + window_aftercnn)
         self._cu_seqlens = cumsum
 
     def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
         if input_name == "padded_feature":
-            return self.random_float_tensor([self.batch_size, self.num_mels, self.time_in], framework=framework)
+            return self.random_float_tensor([self.num_chunks, self.num_mels, self.time_in], framework=framework)
         if input_name == "padded_mask_after_cnn":
             return self.constant_tensor(
-                [self.batch_size, self.aftercnn_time], framework=framework, value=1, dtype=DTYPE_MAPPER.pt("bool")
+                [self.num_chunks, self.aftercnn_time], framework=framework, value=1, dtype=DTYPE_MAPPER.pt("bool")
             )
         if input_name == "aftercnn_lens":
+            # A single audio spanning all dummy windows (aftercnn_lens is per-audio, not per-chunk).
             return self.constant_tensor(
-                [self.batch_size], framework=framework, value=self.aftercnn_time, dtype=DTYPE_MAPPER.pt(int_dtype)
+                [1], framework=framework, value=self.num_chunks * self.aftercnn_time, dtype=DTYPE_MAPPER.pt(int_dtype)
             )
         if input_name == "cu_seqlens":
             import torch
