@@ -62,7 +62,7 @@ jobs:
         if: matrix.transformers-version != 'latest'
         shell: cmd
         run: |
-          %RUNNER_TEMP%\venv\Scripts\python -m uv pip install "transformers==${{ matrix.transformers-version }}"
+          %RUNNER_TEMP%\venv\Scripts\python -m uv pip install "transformers==${{ matrix.transformers-version }}" datasets
 
       # Workaround for internlm tokenizer issue with sentencepiece>=0.3
       - name: Pin sentencepiece for transformers 4.57.6

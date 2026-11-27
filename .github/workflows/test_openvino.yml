@@ -71,7 +71,8 @@ jobs:
       - if: ${{ matrix.transformers-version != 'latest' }}
         name: Install transformers
         run: |
-          uv pip install transformers==${{ matrix.transformers-version }}
+          # Include datasets so it is re-resolved against the huggingface-hub version of the selected transformers
+          uv pip install transformers==${{ matrix.transformers-version }} datasets
 
       - if: ${{ matrix.transformers-version == '4.57.6' }}
         name: Pin diffusers (diffusers>=0.40 requires huggingface-hub>=1.23, incompatible with transformers==4.57.6's huggingface-hub<1.0)

@@ -133,7 +133,10 @@ _torchaudio_version = "N/A"
 if _torchaudio_available:
     try:
         _torchaudio_version = importlib_metadata.version("torchaudio")
-    except importlib_metadata.PackageNotFoundError:
+        # A mismatched torchaudio install (e.g. a CUDA build with a CPU-only torch) fails at import. Check that it
+        # imports, since modeling_funasr is imported for every model by _infer_library_from_model_name_or_path
+        import torchaudio  # noqa: F401
+    except (importlib_metadata.PackageNotFoundError, ImportError, OSError):
         _torchaudio_available = False
 
 _sentencepiece_available = importlib.util.find_spec("sentencepiece") is not None

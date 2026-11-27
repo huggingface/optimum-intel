@@ -64,7 +64,8 @@ jobs:
 
       - name: Install transformers
         run: |
-          uv pip install transformers==4.57.6
+          # Include datasets so it is re-resolved against the huggingface-hub version of the selected transformers
+          uv pip install transformers==4.57.6 datasets
 
       - name: Install qwen-asr funasr packages
         run: |
@@ -114,5 +115,5 @@ jobs:
       - if: ${{ matrix.test-pattern == '*export*' }}
         name: Test DFlash
         run: |
-          uv pip install transformers==5.15
+          uv pip install transformers==5.15 datasets
           pytest tests/openvino/test_dflash.py --durations=0

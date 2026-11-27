@@ -1016,6 +1016,8 @@ ov_model = OVModelForSpeechSeq2Seq.from_pretrained(
 
 With this, encoder and decoder models of the Whisper pipeline will be fully quantized, including activations.
 
+Quantizing with a calibration audio dataset requires [soundfile](https://pypi.org/project/soundfile/) (`pip install soundfile`). With `datasets>=4.0`, [torchcodec](https://pypi.org/project/torchcodec/) also works.
+
 ##  Hybrid quantization
 
 Traditional optimization methods like post-training 8-bit quantization do not work well for Stable Diffusion (SD) models and can lead to poor generation results. On the other hand, weight compression does not improve performance significantly when applied to Stable Diffusion models, as the size of activations is comparable to weights.

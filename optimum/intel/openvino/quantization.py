@@ -17,6 +17,7 @@ import dataclasses
 import inspect
 import logging
 import random
+import wave
 from collections import UserDict, deque
 from contextlib import contextmanager
 from io import BytesIO
@@ -42,6 +43,7 @@ from ..utils.import_utils import (
     PILLOW_IMPORT_ERROR,
     _nncf_version,
     is_datasets_available,
+    is_datasets_version,
     is_diffusers_available,
     is_nncf_version,
     is_pillow_available,
@@ -86,6 +88,65 @@ if is_sentence_transformers_available():
 
 core = Core()
 logger = logging.getLogger(__name__)
+
+
+def _is_torchcodec_audio_decoding_available() -> bool:
+    try:
+        from torchcodec.decoders import AudioDecoder
+
+        # Importing is not enough: torchcodec loads its native FFmpeg-based libraries lazily, when a decoder is
+        # created. So decode a tiny in-memory WAV file to check that torchcodec is actually usable.
+        wav = BytesIO()
+        with wave.open(wav, "wb") as f:
+            f.setnchannels(1)
+            f.setsampwidth(2)
+            f.setframerate(16000)
+            f.writeframes(bytes(320))
+        AudioDecoder(wav.getvalue()).get_all_samples()
+    except Exception:
+        # torchcodec may be missing, or installed but unusable (e.g. FFmpeg libraries or torch version mismatch)
+        return False
+    return True
+
+
+def _disable_audio_decoding_if_unsupported(dataset: "Dataset", column: str = "audio") -> "Dataset":
+    """
+    Starting from datasets 4.0, audio decoding requires torchcodec. If it is not usable, disable decoding so that
+    raw audio bytes can be decoded with soundfile by `_load_audio` instead.
+    """
+    if not is_datasets_version(">=", "4.0.0") or _is_torchcodec_audio_decoding_available():
+        return dataset
+
+    from datasets import Audio
+
+    features = getattr(dataset, "features", None)
+    if features is not None and isinstance(features.get(column), Audio) and features[column].decode:
+        dataset = dataset.cast_column(column, Audio(sampling_rate=features[column].sampling_rate, decode=False))
+    return dataset
+
+
+def _load_audio(audio: Any):
+    """
+    Returns an (array, sampling_rate) tuple for an audio sample, which can either be decoded by `datasets` (a dict
+    with "array" and "sampling_rate" keys, or a torchcodec `AudioDecoder` with datasets>=4.0) or be undecoded
+    (a dict with "bytes" and "path" keys).
+    """
+    if not isinstance(audio, dict) or "array" in audio:
+        return audio["array"], audio["sampling_rate"]
+
+    try:
+        import soundfile
+    except ImportError:
+        raise ImportError(
+            "Decoding audio calibration data requires `torchcodec` (with datasets>=4.0) or `soundfile`. "
+            "Please install one of them, for example with `pip install soundfile`."
+        )
+    source = BytesIO(audio["bytes"]) if audio.get("bytes") is not None else audio["path"]
+    array, sampling_rate = soundfile.read(source, dtype="float32")
+    if array.ndim > 1:
+        # Convert multichannel audio to mono
+        array = array.mean(axis=1)
+    return array, sampling_rate
 
 
 class OVCalibrationDataset(UserDict):
@@ -601,7 +662,13 @@ class OVCalibrationDatasetBuilder:
         }
 
         dataset = load_dataset(dataset_name, **datasets_kwargs)
-        dataset = dataset.shuffle(seed=self.seed)
+        shuffle_kwargs = {}
+        if streaming and "max_buffer_input_shards" in inspect.signature(dataset.shuffle).parameters:
+            # Since datasets 5.0, the shuffle buffer of a streaming dataset is filled from up to 10 shards in
+            # parallel by default, which for image datasets can take more than 15GB of RAM even for a single sample.
+            # Read one shard at a time, as with earlier datasets versions.
+            shuffle_kwargs["max_buffer_input_shards"] = 1
+        dataset = dataset.shuffle(seed=self.seed, **shuffle_kwargs)
         if num_samples is not None:
             dataset = dataset.take(num_samples)
 
@@ -962,11 +1029,11 @@ class OVCalibrationDatasetBuilder:
 
             # Download audio inputs beforehand to avoid possible connection issues
             num_samples = config.num_samples or 32
+            dataset = _disable_audio_decoding_if_unsupported(dataset)
             dataset = list(tqdm(dataset.take(num_samples), desc="Downloading audio inputs", total=num_samples))
 
             for item in tqdm(dataset, desc="Collecting calibration data"):
-                audio = item["audio"]["array"]
-                sampling_rate = item["audio"]["sampling_rate"]
+                audio, sampling_rate = _load_audio(item["audio"])
                 input_features = processor(audio, sampling_rate=sampling_rate, return_tensors="pt").input_features
                 self.model.generate(input_features)
         finally:
