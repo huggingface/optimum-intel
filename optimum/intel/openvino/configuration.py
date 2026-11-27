@@ -478,7 +478,6 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "sym": False,
         "group_size": 128,
         "ratio": 1.0,
-        "group_size_fallback": "ignore",
         "dq_group_size": 128,
     },
     "google/gemma-4-E4B-it": {
@@ -1371,7 +1370,7 @@ class OVWeightQuantizationConfig(OVQuantizationConfigBase):
         lora_correction: bool = None,
         backup_precision: Optional[str] = None,
         statistics_path: Optional[str] = None,
-        group_size_fallback: Optional[str] = None,
+        group_size_fallback: Optional[str] = "ignore",
         dq_group_size: Optional[int] = None,
         scoped_configs: Optional[List[dict]] = None,
         **kwargs,

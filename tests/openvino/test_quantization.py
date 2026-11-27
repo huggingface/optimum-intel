@@ -1838,6 +1838,9 @@ class OVWeightCompressionTest(unittest.TestCase):
                     "gptq": None,
                     "lora_correction": None,
                     "backup_mode": None,
+                    "advanced_parameters": nncf.AdvancedCompressionParameters(
+                        group_size_fallback_mode=nncf.GroupSizeFallbackMode.IGNORE
+                    ),
                 }
                 compress_weights_patch.assert_called_with(
                     unittest.mock.ANY,
@@ -1898,6 +1901,9 @@ class OVWeightCompressionTest(unittest.TestCase):
                     "gptq": None,
                     "lora_correction": None,
                     "backup_mode": None,
+                    "advanced_parameters": nncf.AdvancedCompressionParameters(
+                        group_size_fallback_mode=nncf.GroupSizeFallbackMode.IGNORE
+                    ),
                 }
                 compress_weights_patch.assert_called_with(unittest.mock.ANY, **compression_params)
 
@@ -2589,7 +2595,10 @@ class OVQuantizationConfigTest(unittest.TestCase):
                 "some_arg": "some_value",
             },
             {
-                "advanced_parameters": nncf.AdvancedCompressionParameters(statistics_path="statistics_path"),
+                "advanced_parameters": nncf.AdvancedCompressionParameters(
+                    statistics_path="statistics_path",
+                    group_size_fallback_mode=nncf.GroupSizeFallbackMode.IGNORE,
+                ),
                 "some_arg": "some_value",
             },
         ),
@@ -2600,7 +2609,10 @@ class OVQuantizationConfigTest(unittest.TestCase):
                 "statistics_path": "statistics_path2",
             },
             {
-                "advanced_parameters": nncf.AdvancedCompressionParameters(statistics_path="statistics_path2"),
+                "advanced_parameters": nncf.AdvancedCompressionParameters(
+                    statistics_path="statistics_path2",
+                    group_size_fallback_mode=nncf.GroupSizeFallbackMode.IGNORE,
+                ),
             },
         ),
         (
@@ -2609,7 +2621,10 @@ class OVQuantizationConfigTest(unittest.TestCase):
                 "statistics_path": "statistics_path",
             },
             {
-                "advanced_parameters": nncf.AdvancedCompressionParameters(statistics_path="statistics_path"),
+                "advanced_parameters": nncf.AdvancedCompressionParameters(
+                    statistics_path="statistics_path",
+                    group_size_fallback_mode=nncf.GroupSizeFallbackMode.IGNORE,
+                ),
             },
         ),
         (
