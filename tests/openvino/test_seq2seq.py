@@ -25,7 +25,7 @@ import openvino
 import pytest
 import requests
 import torch
-from huggingface_hub import hf_hub_download
+from huggingface_hub import hf_hub_download, snapshot_download
 from parameterized import parameterized
 from PIL import Image
 from transformers import (
@@ -1522,6 +1522,33 @@ class OVModelForMultimodalLMIntegrationTest(unittest.TestCase):
         sequences, waveform = model.generate(**inputs, max_new_tokens=6, do_sample=False, return_audio=True)
         self.assertIsInstance(sequences, torch.Tensor)
         self.assertTrue(waveform is None or waveform.shape[:2] == (1, 1))
+        del model
+        gc.collect()
+
+    @pytest.mark.skipif(
+        not is_model_type_transformers_compatible("lfm3_omni"),
+        reason="lfm3_omni is not supported by the installed transformers version",
+    )
+    def test_lfm3_omni_without_codec(self):
+        # text-out checkpoints ship no Liquid Codec (audio_tokenizer/): no speech output parts, text generation only
+        model_id = MODEL_NAMES["lfm3_omni"]
+        with TemporaryDirectory() as model_dir:
+            snapshot_download(model_id, local_dir=model_dir, ignore_patterns=["audio_tokenizer/*"])
+            model = OVModelForMultimodalLM.from_pretrained(
+                model_dir, export=True, trust_remote_code=True, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
+            )
+            tokenizer = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)
+        self.assertFalse(model.has_talker)
+        self.assertIsNotNone(model.audio_encoder)
+        for part in ("audio_out_embeddings", "depth_decoder", "audio_decoder"):
+            self.assertIsNone(getattr(model._inner, part))
+        inputs = tokenizer("Describe the inputs", return_tensors="pt")
+        sequences = model.generate(**inputs, max_new_tokens=6, do_sample=False)
+        self.assertEqual(sequences.shape[0], 1)
+        self.assertGreater(sequences.shape[1], inputs["input_ids"].shape[1])
+        for mode in ("audio", "interleaved"):
+            with self.assertRaises(ValueError):
+                model.generate(**inputs, generation_mode=mode, max_new_tokens=2)
         del model
         gc.collect()
 

@@ -8979,11 +8979,12 @@ class _OVLfm3OmniForCausalLM(_OVLfm3VlForCausalLM):
                 config.text_config.pad_token_id if config.text_config.pad_token_id is not None else eos_ids[0]
             )
         suppress = [config.audio_token_id, config.audio_out_token_id, config.image_token_id, config.video_token_id]
+        # without the depth decoder and codec (text-out checkpoints) the speech markers would start an unusable mode
         suppress += [
             token
             for flag, token in (
-                (suppress_mixed, config.mixed_start_token_id),
-                (suppress_audio_out, config.audio_start_token_id),
+                (suppress_mixed or not self.has_talker, config.mixed_start_token_id),
+                (suppress_audio_out or not self.has_talker, config.audio_start_token_id),
             )
             if flag
         ]
@@ -9009,6 +9010,8 @@ class _OVLfm3OmniForCausalLM(_OVLfm3VlForCausalLM):
             if mode in markers and int(input_ids[0, -1]) not in markers[mode]:
                 input_ids = torch.cat((input_ids, input_ids.new_full((1, 1), markers[mode][0])), 1)
                 attention_mask = torch.cat((attention_mask, attention_mask.new_ones((1, 1))), 1)
+        if mode != text_mode and not self.has_talker:
+            raise ValueError(f"generation_mode {mode} needs the depth decoder and audio decoder models")
 
         max_new_tokens = generation_config.max_new_tokens
         if max_new_tokens is None:
