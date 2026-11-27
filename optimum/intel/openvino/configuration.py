@@ -612,9 +612,9 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "dataset": "gsm8k",
         "scale_estimation": True,
     },
-    "LiquidAI/LFM3-Omni-2B": {"bits": 4, "sym": False, "group_size": 64},
+    "LiquidAI/LFM3-Omni-2B": {"bits": 4, "sym": True, "group_size": 128, "ratio": 1.0},
     "LiquidAI/LFM3-1.7B": {"bits": 4, "sym": False, "group_size": 64},
-    "LiquidAI/LFM3-VL-2B": {"bits": 4, "sym": False, "group_size": 64},
+    "LiquidAI/LFM3-VL-2B": {"bits": 4, "sym": True, "group_size": 128, "ratio": 1.0},
     "BAAI/bge-reranker-v2-m3": {
         "bits": 4,
         "sym": False,
