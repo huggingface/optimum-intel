@@ -133,10 +133,7 @@ _torchaudio_version = "N/A"
 if _torchaudio_available:
     try:
         _torchaudio_version = importlib_metadata.version("torchaudio")
-        # A mismatched torchaudio install (e.g. a CUDA build with a CPU-only torch) fails at import. Check that it
-        # imports, since modeling_funasr is imported for every model by _infer_library_from_model_name_or_path
-        import torchaudio  # noqa: F401
-    except (importlib_metadata.PackageNotFoundError, ImportError, OSError):
+    except importlib_metadata.PackageNotFoundError:
         _torchaudio_available = False
 
 _sentencepiece_available = importlib.util.find_spec("sentencepiece") is not None
@@ -343,8 +340,22 @@ def is_funasr_available():
     return _funasr_available
 
 
+@functools.lru_cache(1)
 def is_torchaudio_available():
-    return _torchaudio_available
+    if not _torchaudio_available:
+        return False
+    # A mismatched torchaudio install (e.g. a CUDA build with a CPU-only torch) fails at import. Check that it
+    # imports, since modeling_funasr is imported for every model by _infer_library_from_model_name_or_path.
+    # This is done lazily (and cached) to not import torchaudio when optimum-intel is imported.
+    try:
+        import torchaudio  # noqa: F401
+    except (ImportError, OSError):
+        logger.warning(
+            f"torchaudio {_torchaudio_version} is installed but cannot be imported, probably because it is "
+            "incompatible with the installed torch version. torchaudio will not be used."
+        )
+        return False
+    return True
 
 
 def is_sentencepiece_available():
