@@ -258,7 +258,9 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
         model_id = MODEL_NAMES[model_arch]
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         inputs = "This is a test"
-        model = self.OVMODEL_CLASS.from_pretrained(model_id, compile=False, device=OPENVINO_DEVICE)
+        model = self.OVMODEL_CLASS.from_pretrained(
+            model_id, compile=False, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
+        )
         model.eval()
         model.half()
         model.to("cpu")
@@ -282,7 +284,9 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
         self.assertEqual(pipe.device, model.device)
         self.assertIsInstance(outputs[0]["generated_text"], str)
 
-        ov_pipe = optimum_pipeline("text2text-generation", model_id, accelerator="openvino")
+        ov_pipe = optimum_pipeline(
+            "text2text-generation", model_id, accelerator="openvino", model_kwargs={"ov_config": F32_CONFIG}
+        )
         ov_outputs = ov_pipe(inputs, max_new_tokens=20)
         self.assertEqual(outputs[-1]["generated_text"], ov_outputs[-1]["generated_text"])
         del ov_pipe
@@ -319,7 +323,7 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
         text = "This is a sample input"
         tokens = tokenizer(text, return_tensors="pt")
         model_with_pkv = self.OVMODEL_CLASS.from_pretrained(
-            model_id, export=True, use_cache=True, device=OPENVINO_DEVICE
+            model_id, export=True, use_cache=True, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
         )
         _ = model_with_pkv.generate(**tokens)  # warmup
         with Timer() as with_pkv_timer:
@@ -327,7 +331,7 @@ class OVModelForSeq2SeqLMIntegrationTest(OVSeq2SeqTestMixin):
                 **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
             )
         model_without_pkv = self.OVMODEL_CLASS.from_pretrained(
-            model_id, export=True, use_cache=False, device=OPENVINO_DEVICE
+            model_id, export=True, use_cache=False, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
         )
         _ = model_without_pkv.generate(**tokens)  # warmup
         with Timer() as without_pkv_timer:
@@ -436,7 +440,7 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
     def test_pipeline(self, model_arch):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        model = self.OVMODEL_CLASS.from_pretrained(model_id, device=OPENVINO_DEVICE)
+        model = self.OVMODEL_CLASS.from_pretrained(model_id, device=OPENVINO_DEVICE, ov_config=F32_CONFIG)
         processor = AutoProcessor.from_pretrained(model_id)
         pipe = pipeline(
             "automatic-speech-recognition",
@@ -448,7 +452,9 @@ class OVModelForSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
         outputs = pipe(inputs)
         self.assertIsInstance(outputs["text"], str)
 
-        ov_pipe = optimum_pipeline("automatic-speech-recognition", model_id, accelerator="openvino")
+        ov_pipe = optimum_pipeline(
+            "automatic-speech-recognition", model_id, accelerator="openvino", model_kwargs={"ov_config": F32_CONFIG}
+        )
         ov_outputs = ov_pipe(inputs)
         self.assertEqual(outputs["text"], ov_outputs["text"])
         del ov_pipe
@@ -515,7 +521,9 @@ class OVModelForImageTextToTextIntegrationTest(OVSeq2SeqTestMixin):
     @parameterized.expand(SUPPORTED_ARCHITECTURES)
     def test_compare_to_transformers(self, model_arch: str):
         model_id = MODEL_NAMES[model_arch]
-        ov_model = self.OVMODEL_CLASS.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
+        ov_model = self.OVMODEL_CLASS.from_pretrained(
+            model_id, export=True, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
+        )
         self._check_openvino_model_attributes(ov_model, use_cache=True, stateful=False)
 
         set_seed(SEED)
@@ -549,7 +557,9 @@ class OVModelForImageTextToTextIntegrationTest(OVSeq2SeqTestMixin):
     def test_pipeline(self, model_arch: str):
         set_seed(SEED)
         model_id = MODEL_NAMES[model_arch]
-        ov_model = self.OVMODEL_CLASS.from_pretrained(model_id, compile=False, device=OPENVINO_DEVICE)
+        ov_model = self.OVMODEL_CLASS.from_pretrained(
+            model_id, compile=False, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
+        )
         feature_extractor, tokenizer = self._get_preprocessors(model_id)
         ov_model.reshape(1, -1)
         ov_model.compile()
@@ -565,7 +575,9 @@ class OVModelForImageTextToTextIntegrationTest(OVSeq2SeqTestMixin):
         outputs = pipe(inputs, max_new_tokens=3)
         self.assertEqual(pipe.device, ov_model.device)
         self.assertIsInstance(outputs[0]["generated_text"], str)
-        ov_pipe = optimum_pipeline("image-to-text", model_id, accelerator="openvino")
+        ov_pipe = optimum_pipeline(
+            "image-to-text", model_id, accelerator="openvino", model_kwargs={"ov_config": F32_CONFIG}
+        )
         ov_outputs = ov_pipe(inputs, max_new_tokens=3)
         self.assertEqual(outputs[-1]["generated_text"], ov_outputs[-1]["generated_text"])
 
@@ -1030,7 +1042,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         )
         transformers_model = self.get_transformer_model_class(model_arch).from_pretrained(model_id)
         ov_model = self.OVMODEL_CLASS.from_pretrained(
-            model_id, export=True, trust_remote_code=trust_remote_code, device=OPENVINO_DEVICE
+            model_id, export=True, trust_remote_code=trust_remote_code, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
         )
         self.assertTrue(ov_model._support_new_processing)
         self.assertTrue(processor.patch_size is not None)
@@ -1247,7 +1259,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
     @pytest.mark.skipif(is_transformers_version("<", "5.0"), reason="qwen3_omni_moe requires transformers >= 5.0")
     def test_qwen3_omni_moe_sequential_generation(self):
         model_id = MODEL_NAMES["qwen3_omni_moe"]
-        model = self.OVMODEL_CLASS.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE)
+        model = self.OVMODEL_CLASS.from_pretrained(model_id, export=True, device=OPENVINO_DEVICE, ov_config=F32_CONFIG)
         preprocessors = self.get_preprocessors("qwen3_omni_moe")
 
         outputs = []
@@ -1683,7 +1695,7 @@ class OVModelForPix2StructIntegrationTest(OVSeq2SeqTestMixin):
         question = "Who am I?"
         inputs = preprocessor(images=self.IMAGE, text=question, return_tensors="pt")
         model_with_pkv = self.OVMODEL_CLASS.from_pretrained(
-            model_id, export=True, use_cache=True, device=OPENVINO_DEVICE
+            model_id, export=True, use_cache=True, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
         )
         _ = model_with_pkv.generate(**inputs)  # warmup
         with Timer() as with_pkv_timer:
@@ -1691,7 +1703,7 @@ class OVModelForPix2StructIntegrationTest(OVSeq2SeqTestMixin):
                 **inputs, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
             )
         model_without_pkv = self.OVMODEL_CLASS.from_pretrained(
-            model_id, export=True, use_cache=False, device=OPENVINO_DEVICE
+            model_id, export=True, use_cache=False, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
         )
         _ = model_without_pkv.generate(**inputs)  # warmup
         with Timer() as without_pkv_timer:

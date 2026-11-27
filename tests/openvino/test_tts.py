@@ -21,6 +21,7 @@ from tempfile import TemporaryDirectory
 import numpy as np
 import openvino
 import torch
+from huggingface_hub import snapshot_download
 from parameterized import parameterized
 from transformers import (
     AutoModelForTextToSpectrogram,
@@ -130,7 +131,9 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
         inputs = processor(text=text_data, padding=True, return_tensors="pt")
         ref_speech = model.generate_speech(inputs["input_ids"], speaker_embeddings, vocoder=vocoder)
         ref_speech = ref_speech.unsqueeze(0) if ref_speech.dim() == 1 else ref_speech
-        ov_model = self.OVMODEL_CLASS.from_pretrained(model_id, vocoder=vocoder_id, device=OPENVINO_DEVICE)
+        ov_model = self.OVMODEL_CLASS.from_pretrained(
+            model_id, vocoder=vocoder_id, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
+        )
         ov_speech = ov_model.generate(input_ids=inputs["input_ids"], speaker_embeddings=speaker_embeddings)
         self._check_openvino_model_attributes(ov_model, use_cache=True)
         self.assertTrue(torch.allclose(ov_speech, ref_speech, atol=1e-3))
@@ -255,7 +258,9 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
             export_from_model(model=ref_model, output=tmpdir, task="text-to-audio", stateful=True)
 
             # Verify that local voice .pt files were converted to .bin (regression for local export bug)
-            source_voices = sorted(Path(model_id).glob("voices/*.pt"))
+            source_voices = sorted(
+                Path(model_id if os.path.isdir(model_id) else snapshot_download(model_id)).glob("voices/*.pt")
+            )
             self.assertGreater(len(source_voices), 0, "Test fixture has no source voice .pt files")
             exported_voices = sorted(Path(tmpdir).glob("voices/*.bin"))
             self.assertEqual(
@@ -266,7 +271,7 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
             for bin_path in exported_voices:
                 self.assertGreater(bin_path.stat().st_size, 0, f"{bin_path.name} is empty")
 
-            ov_model = self.OVMODEL_CLASS.from_pretrained(tmpdir, device=OPENVINO_DEVICE)
+            ov_model = self.OVMODEL_CLASS.from_pretrained(tmpdir, device=OPENVINO_DEVICE, ov_config=F32_CONFIG)
 
             self.assertIsInstance(ov_model, _OVModelForKokoroTextToSpeech)
             self.assertIsInstance(ov_model.config, PretrainedConfig)

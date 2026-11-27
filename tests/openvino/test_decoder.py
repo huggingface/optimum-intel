@@ -577,7 +577,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         tokens = tokenizer("This is a sample input", return_tensors="pt")
 
         model_with_pkv = OVModelForCausalLM.from_pretrained(
-            model_id, export=True, use_cache=True, stateful=False, device=OPENVINO_DEVICE
+            model_id, export=True, use_cache=True, stateful=False, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
         )
         outputs_model_with_pkv = model_with_pkv.generate(
             **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
@@ -585,7 +585,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         del model_with_pkv
 
         model_without_pkv = OVModelForCausalLM.from_pretrained(
-            model_id, export=True, use_cache=False, device=OPENVINO_DEVICE
+            model_id, export=True, use_cache=False, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
         )
         outputs_model_without_pkv = model_without_pkv.generate(
             **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
@@ -597,7 +597,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         self.assertEqual(outputs_model_without_pkv.shape[1], self.GENERATION_LENGTH)
 
         model_stateful = OVModelForCausalLM.from_pretrained(
-            model_id, export=True, use_cache=True, stateful=True, device=OPENVINO_DEVICE
+            model_id, export=True, use_cache=True, stateful=True, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
         )
         outputs_model_stateful = model_stateful.generate(
             **tokens, min_length=self.GENERATION_LENGTH, max_length=self.GENERATION_LENGTH, num_beams=1
@@ -640,7 +640,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     def test_default_filling_attention_mask(self):
         model_id = MODEL_NAMES["gpt2"]
         model_with_cache = OVModelForCausalLM.from_pretrained(
-            model_id, stateful=False, use_cache=True, device=OPENVINO_DEVICE
+            model_id, stateful=False, use_cache=True, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
         )
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
@@ -665,7 +665,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
     def test_default_filling_attention_mask_and_position_ids(self):
         model_id = MODEL_NAMES["llama"]
         model_with_cache = OVModelForCausalLM.from_pretrained(
-            model_id, stateful=False, use_cache=True, device=OPENVINO_DEVICE
+            model_id, stateful=False, use_cache=True, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
         )
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         tokenizer.pad_token = tokenizer.eos_token
@@ -898,7 +898,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
 
         for dtype in torch_dtypes:
             ov_model = OVModelForCausalLM.from_pretrained(
-                model_id=model_id, export=True, torch_dtype=dtype, device=OPENVINO_DEVICE
+                model_id=model_id, export=True, torch_dtype=dtype, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
             )
             ov_logits = ov_model(**test_input).logits
             self.assertTrue(
