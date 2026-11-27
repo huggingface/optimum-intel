@@ -3,6 +3,10 @@ import os
 import pytest
 
 
+# Disable OpenVINO telemetry for tests (CI=true). Also applies to optimum-cli subprocesses.
+os.environ.setdefault("CI", "true")
+
+
 def pytest_report_header(config):
     # Must live in conftest: pytest-xdist does not forward worker logs, so this only
     # reaches the terminal from the controller process.

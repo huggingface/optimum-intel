@@ -60,5 +60,5 @@ jobs:
 
       - name: Legacy remote-code models validation
         run: |
-          uv pip install "transformers==4.51.0" transformers_stream_generator
+          uv pip install "transformers==4.51.0" transformers_stream_generator datasets
           pytest tests/openvino/${{ matrix.test-pattern }} -k "(chatglm and not chatglm4) or (minicpm and not minicpmv) or (qwen and not qwen2 and not qwen3 and not videochat_flash_qwen) or arctic or deepseek or llava-qwen2 or phi3_v or phi4mm or minicpmo or test_filtered_architectures" --durations=0

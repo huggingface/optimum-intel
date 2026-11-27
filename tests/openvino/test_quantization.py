@@ -93,6 +93,7 @@ from copy import deepcopy
 from optimum.intel.openvino.quantization import InferRequestWrapper, OVCalibrationDatasetBuilder
 from optimum.exporters.openvino import main_export
 from optimum.intel.utils.import_utils import (
+    is_datasets_version,
     is_diffusers_version,
     is_nncf_version,
     is_openvino_version,
@@ -430,7 +431,10 @@ class OVQuantizerTest(unittest.TestCase):
                 "lm_model": {"f8e4m3": 8, "int4": 14},
                 "text_embeddings_model": {"int8": 1},
                 "vision_embeddings_model": {"f8e4m3": 1},
-                "vision_embeddings_merger_model": {"f8e4m3": 5, "int4": 10},
+                # The calibration sample selected from the shuffled streaming dataset changed in datasets 5.1
+                "vision_embeddings_merger_model": (
+                    {"f8e4m3": 5, "int4": 10} if is_datasets_version(">=", "5.1") else {"f8e4m3": 2, "int4": 16}
+                ),
             },
         ),
         (
@@ -1094,7 +1098,7 @@ class OVWeightCompressionTest(unittest.TestCase):
                 num_samples=1,
             ),
             {
-                "lm_model": {"int8": 50, "int4": 52}
+                "lm_model": {"int8": 52, "int4": 50}
                 if is_transformers_version(">=", "4.57")
                 else {"int8": 46, "int4": 56},
                 "text_embeddings_model": {"int8": 1},
@@ -2054,6 +2058,51 @@ class OVWeightCompressionTest(unittest.TestCase):
                 }
             ),
         )
+
+
+class CalibrationDatasetLoadingTest(unittest.TestCase):
+    def test_visual_dataset_uses_streaming_metadata(self):
+        for dataset_name, dataset_id, streaming in (
+            ("textvqa", "lmms-lab/textvqa", True),
+            ("gsm8k", "openai/gsm8k", False),
+        ):
+            for num_samples in (None, 3):
+                with self.subTest(dataset=dataset_name, num_samples=num_samples):
+                    builder = OVCalibrationDatasetBuilder(unittest.mock.Mock(spec=OVModelForVisualCausalLM))
+                    config = OVWeightQuantizationConfig(
+                        bits=4,
+                        dataset=dataset_name,
+                        processor="processor",
+                        num_samples=num_samples,
+                        scale_estimation=True,
+                    )
+                    with unittest.mock.patch.object(builder, "build_from_dataset_name") as build:
+                        builder.build_from_quantization_config(config)
+
+                    self.assertEqual(build.call_args.args[1], dataset_id)
+                    self.assertEqual(build.call_args.kwargs["streaming"], streaming)
+                    self.assertEqual(build.call_args.kwargs["num_samples"], num_samples)
+
+    def test_audio_decoding_without_torchcodec(self):
+        import io
+
+        import soundfile
+        from datasets import Audio, Dataset
+
+        from optimum.intel.openvino import quantization
+
+        expected = np.linspace(-0.5, 0.5, 1600, dtype=np.float32)
+        buffer = io.BytesIO()
+        soundfile.write(buffer, expected, 16000, format="FLAC", subtype="PCM_24")
+        dataset = Dataset.from_dict({"audio": [{"bytes": buffer.getvalue(), "path": "sample.flac"}]})
+        dataset = dataset.cast_column("audio", Audio(sampling_rate=16000)).to_iterable_dataset()
+
+        with unittest.mock.patch.object(quantization, "_is_torchcodec_audio_decoding_available", return_value=False):
+            dataset = quantization._disable_audio_decoding_if_unsupported(dataset)
+        audio, sampling_rate = quantization._load_audio(next(iter(dataset))["audio"])
+
+        self.assertEqual(sampling_rate, 16000)
+        np.testing.assert_allclose(audio, expected, atol=1e-6)
 
 
 class OVPipelineQuantizationTest(unittest.TestCase):
