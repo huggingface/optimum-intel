@@ -94,6 +94,18 @@ jobs:
           uv pip install "transformers>=5.21"
           pytest tests/openvino/test_quantization.py tests/openvino/test_cb_compatible.py -k "minicpm_ocr" --durations=0
 
+      # TODO: install a transformers release once it includes BAGEL; until then, its port at a fixed commit
+      - name: BAGEL Validation
+        run: |
+          uv pip install "transformers @ https://github.com/padatta/transformers/archive/38b3e74123a005abfd071d2709bbbb017a7919e1.tar.gz"
+          pytest tests/openvino/${{ matrix.test-pattern }} -k "bagel" --durations=0
+
+      - name: BAGEL Quantization Validation
+        if: ${{ matrix.test-pattern == '*export*' }}
+        run: |
+          uv pip install "transformers @ https://github.com/padatta/transformers/archive/38b3e74123a005abfd071d2709bbbb017a7919e1.tar.gz"
+          pytest tests/openvino/test_quantization.py -k "bagel" --durations=0
+
       - name: Scoped Config Validation with NNCF develop
         run: |
           uv pip install "nncf @ git+https://github.com/openvinotoolkit/nncf.git@develop"

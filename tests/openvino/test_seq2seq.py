@@ -13,12 +13,14 @@
 #  limitations under the License.
 
 import copy
+import functools
 import gc
 import os
 import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 import numpy as np
 import openvino
@@ -60,6 +62,7 @@ from utils_tests import (
     is_model_type_transformers_compatible,
 )
 
+from optimum.exporters.openvino import main_export
 from optimum.exporters.openvino.stateful import model_has_state
 from optimum.exporters.openvino.utils import ONNX_SUPPORTED_ARCHITECTURES
 from optimum.exporters.tasks import TasksManager
@@ -614,6 +617,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         "minicpm_ocr",
         "lfm3_vl",
         "lfm3_omni",
+        "bagel",
     ]
     if is_openvino_version(">=", "2026.3") and is_compressed_tensors_available():
         SUPPORTED_ARCHITECTURES.append("qwen3_5_compressed_tensors")
@@ -694,6 +698,7 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             "minicpm_ocr",
             "lfm3_vl",
             "lfm3_omni",
+            "bagel",
         ]:
             from transformers import AutoModelForImageTextToText
 
@@ -758,6 +763,10 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         if model_arch == "lfm3_omni":
             # the remote generate() is a text / speech state machine that refuses min_new_tokens
             self.skipTest("lfm3_omni comparison tested in test_lfm3_omni_compare_to_transformers")
+        if model_arch == "bagel":
+            # the language model is stateless (its KV cache is shared with image generation), as the export layout of
+            # OpenVINO GenAI's BagelPipeline
+            self.skipTest("bagel comparison tested in test_bagel_compare_to_transformers")
 
         if model_arch == "gemma4" and is_openvino_version("<", "2026.5"):
             self.skipTest("gemma4 is causing segfault CVS-193103")
@@ -1230,6 +1239,204 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
             f"Max abs diff {(ov_audio - transformers_audio).abs().max()}",
         )
         del transformers_model
+        del ov_model
+        gc.collect()
+
+    def test_bagel_compare_to_transformers(self):
+        model_arch = "bagel"
+        if model_arch not in self.SUPPORTED_ARCHITECTURES:
+            self.skipTest("bagel is not supported by the installed transformers version")
+        model_id = MODEL_NAMES[model_arch]
+        transformers_model = AutoModelForImageTextToText.from_pretrained(model_id).eval()
+        ov_model = self.OVMODEL_CLASS.from_pretrained(
+            model_id, export=True, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
+        )
+        self.assertIsInstance(ov_model, MODEL_TYPE_TO_CLS_MAPPING["bagel"])
+        self.assertFalse(model_has_state(ov_model.language_model.model))
+        preprocessors = self.get_preprocessors(model_arch)
+        processor = preprocessors["processor"]
+        image = self.IMAGE.resize((600, 600))
+
+        # understanding: prompt logits and greedy generation, with and without an image
+        gen_config = GenerationConfig(max_new_tokens=10, min_new_tokens=10, do_sample=False, eos_token_id=None)
+        for media in ({"image": image}, {}):
+            inputs = ov_model.preprocess_inputs(**preprocessors, text="What is shown in this image?", **media)
+            ov_logits = ov_model(**inputs).logits
+            with torch.no_grad():
+                transformers_logits = transformers_model(**copy.deepcopy(inputs)).logits
+            self.assertTrue(
+                torch.allclose(ov_logits, transformers_logits, atol=4e-3),
+                f"Max abs diff {(ov_logits - transformers_logits).abs().max()}",
+            )
+            ov_outputs = ov_model.generate(**inputs, generation_config=gen_config)
+            with torch.no_grad():
+                transformers_outputs = transformers_model.generate(
+                    **copy.deepcopy(inputs), generation_config=gen_config
+                )
+            self.assertTrue(torch.equal(ov_outputs, transformers_outputs), f"{ov_outputs} vs {transformers_outputs}")
+
+        # generation: text-to-image and editing from the same initial noise
+        image_kwargs = {"generation_mode": "image", "num_inference_steps": 4, "cfg_interval": (0.0, 1.0)}
+        t2i_inputs = processor(text="A red bicycle", generation_mode="image", return_tensors="pt")
+        edit_inputs = processor(text="Make it green", images=image, generation_mode="image", return_tensors="pt")
+        num_latent_tokens = (32 // ov_model.latent_downsample) ** 2
+        for inputs, size in ((t2i_inputs, {"height": 32, "width": 32}), (edit_inputs, {})):
+            latents = torch.randn(
+                num_latent_tokens, ov_model._patch_dim, generator=torch.Generator().manual_seed(SEED)
+            )
+            ov_image = ov_model.generate(**inputs, **image_kwargs, **size, latents=latents)
+            # the exported VAE encoder returns the posterior mean
+            vae = transformers_model.model.vae
+            with patch.object(vae, "encode", functools.partial(vae.encode, sample=False)), torch.no_grad():
+                transformers_image = transformers_model.generate(
+                    **copy.deepcopy(inputs), **image_kwargs, **size, latents=latents
+                )
+            self.assertEqual(ov_image.shape, (1, 3, 32, 32))
+            self.assertTrue(
+                torch.allclose(ov_image, transformers_image, atol=1e-3),
+                f"Max abs diff {(ov_image - transformers_image).abs().max()}",
+            )
+
+        # the VAE decoder has a dynamic batch: several generated frames decode in one call
+        latent_size = 32 // ov_model.latent_downsample * transformers_model.config.latent_patch_size
+        latents = torch.randn(3, transformers_model.config.vae_config.latent_channels, latent_size, latent_size)
+        ov_images = torch.from_numpy(ov_model.vae_decoder({"latents": latents.numpy()})["image"])
+        with torch.no_grad():
+            transformers_images = transformers_model.model.vae.decode(latents)
+        self.assertEqual(ov_images.shape, (3, 3, 32, 32))
+        self.assertTrue(
+            torch.allclose(ov_images, transformers_images, atol=1e-3),
+            f"Max abs diff {(ov_images - transformers_images).abs().max()}",
+        )
+        del transformers_model
+        del ov_model
+        gc.collect()
+
+    def test_bagel_generate_frames(self):
+        model_arch = "bagel"
+        if model_arch not in self.SUPPORTED_ARCHITECTURES:
+            self.skipTest("bagel is not supported by the installed transformers version")
+        ov_model = self.OVMODEL_CLASS.from_pretrained(
+            MODEL_NAMES[model_arch], export=True, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
+        )
+        processor = self.get_preprocessors(model_arch)["processor"]
+        image = self.IMAGE.resize((600, 600))
+        frames = [image, image.rotate(90), image.transpose(Image.FLIP_LEFT_RIGHT)]
+        prompt = "Generate the next frame"
+        inputs = processor(text=prompt, images=frames, generation_mode="image", return_tensors="pt")
+        per_frame = [processor(text=prompt, images=[f], generation_mode="image", return_tensors="pt") for f in frames]
+        height, width = inputs["vae_pixel_values"].shape[-2:]
+        num_frames, steps = 2, 3
+
+        def reference(model, guidance_scale, image_guidance_scale):
+            # editing of the last frame, with the window of VAE + ViT blocks in place of the edited image
+            window = []
+            for frame in per_frame:
+                latent = model.vae_encoder({"pixel_values": frame["vae_pixel_values"].numpy()})["latent"]
+                window.append((model._patchify(latent), frame))
+            add_vit_image = model._add_vit_image
+
+            def add_window(context, _):
+                for tokens, frame in window:
+                    model._latent_block(context, tokens, 0.0, model._latent_position_ids(height, width), True)
+                    if frame is not None:
+                        add_vit_image(context, frame["pixel_values"], frame["image_position_ids"])
+
+            num_tokens = (height // model.latent_downsample) * (width // model.latent_downsample)
+            generated = []
+            with (
+                patch.object(model, "_add_vae_image", add_window),
+                patch.object(model, "_add_vit_image", lambda *args: None),
+            ):
+                for k in range(num_frames):
+                    noise = np.random.RandomState(SEED + k).randn(num_tokens, model._patch_dim)
+                    tokens = model.generate(
+                        **per_frame[-1],
+                        generation_mode="image",
+                        num_inference_steps=steps,
+                        guidance_scale=guidance_scale,
+                        image_guidance_scale=image_guidance_scale,
+                        cfg_interval=(0.0, 1.0),
+                        latents=torch.from_numpy(noise.astype(np.float32)),
+                        output_type="latent",
+                    ).numpy()
+                    generated.append(tokens)
+                    window = window[1:] + [(tokens, None)]
+            latents = np.concatenate([model._unpatchify(t, height, width) for t in generated], 0)
+            return torch.from_numpy(model.vae_decoder({"latents": latents})["image"])
+
+        outputs = {}
+        # guidance off, text guidance only, text and image guidance
+        for scales in ((1.0, 1.0), (4.0, 1.0), (4.0, 2.0)):
+            ov_frames = ov_model.generate_frames(
+                **inputs,
+                num_frames=num_frames,
+                num_inference_steps=steps,
+                guidance_scale=scales[0],
+                image_guidance_scale=scales[1],
+                seed=SEED,
+            )
+            expected = reference(ov_model, *scales)
+            self.assertEqual(ov_frames.shape, (num_frames, 3, height, width))
+            self.assertTrue(
+                torch.allclose(ov_frames, expected, atol=1e-4),
+                f"{scales}: max abs diff {(ov_frames - expected).abs().max()}",
+            )
+            outputs[scales] = ov_frames
+        self.assertFalse(torch.equal(outputs[(1.0, 1.0)], outputs[(4.0, 1.0)]), "guidance_scale has no effect")
+        self.assertFalse(torch.equal(outputs[(4.0, 1.0)], outputs[(4.0, 2.0)]), "image_guidance_scale has no effect")
+
+        with self.assertRaises(ValueError):
+            ov_model.generate_frames(**inputs, num_frames=0)
+        del ov_model
+        gc.collect()
+
+    def test_bagel_generate_frames_with_frames_models(self):
+        model_arch = "bagel"
+        if model_arch not in self.SUPPORTED_ARCHITECTURES:
+            self.skipTest("bagel is not supported by the installed transformers version")
+
+        processor = self.get_preprocessors(model_arch)["processor"]
+        image = self.IMAGE.resize((600, 600))
+        frames = [image, image.rotate(90), image.transpose(Image.FLIP_LEFT_RIGHT)]
+        inputs = processor(text="Generate the next frame", images=frames, generation_mode="image", return_tensors="pt")
+        kwargs = {"num_frames": 3, "num_inference_steps": 3, "guidance_scale": 4.0, "seed": SEED}
+        with TemporaryDirectory() as export_dir, TemporaryDirectory() as tmpdir:
+            main_export(MODEL_NAMES[model_arch], export_dir, task="image-text-to-text", model_kwargs={"num_frames": 3})
+            # save_pretrained keeps the N-frame models, which are not model parts
+            self.OVMODEL_CLASS.from_pretrained(export_dir, device=OPENVINO_DEVICE).save_pretrained(tmpdir)
+            ov_model = self.OVMODEL_CLASS.from_pretrained(tmpdir, device=OPENVINO_DEVICE, ov_config=F32_CONFIG)
+            single_frame_calls = []
+            for part in (ov_model.vision_embeddings, ov_model.vae_encoder, ov_model.vae_decoder):
+                part.forward = functools.partial(
+                    lambda name, *args, **kw: single_frame_calls.append(name), part._model_name
+                )
+            frames_output = ov_model.generate_frames(**inputs, **kwargs)
+            self.assertEqual(single_frame_calls, [])
+            self.assertEqual(
+                sorted(name for name, part in ov_model._frames_models.items() if part is not None),
+                ["vae_decoder_3img", "vae_encoder_3img", "vision_embeddings_3img"],
+            )
+            del ov_model
+        ov_model = self.OVMODEL_CLASS.from_pretrained(
+            MODEL_NAMES[model_arch], export=True, device=OPENVINO_DEVICE, ov_config=F32_CONFIG
+        )
+        expected = ov_model.generate_frames(**inputs, **kwargs)
+        self.assertEqual(frames_output.shape, expected.shape)
+        self.assertTrue(
+            torch.allclose(frames_output, expected, atol=1e-4),
+            f"max abs diff {(frames_output - expected).abs().max()}",
+        )
+
+        labels = [
+            processor(text=f"Frame {i + 1}:", generation_mode="image", return_tensors="pt")["input_ids"]
+            for i in range(3)
+        ]
+        labeled = ov_model.generate_frames(**inputs, **kwargs, frame_labels=labels)
+        self.assertEqual(labeled.shape, expected.shape)
+        self.assertFalse(torch.equal(labeled, expected), "frame_labels have no effect")
+        with self.assertRaises(ValueError):
+            ov_model.generate_frames(**inputs, **kwargs, frame_labels=labels[:2])
         del ov_model
         gc.collect()
 

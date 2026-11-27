@@ -29,7 +29,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import torch
 import torch.nn.functional as F
 import transformers
-from huggingface_hub import hf_hub_download
+from huggingface_hub import hf_hub_download, snapshot_download
 from huggingface_hub.utils import EntryNotFoundError
 from safetensors import safe_open
 from torch import nn
@@ -50,6 +50,8 @@ from transformers.models.llama.modeling_llama import (
     LlamaRMSNorm,
     LlamaRotaryEmbedding,
 )
+from transformers.models.llama.modeling_llama import apply_rotary_pos_emb as llama_apply_rotary_pos_emb
+from transformers.models.llama.modeling_llama import repeat_kv as llama_repeat_kv
 from transformers.models.phi3.modeling_phi3 import apply_rotary_pos_emb, repeat_kv
 from transformers.models.speecht5.modeling_speecht5 import SpeechT5EncoderWithSpeechPrenet
 from transformers.processing_utils import Unpack
@@ -14682,3 +14684,361 @@ class MiniCPMV4_7VisionEmbeddingsPatcher(ModelPatcher):
             layer.self_attn.forward = layer.self_attn._orig_forward
         vision_tower.vit_merger.self_attn.forward = vision_tower.vit_merger.self_attn._orig_forward
         vision_tower.vit_merger.forward = vision_tower.vit_merger._orig_forward
+
+
+# BAGEL-7B-MoT's understanding residual stream reaches ~1.6e5 (attention-sink tokens) from layer 3 on, above the f16
+# maximum (65504), so f16 inference (GPU, NPU) overflows to inf without rescaling. 16 brings the peak to ~1e4.
+BAGEL_UND_SCALE = 16.0
+BAGEL_UND_SCALE_FROM_LAYER = 3
+
+
+def _bagel_und_scale(layer_idx: int) -> float:
+    return BAGEL_UND_SCALE if layer_idx >= BAGEL_UND_SCALE_FROM_LAYER else 1.0
+
+
+class BagelLanguageModelForExport(nn.Module):
+    """
+    Stateless BAGEL MoT decoder with the interface of OpenVINO GenAI's `BagelPipeline`. Understanding tokens
+    (`und_index`) and VAE latent tokens (`gen_index`) share one attention, each routed to its own expert. The latents
+    are embedded from `x_t`, `timestep` and `vae_position_ids`; the KV cache is exposed as inputs and outputs.
+
+    Needed because `BagelForConditionalGeneration.forward` only runs the understanding expert, while the generation
+    expert is driven from the python loop of `generate_image`. A single graph serving both experts lets the runtime
+    reuse one prompt KV cache across the classifier-free-guidance branches and all denoising steps, and the cache
+    stays an explicit input (not a state) because those branches fork it.
+    Adapted from `BagelTextModel` / `BagelForConditionalGeneration.generate_image`:
+    https://github.com/padatta/transformers/blob/38b3e74123a005abfd071d2709bbbb017a7919e1/src/transformers/models/bagel/modeling_bagel.py
+    and the original packed MoT attention:
+    https://github.com/ByteDance-Seed/Bagel/blob/a2fa77dd8caeefc41e6607ae0ec17408d3f4ee9f/modeling/bagel/qwen2_navit.py
+    """
+
+    def __init__(self, model: "PreTrainedModel"):
+        super().__init__()
+        self.bagel = model.model
+        self.lm_head = model.lm_head
+        self.config = model.config
+        # set by BagelLanguageModelPatcher: factor applied to the und stream after the attention of each layer
+        self.und_rescale = None
+
+    def forward(
+        self,
+        inputs_embeds,
+        und_index,
+        gen_index,
+        x_t,
+        timestep,
+        vae_position_ids,
+        attention_mask,
+        position_ids,
+        past_key_values,
+    ):
+        bagel = self.bagel
+        text = bagel.language_model
+        latents = bagel.vae2llm(x_t) + bagel.time_embedder(timestep)
+        # [1, G] indices: NPUW moves constant-table lookups to the host and requires token-id shaped indices
+        latents = latents + bagel.latent_pos_embed[vae_position_ids[None]][0]
+        inverse = torch.argsort(torch.cat([und_index, gen_index]))
+        hidden = torch.cat([inputs_embeds[und_index], latents], 0)[inverse]
+        cos, sin = text.rotary_emb(hidden[None], position_ids[None])
+        present = []
+        for idx, layer in enumerate(text.layers):
+            past_key, past_value = past_key_values[idx]
+            hidden, key, value = self._decoder_layer(
+                idx, layer, hidden, und_index, gen_index, inverse, cos, sin, attention_mask, past_key, past_value
+            )
+            present.append((key, value))
+        logits = self.lm_head(text.norm(hidden[und_index]))
+        v_t = bagel.llm2vae(text.norm_moe_gen(hidden[gen_index]))
+        return {"logits": logits, "v_t": v_t, "present": present}
+
+    def _decoder_layer(
+        self, idx, layer, hidden, und_index, gen_index, inverse, cos, sin, attention_mask, past_key, past_value
+    ):
+        attn = layer.self_attn
+        head_dim = attn.head_dim
+
+        def project(x, q_proj, k_proj, v_proj, q_norm, k_norm):
+            heads = (-1, head_dim)
+            return (
+                q_norm(q_proj(x).unflatten(-1, heads)),
+                k_norm(k_proj(x).unflatten(-1, heads)),
+                v_proj(x).unflatten(-1, heads),
+            )
+
+        und, gen = hidden[und_index], hidden[gen_index]
+        und_qkv = project(layer.input_layernorm(und), attn.q_proj, attn.k_proj, attn.v_proj, attn.q_norm, attn.k_norm)
+        gen_qkv = project(
+            layer.input_layernorm_moe_gen(gen),
+            attn.q_proj_moe_gen,
+            attn.k_proj_moe_gen,
+            attn.v_proj_moe_gen,
+            attn.q_norm_moe_gen,
+            attn.k_norm_moe_gen,
+        )
+        query, key, value = (torch.cat([u, g], 0)[inverse].transpose(0, 1)[None] for u, g in zip(und_qkv, gen_qkv))
+        query, key = llama_apply_rotary_pos_emb(query, key, cos, sin)
+        key = torch.cat([past_key, key], 2)
+        value = torch.cat([past_value, value], 2)
+        groups = attn.num_key_value_groups
+        out = F.scaled_dot_product_attention(
+            query,
+            llama_repeat_kv(key, groups),
+            llama_repeat_kv(value, groups),
+            attn_mask=attention_mask,
+        )
+        out = out[0].transpose(0, 1).flatten(1)
+        und = und + attn.o_proj(out[und_index])
+        gen = gen + attn.o_proj_moe_gen(out[gen_index])
+        if self.und_rescale is not None and self.und_rescale[idx] != 1.0:
+            und = und * self.und_rescale[idx]
+        und = und + layer.mlp(layer.post_attention_layernorm(und))
+        gen = gen + layer.mlp_moe_gen(layer.post_attention_layernorm_moe_gen(gen))
+        return torch.cat([und, gen], 0)[inverse], key, value
+
+
+class BagelTextEmbeddingsForExport(nn.Module):
+    def __init__(self, model: "PreTrainedModel"):
+        super().__init__()
+        self.embed_tokens = model.get_input_embeddings()
+        self.config = model.config
+
+    def forward(self, input_ids):
+        return self.embed_tokens(input_ids)
+
+
+class BagelVisionEmbeddingsForExport(nn.Module):
+    """SigLIP + connector + ViT position embedding for the patches of one image."""
+
+    def __init__(self, model: "PreTrainedModel"):
+        super().__init__()
+        self.bagel = model.model
+        self.config = model.config
+
+    def forward(self, pixel_values, position_ids):
+        return self.bagel.get_image_features(pixel_values, position_ids, return_dict=True).pooler_output
+
+
+class BagelVAEEncoderForExport(nn.Module):
+    """Normalized posterior mean of the latent autoencoder."""
+
+    def __init__(self, model: "PreTrainedModel"):
+        super().__init__()
+        self.vae = model.model.vae
+        self.config = model.config
+
+    def forward(self, pixel_values):
+        return self.vae.encode(pixel_values, sample=False)
+
+
+class BagelVAEDecoderForExport(nn.Module):
+    def __init__(self, model: "PreTrainedModel"):
+        super().__init__()
+        self.vae = model.model.vae
+        self.config = model.config
+
+    def forward(self, latents):
+        return self.vae.decode(latents)
+
+
+class _BagelFramesForExport(nn.Module):
+    """
+    One input and one output port per frame, as the N-frame models of the original OpenVINO BAGEL demo
+    (`convert_bagel_openvino.py --num-frames`); the frames of a call have the same size and run as one batch.
+    """
+
+    def __init__(self, model: "PreTrainedModel", num_frames: int, input_prefixes: List[str]):
+        super().__init__()
+        self.bagel = model.model
+        self.config = model.config
+        self.num_frames = num_frames
+        names = [f"{prefix}_{i}" for prefix in input_prefixes for i in range(num_frames)]
+
+        def forward(*args, **kwargs):
+            kwargs.update(zip(names, args))
+            return self._forward(*(kwargs[name] for name in names))
+
+        # the export orders the example inputs by the forward signature
+        forward.__signature__ = inspect.Signature(
+            [inspect.Parameter(name, inspect.Parameter.POSITIONAL_OR_KEYWORD) for name in names]
+        )
+        self.forward = forward
+
+
+class BagelVisionEmbeddingsFramesForExport(_BagelFramesForExport):
+    def __init__(self, model: "PreTrainedModel", num_frames: int):
+        super().__init__(model, num_frames, ["pixel_values", "position_ids"])
+
+    def _forward(self, *inputs):
+        vision, n = self.bagel.vision_model, self.num_frames
+        position_ids = torch.cat(inputs[n:])
+        hidden = vision.embeddings(torch.cat(inputs[:n]), position_ids).unflatten(0, (n, -1))
+        hidden = vision.post_layernorm(vision.encoder(hidden, None)).flatten(0, 1)
+        embeds = self.bagel.connector(hidden) + self.bagel.vit_pos_embed[position_ids].to(hidden.dtype)
+        return {f"image_embeds_{i}": e for i, e in enumerate(embeds.chunk(n))}
+
+
+class BagelVAEEncoderFramesForExport(_BagelFramesForExport):
+    def __init__(self, model: "PreTrainedModel", num_frames: int):
+        super().__init__(model, num_frames, ["image"])
+
+    def _forward(self, *images):
+        latents = self.bagel.vae.encode(torch.cat(images), sample=False)
+        return {f"latent_{i}": latent for i, latent in enumerate(latents.chunk(self.num_frames))}
+
+
+class BagelVAEDecoderFramesForExport(_BagelFramesForExport):
+    def __init__(self, model: "PreTrainedModel", num_frames: int):
+        super().__init__(model, num_frames, ["latent"])
+
+    def _forward(self, *latents):
+        images = self.bagel.vae.decode(torch.cat(latents))
+        return {f"image_{i}": image for i, image in enumerate(images.chunk(self.num_frames))}
+
+
+def bagel_reference_weights(model: "PreTrainedModel"):
+    """
+    Weights as the original OpenVINO BAGEL demo export, which loads the checkpoint in FP32 and saves FP16: the parts
+    outside the language model decoder layers and the decoder biases go to FP32 (saved as FP16 instead of BF16), and the
+    VAE is reloaded from the checkpoint, where it is stored in FP32, since loading the model in BF16 rounds it.
+    """
+    bagel = model.model
+    for module in (
+        bagel.language_model.embed_tokens,
+        bagel.language_model.norm,
+        bagel.language_model.norm_moe_gen,
+        bagel.vision_model,
+        bagel.connector,
+        bagel.time_embedder,
+        bagel.vae2llm,
+        bagel.llm2vae,
+        model.lm_head,
+    ):
+        module.float()
+    for name in ("vit_pos_embed", "latent_pos_embed"):
+        setattr(bagel, name, nn.Parameter(getattr(bagel, name).float(), requires_grad=False))
+    for module in bagel.language_model.layers.modules():
+        if isinstance(module, nn.Linear) and module.bias is not None:
+            module.bias = nn.Parameter(module.bias.float(), requires_grad=False)
+
+    path = model.name_or_path
+    if not os.path.isdir(path):
+        path = snapshot_download(path, allow_patterns=["*.safetensors"])
+    prefix, state = "model.vae.", {}
+    for file in sorted(f for f in os.listdir(path) if f.endswith(".safetensors")):
+        with safe_open(os.path.join(path, file), framework="pt") as f:
+            state.update({k[len(prefix) :]: f.get_tensor(k).float() for k in f.keys() if k.startswith(prefix)})
+    bagel.vae.float().load_state_dict(state)
+
+
+class BagelLanguageModelPatcher(ModelPatcher):
+    """
+    Passes the KV cache through as a list and carries the understanding residual stream at 1/16 from layer
+    `BAGEL_UND_SCALE_FROM_LAYER` on, so it fits f16 (see `BAGEL_UND_SCALE`). This is not a runtime workaround but an
+    exact reparametrization: the scale is folded into the und `o_proj` and `down_proj` weights, RMSNorm(x / s) with
+    eps / s^2 equals RMSNorm(x), and power-of-two scaling is lossless. The f32 export matches the PyTorch model to
+    ~2e-6 on logits and velocity. With the `reference_weights` export option the stream is not rescaled, as the
+    original OpenVINO BAGEL demo export.
+    """
+
+    def __init__(
+        self, config: "OpenVINOConfig", model: "PreTrainedModel", model_kwargs: Optional[Dict[str, Any]] = None
+    ):
+        super().__init__(config, model, model_kwargs)
+        self._rescale = not getattr(config, "reference_weights", False)
+
+        # the base `patched_forward` converts `past_key_values` to a Cache, while this module takes the tensor list
+        @functools.wraps(self.orig_forward)
+        def patched_forward(*args, **kwargs):
+            return self.orig_forward(*args, **kwargs)
+
+        self.patched_forward = patched_forward
+
+    def _scales(self):
+        num_layers = len(self._model.bagel.language_model.layers)
+        if not self._rescale:
+            return [(1.0, 1.0)] * num_layers
+        return [(_bagel_und_scale(i - 1) if i else 1.0, _bagel_und_scale(i)) for i in range(num_layers)]
+
+    def __enter__(self):
+        super().__enter__()
+        text = self._model.bagel.language_model
+        scales = self._scales()
+        self._orig_eps = [
+            (l.input_layernorm.variance_epsilon, l.post_attention_layernorm.variance_epsilon) for l in text.layers
+        ]
+        self._orig_eps.append(text.norm.variance_epsilon)
+        # new tensors instead of in-place updates: the converted model shares memory with these weights and is
+        # saved after __exit__, so restoring in place would undo the scaling in the exported graph
+        self._orig_weights = []
+        self._scaled_weights = []
+        for layer, (scale_in, scale_out) in zip(text.layers, scales):
+            for linear, scale in ((layer.self_attn.o_proj, scale_in), (layer.mlp.down_proj, scale_out)):
+                self._orig_weights.append((linear, linear.weight))
+                if scale != 1.0:
+                    scaled = nn.Parameter(linear.weight.detach() / scale, requires_grad=False)
+                    self._scaled_weights.append(scaled)
+                    linear.weight = scaled
+            layer.input_layernorm.variance_epsilon /= scale_in**2
+            layer.post_attention_layernorm.variance_epsilon /= scale_out**2
+        text.norm.variance_epsilon /= scales[-1][1] ** 2
+        self._model.und_rescale = [scale_in / scale_out for scale_in, scale_out in scales]
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        text = self._model.bagel.language_model
+        for linear, weight in self._orig_weights:
+            linear.weight = weight
+        for layer, (eps_in, eps_post) in zip(text.layers, self._orig_eps[:-1]):
+            layer.input_layernorm.variance_epsilon = eps_in
+            layer.post_attention_layernorm.variance_epsilon = eps_post
+        text.norm.variance_epsilon = self._orig_eps[-1]
+        self._model.und_rescale = None
+
+
+# `BagelVisionAttention.forward` with the SDPA default scale, as the original SigLIP NaViT attention:
+# https://github.com/ByteDance-Seed/Bagel/blob/a2fa77dd8caeefc41e6607ae0ec17408d3f4ee9f/modeling/bagel/siglip_navit.py
+def _bagel_vision_attention_forward(self, hidden_states, attention_mask=None, **kwargs):
+    hidden_shape = (*hidden_states.shape[:-1], -1, self.head_dim)
+    query, key, value = (
+        proj(hidden_states).view(hidden_shape).transpose(1, 2) for proj in (self.q_proj, self.k_proj, self.v_proj)
+    )
+    out = F.scaled_dot_product_attention(query, key, value, attn_mask=attention_mask)
+    return self.out_proj(out.transpose(1, 2).flatten(2)), None
+
+
+# `BagelVAEAttnBlock.forward` as one SDPA, as `AttnBlock` of the original autoencoder:
+# https://github.com/ByteDance-Seed/Bagel/blob/a2fa77dd8caeefc41e6607ae0ec17408d3f4ee9f/modeling/autoencoder.py
+def _bagel_vae_attention_forward(self, hidden_states):
+    batch_size, channels, height, width = hidden_states.shape
+    normed = self.norm(hidden_states)
+    query, key, value = (proj(normed).flatten(2).transpose(1, 2)[:, None] for proj in (self.q, self.k, self.v))
+    out = F.scaled_dot_product_attention(query, key, value)[:, 0].transpose(1, 2)
+    return hidden_states + self.proj_out(out.reshape(batch_size, channels, height, width))
+
+
+class BagelAttentionPatcher(ModelPatcher):
+    """
+    Runs the ViT and VAE attention as the original BAGEL code: `scaled_dot_product_attention` with its default scale.
+    The Transformers port scales by an explicit head_dim**-0.5 (and the VAE through a matmul and softmax), which the
+    export saves as an f16 constant, 6.6e-5 off for the ViT head size 72.
+    """
+
+    def __enter__(self):
+        super().__enter__()
+        forwards = {
+            "BagelVisionAttention": _bagel_vision_attention_forward,
+            "BagelVAEAttnBlock": _bagel_vae_attention_forward,
+        }
+        self._patched = []
+        for module in self._model.modules():
+            patched = forwards.get(type(module).__name__)
+            if patched is not None:
+                self._patched.append((module, module.forward))
+                module.forward = types.MethodType(patched, module)
+        if not self._patched:
+            raise ValueError(f"No {' or '.join(forwards)} module found to patch in {type(self._model).__name__}")
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for module, forward in self._patched:
+            module.forward = forward

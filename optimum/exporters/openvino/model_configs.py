@@ -16,6 +16,7 @@ import copy
 import enum
 import functools
 import logging
+import re
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Union
 
@@ -141,6 +142,16 @@ from optimum.exporters.openvino.model_patcher import (
     AfmoeModelPatcher,
     AquilaModelPatcher,
     ArcticModelPatcher,
+    BagelAttentionPatcher,
+    BagelLanguageModelForExport,
+    BagelLanguageModelPatcher,
+    BagelTextEmbeddingsForExport,
+    BagelVAEDecoderForExport,
+    BagelVAEDecoderFramesForExport,
+    BagelVAEEncoderForExport,
+    BagelVAEEncoderFramesForExport,
+    BagelVisionEmbeddingsForExport,
+    BagelVisionEmbeddingsFramesForExport,
     BaichuanModelPatcher,
     BigBirdPegasusModelPatcher,
     BloomModelPatcher,
@@ -272,6 +283,7 @@ from optimum.exporters.openvino.model_patcher import (
     ZImageTextEncoderModelPatcher,
     ZImageTransformerModelPatcher,
     _get_model_attribute,
+    bagel_reference_weights,
 )
 from optimum.exporters.openvino.utils import (
     GRANITEMOEHYBRID_ATTENTION_LAYER_TYPE,
@@ -8982,3 +8994,252 @@ class Qwen3TTSCodecDecoderOpenVINOConfig(Qwen3TTSComponentOpenVINOConfig):
     @property
     def outputs(self) -> Dict[str, Dict[int, str]]:
         return {"waveform": {0: "batch_size", 2: "audio_length"}}
+
+
+class BagelConfigBehavior(str, enum.Enum):
+    LANGUAGE = "language"
+    TEXT_EMBEDDINGS = "text_embeddings"
+    VISION_EMBEDDINGS = "vision_embeddings"
+    VAE_ENCODER = "vae_encoder"
+    VAE_DECODER = "vae_decoder"
+
+
+@register_in_tasks_manager("bagel", *["image-text-to-text"], library_name="transformers")
+class BagelOpenVINOConfig(OpenVINOConfig):
+    """
+    BAGEL in the layout of OpenVINO GenAI's `BagelPipeline`. One stateless language model with the KV cache as ports
+    serves text generation and image denoising. Text/vision embeddings and the VAE encoder/decoder are separate models.
+    All models run on a single sample, so they have no batch dimension (the VAE encoder input keeps a batch of 1).
+    The VAE decoder has a dynamic batch: the frames generated one after another, e.g. by a world model, decode in one
+    call.
+
+    Export options, passed with `--model-kwargs` (see `set_export_options`):
+    - `num_frames`: also export `vision_embeddings_{N}img`, `vae_encoder_{N}img` and `vae_decoder_{N}img`, which take
+      N same-size frames in one call with one port per frame, as the N-frame models of the original OpenVINO BAGEL
+      demo (`convert_bagel_openvino.py --num-frames`).
+    - `reference_weights`: the weights of that demo's export, which loads the checkpoint in FP32 and saves FP16: the
+      parts outside the decoder layers and the decoder biases are saved in FP16 instead of the BF16 of the checkpoint,
+      the VAE keeps its FP32 checkpoint weights, and the understanding stream is not rescaled (see
+      `BagelLanguageModelPatcher`). With `--weight-format int4 --sym --group-size 128 --ratio 1.0 --backup-precision
+      int8_sym --group-size-fallback adjust`, the export has the weights of that demo's INT4 export.
+    """
+
+    SUPPORTED_BEHAVIORS = [behavior.value for behavior in BagelConfigBehavior]
+    FRAMES_BEHAVIORS = [
+        BagelConfigBehavior.VISION_EMBEDDINGS,
+        BagelConfigBehavior.VAE_ENCODER,
+        BagelConfigBehavior.VAE_DECODER,
+    ]
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig
+    MIN_TRANSFORMERS_VERSION = "5.23.0.dev0"
+    # no transformers release has BAGEL yet, only its port at 5.23.0.dev0 (versions compare without the dev suffix)
+    MAX_TRANSFORMERS_VERSION = "5.23.0"
+    # the parts left uncompressed by `--weight-format int4/int8` (all but the language model) are kept in FP16
+    SAVE_FP16_BEFORE_WEIGHT_COMPRESSION = True
+    # dummy sizes: a cached prefix followed by one image block (start, latent tokens, end), so both experts, the
+    # bidirectional block and the past/present concatenation are traced; all axes are dynamic in the exported model
+    DUMMY_PAST_LENGTH = 3
+    DUMMY_NUM_LATENT_TOKENS = 4
+    DUMMY_NUM_PATCHES = 16
+    DUMMY_LATENT_SIZE = 4
+    # more than one so that no batch-dependent shape is folded into the VAE decoder
+    DUMMY_DECODE_BATCH = 2
+
+    def __init__(
+        self,
+        config: "PretrainedConfig",
+        task: str = "image-text-to-text",
+        int_dtype: str = "int64",
+        float_dtype: str = "fp32",
+        behavior: BagelConfigBehavior = BagelConfigBehavior.LANGUAGE,
+        preprocessors: Optional[List[Any]] = None,
+        num_frames: int = 0,
+        reference_weights: bool = False,
+        **kwargs,
+    ):
+        super().__init__(
+            config=config, task=task, int_dtype=int_dtype, float_dtype=float_dtype, preprocessors=preprocessors
+        )
+        self._orig_config = config
+        self.reference_weights = reference_weights
+        # an N-frame model is `<behavior>_<N>img`
+        frames = re.fullmatch(r"(.+)_(\d+)img", str(getattr(behavior, "value", behavior)))
+        self._behavior = BagelConfigBehavior(frames[1] if frames else behavior)
+        self._frames = int(frames[2]) if frames else 0
+        self.num_frames = num_frames
+        if num_frames:
+            self.SUPPORTED_BEHAVIORS = BagelOpenVINOConfig.SUPPORTED_BEHAVIORS + [
+                f"{b.value}_{num_frames}img" for b in self.FRAMES_BEHAVIORS
+            ]
+
+    def set_export_options(self, model, model_kwargs: Optional[Dict[str, Any]]):
+        """Applies the export options of `--model-kwargs`: `num_frames` (int) and `reference_weights` (bool)."""
+        options = dict(model_kwargs or {})
+        num_frames = int(options.pop("num_frames", 0) or 0)
+        reference_weights = bool(options.pop("reference_weights", False))
+        if options:
+            raise ValueError(f"Unknown BAGEL export options {sorted(options)}, expected num_frames, reference_weights")
+        if num_frames < 0 or num_frames == 1:
+            raise ValueError(f"num_frames must be 0 (no N-frame models) or at least 2, got {num_frames}")
+        if reference_weights:
+            bagel_reference_weights(model)
+        return self.__class__(
+            self._orig_config,
+            task=self.task,
+            int_dtype=self.int_dtype,
+            float_dtype=self.float_dtype,
+            behavior=self._behavior,
+            preprocessors=self._preprocessors,
+            num_frames=num_frames,
+            reference_weights=reference_weights,
+        )
+
+    def with_behavior(self, behavior: Union[str, BagelConfigBehavior]):
+        return self.__class__(
+            self._orig_config,
+            task=self.task,
+            int_dtype=self.int_dtype,
+            float_dtype=self.float_dtype,
+            behavior=behavior,
+            preprocessors=self._preprocessors,
+            num_frames=self.num_frames,
+            reference_weights=self.reference_weights,
+        )
+
+    def get_model_for_behavior(self, model, behavior: Union[str, BagelConfigBehavior]):
+        frames = re.fullmatch(r"(.+)_(\d+)img", str(getattr(behavior, "value", behavior)))
+        if frames:
+            module = {
+                BagelConfigBehavior.VISION_EMBEDDINGS: BagelVisionEmbeddingsFramesForExport,
+                BagelConfigBehavior.VAE_ENCODER: BagelVAEEncoderFramesForExport,
+                BagelConfigBehavior.VAE_DECODER: BagelVAEDecoderFramesForExport,
+            }[BagelConfigBehavior(frames[1])]
+            return module(model, int(frames[2])).eval()
+        module = {
+            BagelConfigBehavior.LANGUAGE: BagelLanguageModelForExport,
+            BagelConfigBehavior.TEXT_EMBEDDINGS: BagelTextEmbeddingsForExport,
+            BagelConfigBehavior.VISION_EMBEDDINGS: BagelVisionEmbeddingsForExport,
+            BagelConfigBehavior.VAE_ENCODER: BagelVAEEncoderForExport,
+            BagelConfigBehavior.VAE_DECODER: BagelVAEDecoderForExport,
+        }[BagelConfigBehavior(behavior)]
+        return module(model).eval()
+
+    @property
+    def _num_layers(self) -> int:
+        return self._orig_config.text_config.num_hidden_layers
+
+    @property
+    def inputs(self) -> Dict[str, Dict[int, str]]:
+        if self._frames:
+            frames = range(self._frames)
+            if self._behavior == BagelConfigBehavior.VISION_EMBEDDINGS:
+                return {
+                    **{f"pixel_values_{i}": {0: "num_patches"} for i in frames},
+                    **{f"position_ids_{i}": {0: "num_patches"} for i in frames},
+                }
+            if self._behavior == BagelConfigBehavior.VAE_ENCODER:
+                return {f"image_{i}": {2: "height", 3: "width"} for i in frames}
+            return {f"latent_{i}": {2: "latent_height", 3: "latent_width"} for i in frames}
+        if self._behavior == BagelConfigBehavior.LANGUAGE:
+            inputs = {
+                "inputs_embeds": {0: "sequence_length"},
+                "und_index": {0: "und_length"},
+                "gen_index": {0: "gen_length"},
+                "x_t": {0: "gen_length"},
+                "timestep": {},
+                "vae_position_ids": {0: "gen_length"},
+                "attention_mask": {2: "sequence_length", 3: "total_length"},
+                "position_ids": {0: "sequence_length"},
+            }
+            for i in range(self._num_layers):
+                inputs[f"past_key_values.{i}.key"] = {2: "past_length"}
+                inputs[f"past_key_values.{i}.value"] = {2: "past_length"}
+            return inputs
+        if self._behavior == BagelConfigBehavior.TEXT_EMBEDDINGS:
+            return {"input_ids": {0: "sequence_length"}}
+        if self._behavior == BagelConfigBehavior.VISION_EMBEDDINGS:
+            return {"pixel_values": {0: "num_patches"}, "position_ids": {0: "num_patches"}}
+        if self._behavior == BagelConfigBehavior.VAE_ENCODER:
+            return {"pixel_values": {2: "height", 3: "width"}}
+        return {"latents": {0: "batch_size", 2: "latent_height", 3: "latent_width"}}
+
+    @property
+    def outputs(self) -> Dict[str, Dict[int, str]]:
+        if self._frames:
+            frames = range(self._frames)
+            if self._behavior == BagelConfigBehavior.VISION_EMBEDDINGS:
+                return {f"image_embeds_{i}": {0: "num_patches"} for i in frames}
+            if self._behavior == BagelConfigBehavior.VAE_ENCODER:
+                return {f"latent_{i}": {2: "latent_height", 3: "latent_width"} for i in frames}
+            return {f"image_{i}": {2: "height", 3: "width"} for i in frames}
+        if self._behavior == BagelConfigBehavior.LANGUAGE:
+            outputs = {"logits": {0: "und_length"}, "v_t": {0: "gen_length"}}
+            for i in range(self._num_layers):
+                outputs[f"present.{i}.key"] = {2: "total_length"}
+                outputs[f"present.{i}.value"] = {2: "total_length"}
+            return outputs
+        if self._behavior == BagelConfigBehavior.TEXT_EMBEDDINGS:
+            return {"inputs_embeds": {0: "sequence_length"}}
+        if self._behavior == BagelConfigBehavior.VISION_EMBEDDINGS:
+            return {"image_embeds": {0: "num_patches"}}
+        if self._behavior == BagelConfigBehavior.VAE_ENCODER:
+            return {"latent": {2: "latent_height", 3: "latent_width"}}
+        return {"image": {0: "batch_size", 2: "height", 3: "width"}}
+
+    def generate_dummy_inputs(self, framework: str = "pt", **kwargs):
+        config = self._orig_config
+        text = config.text_config
+        if self._frames:
+            single = self.with_behavior(self._behavior).generate_dummy_inputs(framework, **kwargs)
+            if self._behavior == BagelConfigBehavior.VAE_DECODER:
+                single = {"latents": single["latents"][:1]}
+            names = {"pixel_values": "image", "latents": "latent"}
+            if self._behavior == BagelConfigBehavior.VISION_EMBEDDINGS:
+                names = {}
+            return {
+                f"{names.get(name, name)}_{i}": value.clone()
+                for name, value in single.items()
+                for i in range(self._frames)
+            }
+        if self._behavior == BagelConfigBehavior.LANGUAGE:
+            num_latents, past_len = self.DUMMY_NUM_LATENT_TOKENS, self.DUMMY_PAST_LENGTH
+            seq_len = num_latents + 2
+            head_dim = getattr(text, "head_dim", None) or text.hidden_size // text.num_attention_heads
+            patch_dim = config.latent_patch_size**2 * config.vae_config.latent_channels
+            past = torch.zeros(1, text.num_key_value_heads, past_len, head_dim)
+            return {
+                "inputs_embeds": torch.randn(seq_len, text.hidden_size),
+                "und_index": torch.tensor([0, seq_len - 1]),
+                "gen_index": torch.arange(1, seq_len - 1),
+                "x_t": torch.randn(num_latents, patch_dim),
+                "timestep": torch.tensor([0.5]),
+                "vae_position_ids": torch.arange(num_latents),
+                "attention_mask": torch.zeros(1, 1, seq_len, past_len + seq_len),
+                "position_ids": torch.full((seq_len,), past_len),
+                "past_key_values": [(past.clone(), past.clone()) for _ in range(self._num_layers)],
+            }
+        if self._behavior == BagelConfigBehavior.TEXT_EMBEDDINGS:
+            return {"input_ids": torch.arange(self.DUMMY_NUM_LATENT_TOKENS + 2)}
+        if self._behavior == BagelConfigBehavior.VISION_EMBEDDINGS:
+            vision = config.vision_config
+            return {
+                "pixel_values": torch.randn(self.DUMMY_NUM_PATCHES, vision.num_channels * vision.patch_size**2),
+                "position_ids": torch.arange(self.DUMMY_NUM_PATCHES),
+            }
+        latent_size = self.DUMMY_LATENT_SIZE
+        if self._behavior == BagelConfigBehavior.VAE_ENCODER:
+            image_size = latent_size * 2 ** (len(config.vae_config.channel_multiplier) - 1)
+            return {"pixel_values": torch.rand(1, config.vae_config.in_channels, image_size, image_size) * 2 - 1}
+        return {
+            "latents": torch.randn(
+                self.DUMMY_DECODE_BATCH, config.vae_config.latent_channels, latent_size, latent_size
+            )
+        }
+
+    def patch_model_for_export(self, model, model_kwargs: Optional[Dict[str, Any]] = None):
+        # the BAGEL `--model-kwargs` are export options (`set_export_options`), not forward arguments
+        if self._behavior == BagelConfigBehavior.LANGUAGE:
+            return BagelLanguageModelPatcher(self, model)
+        if self._behavior == BagelConfigBehavior.TEXT_EMBEDDINGS:
+            return ModelPatcher(self, model)
+        return BagelAttentionPatcher(self, model)

@@ -174,6 +174,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("text-generation-with-past", "lfm3"),
         ("image-text-to-text", "lfm3_vl"),
         ("image-text-to-text", "lfm3_omni"),
+        ("image-text-to-text", "bagel"),
         ("text-generation-with-past", "mamba"),
         ("text-generation-with-past", "falcon_mamba"),
         ("text-to-image", "flux.2-klein"),
@@ -236,6 +237,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "lfm3": 2,
         "lfm3_vl": 2,
         "lfm3_omni": 2,
+        "bagel": 2,
         "llava": 2,
         "mistral3": 2,
         "ministral3": 2,
@@ -941,6 +943,19 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "vision_embeddings_model": {"int8": 22},
             },
         ),
+        # the recipe of the ByteDance-Seed/BAGEL-7B-MoT default int4 config
+        (
+            "image-text-to-text",
+            "bagel",
+            "int4 --sym --group-size 128 --ratio 1.0 --backup-precision int8_sym --group-size-fallback adjust",
+            {
+                "lm_model": {"int8": 11, "int4": 51},
+                "text_embeddings_model": {},
+                "vision_embeddings_model": {},
+                "vae_encoder_model": {},
+                "vae_decoder_model": {},
+            },
+        ),
     ]
 
     # Pre-quantized compressed-tensors (AWQ pack-quantized) model. It is already quantized, so
@@ -1409,6 +1424,65 @@ class OVCLIExportTestCase(unittest.TestCase):
             self.assertTrue(
                 "--lora-correction" not in option or b"with correction of low-rank adapters" in result.stdout
             )
+
+    @unittest.skipIf(
+        "bagel" not in get_supported_model_for_library("transformers"),
+        reason="bagel is not supported by the installed transformers version",
+    )
+    def test_exporters_cli_bagel_reference_weights_and_frames(self):
+        import openvino as ov
+
+        model_kwargs = json.dumps({"num_frames": 3, "reference_weights": True})
+        with TemporaryDirectory() as tmpdir:
+            subprocess.run(
+                f"optimum-cli export openvino --model {MODEL_NAMES['bagel']} --task image-text-to-text "
+                "--weight-format int4 --sym --group-size 128 --ratio 1.0 --backup-precision int8_sym "
+                f"--group-size-fallback adjust --model-kwargs '{model_kwargs}' {tmpdir}",
+                shell=True,
+                check=True,
+            )
+            model = OVModelForVisualCausalLM.from_pretrained(tmpdir)
+            # the INT4 recipe of the original OpenVINO BAGEL demo: INT8 LM head and latent position embedding
+            check_compression_state_per_model(
+                self,
+                model.ov_models,
+                {
+                    "lm_model": {"int8": 11, "int4": 51},
+                    "text_embeddings_model": {},
+                    "vision_embeddings_model": {},
+                    "vae_encoder_model": {},
+                    "vae_decoder_model": {},
+                },
+            )
+            core = ov.Core()
+            ports = {
+                "vision_embeddings_3img": (["pixel_values", "position_ids"], ["image_embeds"]),
+                "vae_encoder_3img": (["image"], ["latent"]),
+                "vae_decoder_3img": (["latent"], ["image"]),
+            }
+            for name, (inputs, outputs) in ports.items():
+                frames_model = core.read_model(Path(tmpdir) / f"openvino_{name}_model.xml")
+                self.assertEqual(
+                    [port.get_any_name() for port in frames_model.inputs],
+                    [f"{p}_{i}" for p in inputs for i in range(3)],
+                )
+                self.assertEqual(
+                    [port.get_any_name() for port in frames_model.outputs],
+                    [f"{p}_{i}" for p in outputs for i in range(3)],
+                )
+            # attention scaled inside SDPA, as the original model, not by an f16-rounded scale constant
+            for name in ("vision_embeddings", "vae_encoder", "vae_decoder", "vision_embeddings_3img", "language"):
+                ops = core.read_model(Path(tmpdir) / f"openvino_{name}_model.xml").get_ops()
+                sdpa = [op for op in ops if op.get_type_name() == "ScaledDotProductAttention"]
+                self.assertTrue(sdpa, name)
+                self.assertTrue(all(op.get_input_size() < 5 for op in sdpa), name)
+                # floating point weights in FP16, as that demo
+                bf16 = [
+                    op.get_friendly_name()
+                    for op in ops
+                    if op.get_type_name() == "Constant" and op.get_output_element_type(0) == ov.Type.bf16
+                ]
+                self.assertEqual(bf16, [], name)
 
     def test_exporters_cli_4bit_with_statistics_path(self):
         with TemporaryDirectory() as tmpdir:

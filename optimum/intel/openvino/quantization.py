@@ -1662,7 +1662,8 @@ class OVQuantizer(OptimumQuantizer):
                     # instead of the int8 default used for small vision/projection parts.
                     if "mtp_model" in self.model._ov_model_names:
                         quantization_configs["mtp_model"] = quantization_config
-                    default_config = OVWeightQuantizationConfig(bits=8, sym=True)
+                    if not getattr(self.model, "_COMPRESS_LANGUAGE_MODEL_ONLY", False):
+                        default_config = OVWeightQuantizationConfig(bits=8, sym=True)
                 else:
                     default_config = quantization_config
             elif not isinstance(quantization_config, OVPipelineQuantizationConfig):

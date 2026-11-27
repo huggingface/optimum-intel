@@ -171,7 +171,12 @@ def _save_model(
     config: "OpenVINOConfig" = None,
     source_model=None,
 ):
-    compress_to_fp16 = ov_config is not None and ov_config.dtype == "fp16"
+    compress_to_fp16 = ov_config is not None and (
+        ov_config.dtype == "fp16"
+        or (
+            ov_config.quantization_config is not None and getattr(config, "SAVE_FP16_BEFORE_WEIGHT_COMPRESSION", False)
+        )
+    )
     model = _add_version_info_to_model(model, library_name)
 
     runtime_options = config.runtime_options if hasattr(config, "runtime_options") else {}
@@ -1235,6 +1240,8 @@ def _get_multi_modal_submodels_and_export_configs(
     main_config = main_config_cls(
         model.config, int_dtype=int_dtype, float_dtype=float_dtype, preprocessors=preprocessors
     )
+    if hasattr(main_config, "set_export_options"):
+        main_config = main_config.set_export_options(model, model_kwargs)
     for behavior in main_config.SUPPORTED_BEHAVIORS:
         model_id = f"{behavior}_model"
         model_part_config = main_config.with_behavior(behavior)
