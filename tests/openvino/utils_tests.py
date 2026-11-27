@@ -269,6 +269,7 @@ HUB_MODEL_NAMES = {
     "mbart": "optimum-intel-internal-testing/tiny-random-mbart",
     "minicpm": "optimum-intel-internal-testing/tiny-random-minicpm",
     "minicpm3": "optimum-intel-internal-testing/tiny-random-minicpm3",
+    "minicpm5_moe": "optimum-intel-internal-testing/tiny-random-minicpm5-moe",
     "minicpmv": "optimum-intel-internal-testing/tiny-random-minicpmv-2_6",
     "minicpmv4_7": "optimum-intel-internal-testing/tiny-random-minicpmv47",
     "minicpmv4_7_dspark": "optimum-intel-internal-testing/tiny-random-minicpmv47-dspark",
@@ -763,6 +764,7 @@ _ARCHITECTURES_TO_EXPECTED_INT8 = {
     "exaone4": {"model": 16},
     "lfm2": {"model": 52 if is_transformers_version("<", "5") else 54},
     "lfm2_moe": {"model": 46},
+    "minicpm5_moe": {"model": 62},
     "lfm3": {"model": 98},
     "lfm3_vl": {
         "lm_model": 72,
@@ -867,6 +869,8 @@ REMOTE_CODE_MODELS = (
     "lfm3",
     "lfm3_vl",
     "lfm3_omni",
+    # MiniCPM5-MoE has no native transformers implementation yet, its checkpoint code needs transformers<=4.57.6
+    "minicpm5_moe",
 )
 
 if is_transformers_version("<", "5"):
@@ -885,6 +889,7 @@ ARCH_TO_MODEL_CLASS = {
     "lfm3": "OVModelForCausalLM",
     "lfm3_vl": "OVModelForVisualCausalLM",
     "lfm3_omni": "OVModelForVisualCausalLM",
+    "minicpm5_moe": "OVModelForCausalLM",
     "qwen3_moe": "OVModelForCausalLM",
     "llama4": "OVModelForCausalLM",
     "llava": "OVModelForVisualCausalLM",

@@ -135,3 +135,10 @@ jobs:
         run: |
           uv pip install transformers==5.20.0
           RUN_SLOW=true pytest tests/openvino/test_{cb_compatible,decoder,export,exporters_cli,quantization,seq2seq,transformations}.py -k "lfm3_omni" --durations=0
+
+      - if: ${{ matrix.test-pattern == '*export*' }}
+        name: Test MiniCPM5-MoE
+        run: |
+          # the checkpoint code of MiniCPM5-MoE runs on transformers 4.57.6 only
+          uv pip install transformers==4.57.6
+          RUN_SLOW=true pytest tests/openvino/test_{cb_compatible,decoder,export,exporters_cli,quantization,transformations}.py -k "minicpm5_moe" --durations=0

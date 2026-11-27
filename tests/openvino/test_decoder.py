@@ -102,6 +102,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "chatglm",
         "minicpm",
         "minicpm3",
+        "minicpm5_moe",
         "arctic",
         "deepseek",
         ## not supporter after v5
@@ -230,6 +231,7 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         "glm": 28,
         "mistral-nemo": 8,
         "minicpm3": 6,
+        "minicpm5_moe": 3,
         "phimoe": 2,
         "deepseek": 2,
         "opt_gptq": 12,
@@ -266,6 +268,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
         model_id = MODEL_NAMES[model_arch]
         trust_remote_code = model_arch in REMOTE_CODE_MODELS
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=trust_remote_code)
+        if model_arch == "minicpm5_moe":
+            # the checkpoint tokenizer returns `token_type_ids`, which the checkpoint model does not accept
+            tokenizer.model_input_names = ["input_ids", "attention_mask"]
         if tokenizer.pad_token is None:
             if tokenizer.eos_token is not None:
                 tokenizer.pad_token = tokenizer.eos_token
@@ -716,6 +721,9 @@ class OVModelForCausalLMIntegrationTest(unittest.TestCase):
             self.skipTest("Incompatible modeling code")
 
         tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=model_arch in REMOTE_CODE_MODELS)
+        if model_arch == "minicpm5_moe":
+            # the checkpoint tokenizer returns `token_type_ids`, which the checkpoint model does not accept
+            tokenizer.model_input_names = ["input_ids", "attention_mask"]
         if model_arch == "persimmon":
             tokenizer.pad_token_id = tokenizer.bos_token_id
             tokenizer.eos_token_id = tokenizer.bos_token_id
