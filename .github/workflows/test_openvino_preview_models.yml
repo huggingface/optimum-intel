@@ -72,7 +72,7 @@ jobs:
 
       - name: MiniCPM-V-4.7 Validation
         run: |
-          uv pip install "transformers>=5.18"
+          uv pip install "transformers>=5.18,<5.24"
           pytest tests/openvino/${{ matrix.test-pattern }} -k "minicpmv4_7" --durations=0
 
       # test_quantization, test_cb_compatible and test_dflash are not matched by the matrix test-pattern glob, so run
@@ -80,7 +80,7 @@ jobs:
       - name: MiniCPM-V-4.7 Quantization, Continuous Batching and DFlash Validation
         if: ${{ matrix.test-pattern == '*export*' }}
         run: |
-          uv pip install "transformers>=5.18"
+          uv pip install "transformers>=5.18,<5.24"
           pytest tests/openvino/test_quantization.py tests/openvino/test_cb_compatible.py tests/openvino/test_dflash.py -k "minicpmv4_7" --durations=0
 
       - name: MiniCPM-OCR Validation
@@ -104,5 +104,5 @@ jobs:
       - name: DSpark Export and GenAI Speculative Decoding Validation
         if: ${{ matrix.test-pattern == '*export*' }}
         run: |
-          uv pip install "transformers>=5.18"
+          uv pip install "transformers>=5.18,<5.24"
           pytest tests/openvino/test_exporters_cli.py tests/openvino/test_dflash.py tests/openvino/test_genai.py -k dspark --durations=0
