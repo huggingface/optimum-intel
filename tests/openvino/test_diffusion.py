@@ -1570,23 +1570,58 @@ class OVPipelineForImage2VideoTest(unittest.TestCase):
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers
-    def test_ltx2_timestep_per_token(self, model_arch: str):
-        # Image-to-video keeps its conditioning frames at a lower noise level than the rest, so the
-        # timestep must stay per token ([B, S]), unlike text-to-video's [B, 1].
+    def test_ltx2_timestep_per_frame(self, model_arch: str):
+        # Image-to-video keeps its conditioning frame at a lower noise level than the rest, so the
+        # timestep varies across the video, unlike text-to-video's [B, 1]. It is uniform within each
+        # latent frame, and the grouped-timestep export takes one value per frame ([B, F]).
         if not model_arch.startswith("ltx2"):
             self.skipTest(f"{model_arch} takes a rank-1 timestep")
 
         pipeline = self.OVMODEL_CLASS.from_pretrained(
             MODEL_NAMES[model_arch], ov_config=F32_CONFIG, device=OPENVINO_DEVICE
         )
+        self.assertTrue(pipeline.transformer.model.has_rt_info(["ltx2_grouped_timestep"]))
         timestep_shapes = _record_ltx2_timestep_shapes(pipeline)
         inputs = self.generate_inputs(height=64, width=64, batch_size=1, num_frames=9, model_arch=model_arch)
         pipeline(**inputs)
 
         self.assertTrue(timestep_shapes)
+        latent_num_frames = (9 - 1) // pipeline.vae_temporal_compression_ratio + 1
         for shape in timestep_shapes:
-            self.assertEqual(shape[0], 1)
-            self.assertGreater(shape[1], 1)
+            self.assertEqual(shape, (1, latent_num_frames))
+
+    @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
+    @require_diffusers
+    def test_ltx2_grouped_timestep_matches_per_token(self, model_arch: str):
+        # A per-frame timestep is broadcast over the frame's tokens in the graph, so expanding it per
+        # token ([B, S], what the export took before grouping) gives the same outputs.
+        if not model_arch.startswith("ltx2"):
+            self.skipTest(f"{model_arch} takes a rank-1 timestep")
+
+        pipeline = self.OVMODEL_CLASS.from_pretrained(
+            MODEL_NAMES[model_arch], ov_config=F32_CONFIG, device=OPENVINO_DEVICE
+        )
+        pipeline.transformer.compile()
+        request = pipeline.transformer.request
+        recorded = []
+
+        def recording_request(inputs, *args, **kwargs):
+            if not recorded:
+                recorded.append({name: torch.as_tensor(value).clone() for name, value in inputs.items()})
+            return request(inputs, *args, **kwargs)
+
+        pipeline.transformer.request = recording_request
+        inputs = self.generate_inputs(height=64, width=64, batch_size=1, num_frames=9, model_arch=model_arch)
+        pipeline(**inputs)
+
+        grouped = recorded[0]
+        per_token = dict(grouped)
+        tokens_per_frame = grouped["hidden_states"].shape[1] // grouped["timestep"].shape[1]
+        per_token["timestep"] = grouped["timestep"].repeat_interleave(tokens_per_frame, dim=1)
+        grouped_outputs = [torch.from_numpy(value.copy()) for value in request(grouped).values()]
+        per_token_outputs = [torch.from_numpy(value.copy()) for value in request(per_token).values()]
+        for grouped_output, per_token_output in zip(grouped_outputs, per_token_outputs):
+            torch.testing.assert_close(grouped_output, per_token_output, atol=1e-6, rtol=0)
 
     @parameterized.expand(SUPPORTED_ARCHITECTURES, skip_on_empty=True)
     @require_diffusers

@@ -206,6 +206,10 @@ def _save_model(
         }
     ):
         add_hidden_states_rt_info(source_model, model, config)
+    if source_model is not None and type(source_model).__name__ == "LTX2VideoTransformer3DModel":
+        # The video `timestep` takes one value per group of consecutive tokens, e.g. per latent frame (see
+        # `LTX2TransformerPatcher`); runtimes can pass [B, G] instead of expanding it per token
+        model.set_rt_info("True", ["ltx2_grouped_timestep"])
 
     save_model(model, path, compress_to_fp16)
     del model
