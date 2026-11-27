@@ -663,6 +663,7 @@ MULTI_MODAL_TEXT_GENERATION_MODELS = [
     "muse_glimmer",
     "lfm3_vl",
     "lfm3_omni",
+    "voxtral_realtime",
 ]
 
 
