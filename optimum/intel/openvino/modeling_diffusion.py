@@ -67,7 +67,14 @@ from optimum.utils import (
 from ...exporters.openvino import main_export
 from ...exporters.openvino.utils import LTX2_ROPE_INPUTS, build_ltx2_rope_modules, compute_ltx2_rope_inputs
 from ..utils.import_utils import is_diffusers_version
-from .configuration import OVConfig, OVQuantizationConfigBase, OVQuantizationMethod, OVWeightQuantizationConfig
+from .configuration import (
+    OVConfig,
+    OVPipelineQuantizationConfig,
+    OVQuantizationConfigBase,
+    OVQuantizationMethod,
+    OVWeightQuantizationConfig,
+    _quantization_config_from_dict,
+)
 from .loaders import OVTextualInversionLoaderMixin
 from .modeling_base import OVBaseModel, OVModelHostMixin
 from .utils import (
@@ -2811,6 +2818,40 @@ class _OVLTX2Base(OVDiffusionPipeline, OVTextualInversionLoaderMixin):
             ov_config=self.ov_config,
             compile=compile,
         )
+
+    def _apply_quantization(
+        self,
+        quantization_config: Union[Dict, OVQuantizationConfigBase],
+        compile_only: bool,
+        compile_model: bool,
+        model_name_or_path: str,
+        trust_remote_code: Optional[bool] = False,
+        **kwargs,
+    ):
+        """
+        Applies quantization to the pipeline components and, if the pipeline config has an entry for it, to the prompt
+        enhancer.
+
+        The prompt enhancer is not one of the components: it holds several OpenVINO models of its own (see
+        `_load_prompt_enhancer`), so its entry is itself a config per OpenVINO model of `OVModelForVisualCausalLM`,
+        e.g. `{"quantization_configs": {"lm_model": {...}, "text_embeddings_model": {...}}}`.
+        """
+        if isinstance(quantization_config, dict):
+            quantization_config = _quantization_config_from_dict(quantization_config)
+        enhancer_config = None
+        if isinstance(quantization_config, OVPipelineQuantizationConfig):
+            enhancer_config = quantization_config.quantization_configs.get(DIFFUSION_MODEL_PROMPT_ENHANCER_SUBFOLDER)
+
+        super()._apply_quantization(
+            quantization_config, compile_only, compile_model, model_name_or_path, trust_remote_code, **kwargs
+        )
+
+        if enhancer_config is not None and self.prompt_enhancer is not None:
+            if kwargs.get("save_directory") is not None:
+                kwargs["save_directory"] = Path(kwargs["save_directory"]) / DIFFUSION_MODEL_PROMPT_ENHANCER_SUBFOLDER
+            self.prompt_enhancer._apply_quantization(
+                enhancer_config, compile_only, compile_model, model_name_or_path, trust_remote_code, **kwargs
+            )
 
     @property
     def _execution_device(self):
