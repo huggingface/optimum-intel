@@ -3227,7 +3227,7 @@ class DummyQwen3TTSComponentInputGenerator(DummyInputGenerator):
     the concrete dummy lengths below only need to be large enough to trace.
     """
 
-    SUPPORTED_INPUT_NAMES = ("mel_features", "input_values", "audio_codes", "input_ids", "step")
+    SUPPORTED_INPUT_NAMES = ("mel_features", "input_values", "audio_codes", "input_ids", "step", "position")
 
     # A few frames is enough to exercise every block; the traced graphs stay length-agnostic.
     DUMMY_CODE_FRAMES = 8
@@ -3254,8 +3254,9 @@ class DummyQwen3TTSComponentInputGenerator(DummyInputGenerator):
         if input_name == "input_ids":
             shape = [self.batch_size, self.DUMMY_SEQUENCE_LENGTH]
             return self.random_int_tensor(shape, max_value=self.vocab_size, framework=framework, dtype=int_dtype)
-        if input_name == "step":
-            # Scalar depth index selecting one of the code predictor's per-depth tables.
+        if input_name in ("step", "position"):
+            # Scalar depth index selecting one of the code predictor's per-depth tables / absolute index of the
+            # first frame of a streaming codec decoder call.
             return torch.tensor(0, dtype=torch.int64)
         if input_name == "mel_features":
             # [B, mel_frames, mel_dim] as produced by ``mel_spectrogram(...).transpose(1, 2)``.

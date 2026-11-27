@@ -14441,6 +14441,172 @@ class Qwen3TTSCodecPatcher(OVDecoderModelPatcher):
         self._orig_extra_padding = {}
 
 
+def _qwen3_tts_rotate_half(x):
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2 :]
+    return torch.cat((-x2, x1), dim=-1)
+
+
+class Qwen3TTSStatefulCodecDecoder(nn.Module):
+    """Stateful forward of the Qwen3-TTS codec (``speech_tokenizer``) decoder.
+
+    The decoder is fully causal, so everything that looks backwards can carry a small explicit state instead of
+    re-decoding left context for every chunk:
+
+    * causal convolutions (stride 1): the last ``(kernel_size - 1) * dilation`` input samples,
+    * transposed convolutions that overlap (kernel ``2 * stride``): the ``stride`` overflow samples of the
+      overlap-add, kept *without* bias so that it is not added twice,
+    * the sliding-window attention of the pre-transformer: the last ``sliding_window - 1`` keys / values of every
+      layer, with RoPE applied at the absolute frame position (``position`` input).
+
+    Everything else (RVQ lookup, 1x1 convolutions, MLPs, norms, SnakeBeta, ConvNeXt pointwise parts, transposed
+    convolutions without overlap) is per-frame. ``forward(audio_codes, position, *state)`` consumes ``n`` new code
+    frames and returns the ``n * total_upsample`` new samples followed by the updated state. All state tensors have
+    fixed shapes (batch 1), so a graph reshaped to a static ``n`` is fully static, which NPU needs. Running the
+    chunks in order from a zero state reproduces the offline full decode up to float rounding.
+
+    Based on:
+    https://github.com/QwenLM/Qwen3-TTS/blob/022e286b98fbec7e1e916cb940cdf532cd9f488e/qwen_tts/core/tokenizer_12hz/modeling_qwen3_tts_tokenizer_v2.py#L824
+    """
+
+    # Finite instead of -inf: robust in fp16 on GPU / NPU (exp(-3e4) is exactly 0, no NaN risk).
+    MASK_VALUE = -30000.0
+
+    def __init__(self, decoder):
+        super().__init__()
+        self.dec = decoder
+        cfg = decoder.config
+        self.cfg = cfg
+        self.past = cfg.sliding_window - 1  # keys kept per layer; the window includes the query itself
+        self.heads = cfg.num_key_value_heads
+        self.head_dim = cfg.head_dim
+        self.state_specs = self._build_state_specs()
+
+    def _build_state_specs(self):
+        """Ordered ``{name: shape}`` of all state tensors (batch 1)."""
+        d, cfg = self.dec, self.cfg
+        specs = {"pre_conv": (1, cfg.codebook_dim, d.pre_conv.padding)}
+        for i in range(len(d.pre_transformer.layers)):
+            specs[f"k{i}"] = (1, self.heads, self.past, self.head_dim)
+            specs[f"v{i}"] = (1, self.heads, self.past, self.head_dim)
+        for i, (trans, cnx) in enumerate(d.upsample):
+            if trans.right_pad != 0:
+                raise ValueError("The upsample transposed convolution is expected to have no overlap")
+            specs[f"up{i}_dw"] = (1, cfg.latent_dim, cnx.dwconv.padding)
+        specs["dec_in"] = (1, d.decoder[0].conv.in_channels, d.decoder[0].padding)
+        for b in range(len(cfg.upsample_rates)):
+            block = d.decoder[1 + b].block
+            specs[f"b{b}_tail"] = (1, block[1].conv.out_channels, block[1].right_pad)
+            for u in range(3):
+                specs[f"b{b}_u{u}"] = (1, block[2 + u].conv1.conv.in_channels, block[2 + u].conv1.padding)
+        specs["dec_out"] = (1, d.decoder[-1].conv.in_channels, d.decoder[-1].padding)
+        return specs
+
+    @staticmethod
+    def _causal_conv(mod, x, state):
+        if mod.stride != 1:
+            raise ValueError("Stateful decoder expects stride-1 causal convolutions")
+        pad = mod.padding
+        x_cat = torch.cat([state, x], dim=-1) if pad > 0 else x
+        return mod.conv(x_cat), (x_cat[..., x_cat.shape[-1] - pad :] if pad > 0 else state)
+
+    @staticmethod
+    def _trans_conv(mod, x, tail):
+        """ConvTranspose1d + right trim, with the overlap-add tail carried across chunks."""
+        conv = mod.conv
+        n = x.shape[-1]
+        stride = conv.stride[0]
+        y = F.conv_transpose1d(x, conv.weight, None, stride=stride)  # (n - 1) * stride + kernel, no bias
+        bias = conv.bias.view(1, -1, 1)
+        if mod.right_pad == 0:
+            return y + bias, tail
+        y = torch.cat([y[..., : mod.right_pad] + tail, y[..., mod.right_pad :]], dim=-1)
+        return y[..., : n * stride] + bias, y[..., n * stride :]
+
+    def _sliding_mask(self, n, position):
+        """Additive mask ``[1, 1, n, past + n]`` for ``n`` queries at absolute positions ``position + i``.
+
+        Key slot ``j`` holds the absolute position ``position - past + j`` (right-aligned cache). Query ``i`` sees the
+        keys ``i <= j <= i + past`` (the window incl. itself) that have a non-negative position.
+        """
+        i = torch.arange(n).view(n, 1)
+        j = torch.arange(self.past + n).view(1, -1)
+        allowed = (j >= i) & (j <= i + self.past) & (j >= self.past - position)
+        return torch.zeros(n, self.past + n).masked_fill(~allowed, self.MASK_VALUE).view(1, 1, n, -1)
+
+    def _attention(self, layer, hidden, cos, sin, k_past, v_past, mask):
+        attn = layer.self_attn
+        batch, n, _ = hidden.shape
+        q = attn.q_proj(hidden).view(batch, n, -1, self.head_dim).transpose(1, 2)
+        k = attn.k_proj(hidden).view(batch, n, -1, self.head_dim).transpose(1, 2)
+        v = attn.v_proj(hidden).view(batch, n, -1, self.head_dim).transpose(1, 2)
+        cos, sin = cos.unsqueeze(1), sin.unsqueeze(1)
+        q = q * cos + _qwen3_tts_rotate_half(q) * sin
+        k = k * cos + _qwen3_tts_rotate_half(k) * sin
+        k_all = torch.cat([k_past, k], dim=2)
+        v_all = torch.cat([v_past, v], dim=2)
+        out = F.scaled_dot_product_attention(q, k_all, v_all, attn_mask=mask, scale=attn.scaling)
+        out = attn.o_proj(out.transpose(1, 2).reshape(batch, n, -1))
+        return out, k_all[:, :, k_all.shape[2] - self.past :], v_all[:, :, v_all.shape[2] - self.past :]
+
+    def forward(self, audio_codes, position, *state):
+        d = self.dec
+        st = dict(zip(self.state_specs, state))
+        new = {}
+        n = audio_codes.shape[-1]
+
+        hidden = d.quantizer.decode(audio_codes)
+        hidden, new["pre_conv"] = self._causal_conv(d.pre_conv, hidden, st["pre_conv"])
+        hidden = hidden.transpose(1, 2)
+
+        transformer = d.pre_transformer
+        hidden = transformer.input_proj(hidden)
+        position_ids = (position + torch.arange(n)).view(1, n)
+        cos, sin = transformer.rotary_emb(hidden, position_ids)
+        mask = self._sliding_mask(n, position)
+        for i, layer in enumerate(transformer.layers):
+            residual = hidden
+            attn_out, new[f"k{i}"], new[f"v{i}"] = self._attention(
+                layer, layer.input_layernorm(hidden), cos, sin, st[f"k{i}"], st[f"v{i}"], mask
+            )
+            hidden = residual + layer.self_attn_layer_scale(attn_out)
+            hidden = hidden + layer.mlp_layer_scale(layer.mlp(layer.post_attention_layernorm(hidden)))
+        hidden = transformer.output_proj(transformer.norm(hidden)).permute(0, 2, 1)
+
+        for i, (trans, convnext) in enumerate(d.upsample):
+            hidden, _ = self._trans_conv(trans, hidden, None)
+            residual = hidden
+            y, new[f"up{i}_dw"] = self._causal_conv(convnext.dwconv, hidden, st[f"up{i}_dw"])
+            y = convnext.pwconv2(convnext.act(convnext.pwconv1(convnext.norm(y.permute(0, 2, 1)))))
+            hidden = residual + (convnext.gamma * y).permute(0, 2, 1)
+
+        wav, new["dec_in"] = self._causal_conv(d.decoder[0], hidden, st["dec_in"])
+        for b in range(len(self.cfg.upsample_rates)):
+            snake, trans, *units = d.decoder[1 + b].block
+            wav, new[f"b{b}_tail"] = self._trans_conv(trans, snake(wav), st[f"b{b}_tail"])
+            for u, unit in enumerate(units):
+                y, new[f"b{b}_u{u}"] = self._causal_conv(unit.conv1, unit.act1(wav), st[f"b{b}_u{u}"])
+                wav = unit.conv2.conv(unit.act2(y)) + wav  # conv2 is 1x1: stateless
+        wav, new["dec_out"] = self._causal_conv(d.decoder[6], d.decoder[5](wav), st["dec_out"])
+        return (wav.clamp(min=-1, max=1), *[new[name] for name in self.state_specs])
+
+
+class Qwen3TTSCodecDecoderStatefulPatcher(OVDecoderModelPatcher):
+    """Exports the Qwen3-TTS codec decoder as a stateful graph, see
+    :class:`Qwen3TTSStatefulCodecDecoder`. The state tensors are graph inputs / outputs (``state.<name>`` /
+    ``new_state.<name>``); a runtime may fold them into variables with ``MakeStateful`` (CPU / GPU) or carry them
+    itself (NPU)."""
+
+    def __enter__(self):
+        super().__enter__()
+        stateful = Qwen3TTSStatefulCodecDecoder(self._model)
+
+        def forward(self_model, audio_codes, position, state):
+            return stateful(audio_codes, position, *state)
+
+        self._model.forward = types.MethodType(forward, self._model)
+
+
 class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
     """
     Exports the Qwen3.5 / Qwen3.5-MoE (hybrid Gated DeltaNet + full attention) language model of MiniCPM-V 4.7.
