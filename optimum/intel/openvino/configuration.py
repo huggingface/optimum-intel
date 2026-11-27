@@ -456,7 +456,16 @@ _DEFAULT_4BIT_WQ_CONFIGS = {
         "bits": 4,
         "sym": False,
         "group_size": 64,
-        "quant_method": OVQuantizationMethod.AWQ,
+        "ratio": 1.0,
+        "all_layers": True,
+        "scoped_configs": [
+            # Attention projections of decoder layers 20-47 are compressed to int8
+            {
+                "patterns": [".*layers\\.(2[0-9]|3[0-9]|4[0-7])\\.self_attn\\.(q_proj|k_proj|v_proj|o_proj)/.*"],
+                "bits": 8,
+                "sym": False,
+            },
+        ],
     },
     "google/gemma-4-26B-A4B-it": {
         "bits": 4,
@@ -968,8 +977,8 @@ def _find_model_config(model_id_or_path: str, default_configs_dict: Dict[str, An
 def _get_missing_nncf_version(quantization_config: Optional[Dict[str, Any]]) -> Optional[str]:
     """
     Returns the NNCF version that the given quantization config needs if the installed NNCF version is older, and
-    `None` otherwise. So far, only group-wise int8 weight compression needs a newer NNCF version: NNCF supports it
-    since 3.5.0.
+    `None` otherwise. So far, group-wise int8 weight compression and scoped configs need a newer NNCF version: NNCF
+    supports them since 3.5.0.
     """
     if quantization_config is None:
         return None
@@ -979,6 +988,8 @@ def _get_missing_nncf_version(quantization_config: Optional[Dict[str, Any]]) -> 
     else:
         configs = [quantization_config]
     for config in configs:
+        if config.get("scoped_configs") and not is_nncf_version(">=", "3.5.0"):
+            return "3.5.0"
         # The data type of the weights is given either by `dtype` or by `bits`, which is 8 by default
         is_int8 = (config.get("dtype") or f"int{config.get('bits', 8)}") == "int8"
         # Only the release counts: a development build of NNCF 3.5.0 (3.5.0.dev0+<commit>) supports group-wise int8
