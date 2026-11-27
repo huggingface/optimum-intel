@@ -11,6 +11,7 @@
 #  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
+import importlib.util
 import json
 import os
 import tempfile
@@ -154,7 +155,7 @@ def _create_tiny_bagel_model():
     output_dir = Path(tempfile.gettempdir()) / "optimum_intel_tiny_random_bagel"
     if (output_dir / "model.safetensors").exists() and (output_dir / "processor_config.json").exists():
         return str(output_dir)
-    if is_transformers_version("<", "5.23.0.dev0"):
+    if importlib.util.find_spec("transformers.models.bagel") is None:
         # BAGEL is not available in this transformers version, its tests are skipped
         return str(output_dir)
 

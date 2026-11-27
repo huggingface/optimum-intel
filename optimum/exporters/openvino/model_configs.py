@@ -9016,6 +9016,8 @@ class BagelOpenVINOConfig(OpenVINOConfig):
     ]
     NORMALIZED_CONFIG_CLASS = NormalizedConfig
     MIN_TRANSFORMERS_VERSION = "5.23.0.dev0"
+    # no transformers release has BAGEL yet, only its port at 5.23.0.dev0 (versions compare without the dev suffix)
+    MAX_TRANSFORMERS_VERSION = "5.23.0"
     # the parts left uncompressed by `--weight-format int4/int8` (all but the language model) are kept in FP16
     SAVE_FP16_BEFORE_WEIGHT_COMPRESSION = True
     # dummy sizes: a cached prefix followed by one image block (start, latent tokens, end), so both experts, the
@@ -9062,7 +9064,7 @@ class BagelOpenVINOConfig(OpenVINOConfig):
         if options:
             raise ValueError(f"Unknown BAGEL export options {sorted(options)}, expected num_frames, reference_weights")
         if num_frames < 0 or num_frames == 1:
-            raise ValueError(f"num_frames must be at least 2, got {num_frames}")
+            raise ValueError(f"num_frames must be 0 (no N-frame models) or at least 2, got {num_frames}")
         if reference_weights:
             bagel_reference_weights(model)
         return self.__class__(
@@ -9222,4 +9224,6 @@ class BagelOpenVINOConfig(OpenVINOConfig):
         # the BAGEL `--model-kwargs` are export options (`set_export_options`), not forward arguments
         if self._behavior == BagelConfigBehavior.LANGUAGE:
             return BagelLanguageModelPatcher(self, model)
+        if self._behavior == BagelConfigBehavior.TEXT_EMBEDDINGS:
+            return ModelPatcher(self, model)
         return BagelAttentionPatcher(self, model)

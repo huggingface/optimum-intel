@@ -3,6 +3,7 @@ import copy
 import enum
 import hashlib
 import importlib
+import importlib.util
 import inspect
 import io
 import logging
@@ -98,7 +99,7 @@ if is_transformers_version(">=", "5.18"):
     from transformers.models.minicpmv4_7.modeling_minicpmv4_7 import MiniCPMV4_7Model
     from transformers.vision_utils import get_vision_nearest_position_ids, get_vision_window_index
 
-if is_transformers_version(">=", "5.23.0.dev0"):
+if is_transformers_version(">=", "5.23.0.dev0") and importlib.util.find_spec("transformers.models.bagel"):
     from transformers.models.bagel.modeling_bagel import BagelForConditionalGeneration
 
 
@@ -9189,10 +9190,12 @@ class _OVBagelForCausalLM(OVModelForVisualCausalLM):
     both experts: text generation reads `logits`, image denoising reads `v_t`. The KV cache stays on the host so that
     one prompt context is reused across the classifier-free-guidance branches and denoising steps.
     OpenVINO counterpart of `BagelForConditionalGeneration` (same `generate` / `generate_image` arguments):
-    https://github.com/huggingface/transformers/blob/main/src/transformers/models/bagel/modeling_bagel.py
+    https://github.com/padatta/transformers/blob/38b3e74123a005abfd071d2709bbbb017a7919e1/src/transformers/models/bagel/modeling_bagel.py
     """
 
     additional_parts = ["vae_encoder", "vae_decoder"]
+    # weight compression leaves the parts other than the language model in FP16, as the original OpenVINO BAGEL export
+    _COMPRESS_LANGUAGE_MODEL_ONLY = True
 
     def __init__(
         self,
@@ -9399,18 +9402,33 @@ class _OVBagelForCausalLM(OVModelForVisualCausalLM):
     def _velocity(self, context, x_t, timestep, latent_position_ids) -> np.ndarray:
         return self._latent_block(context, x_t, timestep, latent_position_ids, keep=False)["v_t"]
 
+    def _model_dir(self) -> Optional[Path]:
+        model_dir = self.model_save_dir
+        if isinstance(model_dir, TemporaryDirectory):
+            model_dir = model_dir.name
+        return Path(model_dir) if model_dir is not None else None
+
     def _frames_model(self, name: str, num_frames: int) -> Optional[OVBagelModelPart]:
         """The `{name}_{num_frames}img` model of an export with `num_frames`, loaded on first use; None if absent."""
         key = f"{name}_{num_frames}img"
         if key not in self._frames_models:
-            model_dir = self.model_save_dir
-            if isinstance(model_dir, TemporaryDirectory):
-                model_dir = model_dir.name
-            path = Path(model_dir) / f"openvino_{key}_model.xml"
+            model_dir = self._model_dir()
+            path = model_dir / f"openvino_{key}_model.xml" if model_dir is not None else None
             self._frames_models[key] = (
-                OVBagelModelPart(self.load_model(path), self, model_name=key) if path.is_file() else None
+                OVBagelModelPart(self.load_model(path), self, model_name=key)
+                if path is not None and path.is_file()
+                else None
             )
         return self._frames_models[key]
+
+    def _save_pretrained(self, save_directory: Union[str, Path]):
+        super()._save_pretrained(save_directory)
+        # the N-frame models are not model parts (they load on first use), so their files are copied
+        model_dir = self._model_dir()
+        if model_dir is None or model_dir.resolve() == Path(save_directory).resolve():
+            return
+        for path in model_dir.glob("openvino_*_*img_model.*"):
+            shutil.copy2(path, save_directory)
 
     def _add_prompt(
         self, context, input_ids, pixel_values=None, image_position_ids=None, image_num_patches=None
@@ -9637,7 +9655,7 @@ class _OVBagelForCausalLM(OVModelForVisualCausalLM):
         timestep_shift: float = 3.0,
         seed: int = 0,
         output_type: str = "pt",
-        frame_labels: Optional[List] = None,
+        frame_labels: Optional[List[Union[torch.Tensor, np.ndarray]]] = None,
         **kwargs,
     ) -> torch.Tensor:
         r"""

@@ -540,9 +540,9 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
     # the language model is stateless (its KV cache is a model input), so there is no MakeStateful
     "bagel": {
         "model_class": "OVModelForVisualCausalLM",
+        # no TransposeMatMul: SDPAFusion consumes the attention transposes first
         "convert": [
             "SDPAFusion",
-            "TransposeMatMul",
             "CommonFusions",
             "DecompressionHandling",
         ],

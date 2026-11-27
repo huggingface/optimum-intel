@@ -29,7 +29,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 import torch
 import torch.nn.functional as F
 import transformers
-from huggingface_hub import hf_hub_download
+from huggingface_hub import hf_hub_download, snapshot_download
 from huggingface_hub.utils import EntryNotFoundError
 from safetensors import safe_open
 from torch import nn
@@ -14447,9 +14447,9 @@ class BagelLanguageModelForExport(nn.Module):
     reuse one prompt KV cache across the classifier-free-guidance branches and all denoising steps, and the cache
     stays an explicit input (not a state) because those branches fork it.
     Adapted from `BagelTextModel` / `BagelForConditionalGeneration.generate_image`:
-    https://github.com/huggingface/transformers/blob/main/src/transformers/models/bagel/modeling_bagel.py
+    https://github.com/padatta/transformers/blob/38b3e74123a005abfd071d2709bbbb017a7919e1/src/transformers/models/bagel/modeling_bagel.py
     and the original packed MoT attention:
-    https://github.com/ByteDance-Seed/Bagel/blob/main/modeling/bagel/qwen2_navit.py
+    https://github.com/ByteDance-Seed/Bagel/blob/a2fa77dd8caeefc41e6607ae0ec17408d3f4ee9f/modeling/bagel/qwen2_navit.py
     """
 
     def __init__(self, model: "PreTrainedModel"):
@@ -14662,8 +14662,6 @@ def bagel_reference_weights(model: "PreTrainedModel"):
 
     path = model.name_or_path
     if not os.path.isdir(path):
-        from huggingface_hub import snapshot_download
-
         path = snapshot_download(path, allow_patterns=["*.safetensors"])
     prefix, state = "model.vae.", {}
     for file in sorted(f for f in os.listdir(path) if f.endswith(".safetensors")):
@@ -14688,6 +14686,7 @@ class BagelLanguageModelPatcher(ModelPatcher):
         super().__init__(config, model, model_kwargs)
         self._rescale = not getattr(config, "reference_weights", False)
 
+        # the base `patched_forward` converts `past_key_values` to a Cache, while this module takes the tensor list
         @functools.wraps(self.orig_forward)
         def patched_forward(*args, **kwargs):
             return self.orig_forward(*args, **kwargs)
@@ -14736,16 +14735,19 @@ class BagelLanguageModelPatcher(ModelPatcher):
         self._model.und_rescale = None
 
 
+# `BagelVisionAttention.forward` with the SDPA default scale, as the original SigLIP NaViT attention:
+# https://github.com/ByteDance-Seed/Bagel/blob/a2fa77dd8caeefc41e6607ae0ec17408d3f4ee9f/modeling/bagel/siglip_navit.py
 def _bagel_vision_attention_forward(self, hidden_states, attention_mask=None, **kwargs):
     hidden_shape = (*hidden_states.shape[:-1], -1, self.head_dim)
     query, key, value = (
         proj(hidden_states).view(hidden_shape).transpose(1, 2) for proj in (self.q_proj, self.k_proj, self.v_proj)
     )
-    # the default scale is head_dim**-0.5 computed in the kernel; an explicit one is saved as an f16 constant
     out = F.scaled_dot_product_attention(query, key, value, attn_mask=attention_mask)
     return self.out_proj(out.transpose(1, 2).flatten(2)), None
 
 
+# `BagelVAEAttnBlock.forward` as one SDPA, as `AttnBlock` of the original autoencoder:
+# https://github.com/ByteDance-Seed/Bagel/blob/a2fa77dd8caeefc41e6607ae0ec17408d3f4ee9f/modeling/autoencoder.py
 def _bagel_vae_attention_forward(self, hidden_states):
     batch_size, channels, height, width = hidden_states.shape
     normed = self.norm(hidden_states)
@@ -14763,15 +14765,18 @@ class BagelAttentionPatcher(ModelPatcher):
 
     def __enter__(self):
         super().__enter__()
+        forwards = {
+            "BagelVisionAttention": _bagel_vision_attention_forward,
+            "BagelVAEAttnBlock": _bagel_vae_attention_forward,
+        }
         self._patched = []
         for module in self._model.modules():
-            name = type(module).__name__
-            if name in ("BagelVisionAttention", "BagelVAEAttnBlock"):
-                patched = (
-                    _bagel_vision_attention_forward if name == "BagelVisionAttention" else _bagel_vae_attention_forward
-                )
+            patched = forwards.get(type(module).__name__)
+            if patched is not None:
                 self._patched.append((module, module.forward))
                 module.forward = types.MethodType(patched, module)
+        if not self._patched:
+            raise ValueError(f"No {' or '.join(forwards)} module found to patch in {type(self._model).__name__}")
 
     def __exit__(self, exc_type, exc_value, traceback):
         super().__exit__(exc_type, exc_value, traceback)

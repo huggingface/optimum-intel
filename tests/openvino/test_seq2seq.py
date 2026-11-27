@@ -62,6 +62,7 @@ from utils_tests import (
     is_model_type_transformers_compatible,
 )
 
+from optimum.exporters.openvino import main_export
 from optimum.exporters.openvino.stateful import model_has_state
 from optimum.exporters.openvino.utils import ONNX_SUPPORTED_ARCHITECTURES
 from optimum.exporters.tasks import TasksManager
@@ -1394,15 +1395,16 @@ class OVModelForVisualCausalLMIntegrationTest(OVSeq2SeqTestMixin):
         model_arch = "bagel"
         if model_arch not in self.SUPPORTED_ARCHITECTURES:
             self.skipTest("bagel is not supported by the installed transformers version")
-        from optimum.exporters.openvino import main_export
 
         processor = self.get_preprocessors(model_arch)["processor"]
         image = self.IMAGE.resize((600, 600))
         frames = [image, image.rotate(90), image.transpose(Image.FLIP_LEFT_RIGHT)]
         inputs = processor(text="Generate the next frame", images=frames, generation_mode="image", return_tensors="pt")
         kwargs = {"num_frames": 3, "num_inference_steps": 3, "guidance_scale": 4.0, "seed": SEED}
-        with TemporaryDirectory() as tmpdir:
-            main_export(MODEL_NAMES[model_arch], tmpdir, task="image-text-to-text", model_kwargs={"num_frames": 3})
+        with TemporaryDirectory() as export_dir, TemporaryDirectory() as tmpdir:
+            main_export(MODEL_NAMES[model_arch], export_dir, task="image-text-to-text", model_kwargs={"num_frames": 3})
+            # save_pretrained keeps the N-frame models, which are not model parts
+            self.OVMODEL_CLASS.from_pretrained(export_dir, device=OPENVINO_DEVICE).save_pretrained(tmpdir)
             ov_model = self.OVMODEL_CLASS.from_pretrained(tmpdir, device=OPENVINO_DEVICE, ov_config=F32_CONFIG)
             single_frame_calls = []
             for part in (ov_model.vision_embeddings, ov_model.vae_encoder, ov_model.vae_decoder):

@@ -1424,6 +1424,10 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "--lora-correction" not in option or b"with correction of low-rank adapters" in result.stdout
             )
 
+    @unittest.skipIf(
+        "bagel" not in get_supported_model_for_library("transformers"),
+        reason="bagel is not supported by the installed transformers version",
+    )
     def test_exporters_cli_bagel_reference_weights_and_frames(self):
         import openvino as ov
 
