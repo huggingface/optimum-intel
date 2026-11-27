@@ -21,6 +21,7 @@ from tempfile import TemporaryDirectory
 import numpy as np
 import openvino
 import torch
+from huggingface_hub import snapshot_download
 from parameterized import parameterized
 from transformers import (
     AutoModelForTextToSpectrogram,
@@ -257,7 +258,9 @@ class OVModelForTextToSpeechSeq2SeqIntegrationTest(OVSeq2SeqTestMixin):
             export_from_model(model=ref_model, output=tmpdir, task="text-to-audio", stateful=True)
 
             # Verify that local voice .pt files were converted to .bin (regression for local export bug)
-            source_voices = sorted(Path(model_id).glob("voices/*.pt"))
+            source_voices = sorted(
+                Path(model_id if os.path.isdir(model_id) else snapshot_download(model_id)).glob("voices/*.pt")
+            )
             self.assertGreater(len(source_voices), 0, "Test fixture has no source voice .pt files")
             exported_voices = sorted(Path(tmpdir).glob("voices/*.bin"))
             self.assertEqual(
