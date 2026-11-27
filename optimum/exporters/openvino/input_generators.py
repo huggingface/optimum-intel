@@ -1724,7 +1724,10 @@ class DummyQwen2VLVisionEmbedInputGenerator(DummyVisionInputGenerator):
             )
         else:
             self.embed_dim = self.num_channels * self.temporal_patch_size * self.patch_size * self.patch_size
-        self.num_heads = normalized_config.config.num_heads
+        # Qwen-VL vision configs name the attention heads `num_heads`, SigLIP-like ones (PaddleOCR-VL) `num_attention_heads`
+        self.num_heads = (
+            getattr(normalized_config.config, "num_heads", None) or normalized_config.config.num_attention_heads
+        )
         self.spatial_merge_size = None
         if hasattr(normalized_config.config, "spatial_merge_size"):
             self.spatial_merge_size = normalized_config.config.spatial_merge_size
@@ -1755,6 +1758,38 @@ class DummyQwen2VLVisionEmbedInputGenerator(DummyVisionInputGenerator):
             spatial_merge_unit = self.spatial_merge_size * self.spatial_merge_size
             hidden_size = (grid_t * grid_h * grid_w) // spatial_merge_unit
             return self.random_int_tensor([hidden_size], max_value=hidden_size)
+
+
+class DummyPaddleOCRVLVisionEmbedInputGenerator(DummyQwen2VLVisionEmbedInputGenerator):
+    """
+    PaddleOCR-VL vision inputs: flattened `(num_patches, channels * patch_size * patch_size)` patches with the bilinear
+    position-embedding gather indices / weights for the patch embeddings, and the Qwen2-VL merger inputs.
+    """
+
+    SUPPORTED_INPUT_NAMES = (
+        "pixel_values",
+        "bilinear_indices",
+        "bilinear_weights",
+        "hidden_states",
+        "attention_mask",
+        "rotary_pos_emb",
+    )
+
+    def __init__(self, task: str, normalized_config: NormalizedVisionConfig, **kwargs):
+        super().__init__(task, normalized_config, **kwargs)
+        self.num_positions = (normalized_config.config.image_size // self.patch_size) ** 2
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        num_patches = self.batch_size * (self.height // self.patch_size) * (self.width // self.patch_size)
+        if input_name == "pixel_values":
+            shape = [num_patches, self.num_channels * self.patch_size * self.patch_size]
+            return self.random_float_tensor(shape, framework=framework, dtype=float_dtype)
+        if input_name == "bilinear_indices":
+            shape = [4, num_patches]
+            return self.random_int_tensor(shape, max_value=self.num_positions, framework=framework, dtype=int_dtype)
+        if input_name == "bilinear_weights":
+            return self.random_float_tensor([4, num_patches], framework=framework, dtype=float_dtype)
+        return super().generate(input_name, framework, int_dtype, float_dtype)
 
 
 # DummyQwen3VLVisionEmbedInputGenerator inherits from DummyQwen2VLVisionEmbedInputGenerator (defined above)

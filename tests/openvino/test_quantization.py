@@ -1181,6 +1181,7 @@ class OVWeightCompressionTest(unittest.TestCase):
         (OVModelOpenCLIPForZeroShotImageClassification, "open-clip", False),
         (OVModelForVisualCausalLM, "llava", False),
         (OVModelForVisualCausalLM, "qwen2_vl", False),
+        (OVModelForVisualCausalLM, "paddleocr_vl", False),
         (OVModelForCausalLM, "cohere2", False),
         (OVModelForVisualCausalLM, "qwen3_vl", False),
         (OVModelForCausalLM, "hunyuan_v1_dense", False),

@@ -183,6 +183,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         ("image-text-to-text", "muse_glimmer"),
         ("image-text-to-text", "minicpmv4_7"),
         ("image-text-to-text", "minicpm_ocr"),
+        ("image-text-to-text", "paddleocr_vl"),
     ]
     # filter architectures depending on min/max transformers supported versions
     SUPPORTED_ARCHITECTURES = [
@@ -266,6 +267,7 @@ class OVCLIExportTestCase(unittest.TestCase):
         "muse_glimmer": 2,
         "minicpmv4_7": 2,
         "minicpm_ocr": 2,
+        "paddleocr_vl": 2,
     }
 
     TOKENIZER_CHAT_TEMPLATE_TESTS_MODELS = {
@@ -789,6 +791,18 @@ class OVCLIExportTestCase(unittest.TestCase):
         ),
         (
             "image-text-to-text",
+            "paddleocr_vl",
+            'int4 --group-size 16 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
+            "--dataset textvqa --num-samples 1",
+            {
+                "lm_model": {"int8": 10, "int4": 20},
+                "text_embeddings_model": {"int8": 1},
+                "vision_embeddings_model": {"int8": 2},
+                "vision_embeddings_merger_model": {"int8": 14},
+            },
+        ),
+        (
+            "image-text-to-text",
             "qwen3_vl",
             'int4 --group-size 8 --ratio 0.8 --sensitivity-metric "mean_activation_magnitude" '
             "--dataset textvqa --num-samples 1",
@@ -1054,6 +1068,7 @@ class OVCLIExportTestCase(unittest.TestCase):
                 "qwen3_vl",
                 "minicpmv4_7",
                 "minicpm_ocr",
+                "paddleocr_vl",
             )
             if not is_model_type_transformers_compatible(model_type)
         }

@@ -487,6 +487,28 @@ ARCH_TO_EXPECTED_TRANSFORMATIONS = {
             "ConvertToSwishCPU",
         ],
     },
+    # the ERNIE-4.5 language model with 3D M-RoPE, and the SigLIP-like vision encoder with 2D vision rotary
+    "paddleocr_vl": {
+        "model_class": "OVModelForVisualCausalLM",
+        "convert": [
+            "SDPAFusion",
+            "MakeStateful",
+        ],
+        "compile": [
+            "StatefulSDPAFusion",
+            "SDPASubgraphFusion",
+            "CommonDecompositions",
+            "ConvertSoftMax8ToSoftMax1",
+            "ConvertBroadcast3",
+            "RoPEFusionGPTNEOX",
+            "RoPEFusionPreprocess",
+            "RoPEFusion",
+            "CausalMaskPreprocessFusion",
+            "RMSFusion",
+            "ConvertMatMulToFC",
+            "ConvertToSwishCPU",
+        ],
+    },
     "deepseek_ocr2": {
         "model_class": "OVModelForVisualCausalLM",
         "convert": [
