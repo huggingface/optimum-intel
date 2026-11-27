@@ -855,6 +855,45 @@ class OVModelForCausalLM(OVBaseDecoderModel, GenerationMixin):
         """
         return
 
+    # Overrides https://github.com/huggingface/transformers/blob/b7601f7325e6b8d5e35052d161dda3b43103b6cb/src/transformers/generation/utils.py#L2434
+    # Introduced in Transformers v4.52.0.
+    def _valid_auto_compile_criteria(self, model_kwargs, generation_config):
+        # The forward pass runs through an OpenVINO InferRequest and cannot be compiled with torch.compile.
+        return False
+
+    # Overrides https://github.com/huggingface/transformers/blob/v5.3.0/src/transformers/generation/utils.py#L1713
+    # Introduced in Transformers v4.41.0; removed upstream in v5.4.0. Newer versions use _prefill.
+    def _get_initial_cache_position(self, *args, model_kwargs=None, **kwargs):
+        if model_kwargs is None:
+            *args, model_kwargs = args
+        past_key_values = model_kwargs.get("past_key_values")
+        if self.stateful and isinstance(past_key_values, (tuple, list)):
+            if model_kwargs.get("cache_position") is None:
+                # The stateful cache is a marker; its length is tracked by the OpenVINO model.
+                cache_kwargs = super()._get_initial_cache_position(
+                    *args, model_kwargs={**model_kwargs, "past_key_values": None}, **kwargs
+                )
+                model_kwargs["cache_position"] = cache_kwargs["cache_position"][
+                    self._get_past_length(past_key_values) :
+                ]
+            return model_kwargs
+        return super()._get_initial_cache_position(*args, model_kwargs=model_kwargs, **kwargs)
+
+    # Overrides https://github.com/huggingface/transformers/blob/v5.0.0/src/transformers/generation/utils.py#L3849
+    # Introduced in Transformers v5.0.0.
+    def _prefill(self, input_ids, generation_config, model_kwargs, **kwargs):
+        if (
+            isinstance(model_kwargs.get("past_key_values"), (tuple, list))
+            and generation_config.prefill_chunk_size is None
+        ):
+            # The parent method was removed in Transformers 5.4.0.
+            if hasattr(super(), "_get_initial_cache_position"):
+                model_kwargs = self._get_initial_cache_position(input_ids.shape[1], input_ids.device, model_kwargs)
+            # OV input preparation already slices the input according to its legacy cache representation.
+            model_inputs = self.prepare_inputs_for_generation(input_ids, **model_kwargs, **kwargs)
+            return self(**model_inputs, return_dict=True)
+        return super()._prefill(input_ids, generation_config, model_kwargs, **kwargs)
+
     @classmethod
     def _from_pretrained(
         cls,
