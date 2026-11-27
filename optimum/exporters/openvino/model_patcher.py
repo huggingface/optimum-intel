@@ -4089,6 +4089,96 @@ class MiniCPMVImageEmbeddingsModelPatcher(ModelPatcher):
                 layer.self_attn.forward = layer.self_attn._orig_forward
 
 
+# Original code: https://github.com/huggingface/transformers/blob/v5.22.1/src/transformers/models/minicpmv4_6/modeling_minicpmv4_6.py#L604
+def _minicpmv4_6_vision_embeddings_forward(self, pixel_values, position_ids, window_index, merge_index):
+    """Traceable forward for the MiniCPM-V-4.6 vision tower + merger.
+
+    Runs the whole ``get_image_features`` pipeline (patch embeddings, encoder,
+    intermediate window-attention merger, remaining encoder, post layernorm and
+    the final downsample merger) for a single NaViT-packed image.
+
+    The data-dependent index tensors (``position_ids`` for the interpolated
+    position embeddings, ``window_index`` for the window-attention merger and
+    ``merge_index`` for the final merger) are precomputed on the runtime side
+    and passed as inputs, so the traced graph stays dynamic w.r.t. the number
+    of visual patches. All spatial ``reshape``/``permute`` groupings of the
+    original implementation are expressed as ``index_select`` + ``reshape`` so
+    the graph is valid for any image resolution.
+    """
+    vision_tower = self.model.vision_tower
+    merger = self.model.merger
+    window_h, window_w = vision_tower.vit_merger.window_kernel_size
+    window_size = window_h * window_w
+    merge_h, merge_w = merger.merge_kernel_size
+
+    # patch embeddings + interpolated position embeddings
+    patch_embeds = vision_tower.embeddings.patch_embedding(pixel_values)
+    hidden_states = patch_embeds.flatten(2).transpose(1, 2)
+    hidden_states = hidden_states + vision_tower.embeddings.position_embedding(position_ids)
+
+    insert_layer_id = vision_tower.config.insert_layer_id
+    for layer_index, encoder_layer in enumerate(vision_tower.encoder.layers):
+        residual = hidden_states
+        hidden_states = encoder_layer.layer_norm1(hidden_states)
+        hidden_states, _ = _minicpmv4_7_vision_attention_forward(encoder_layer.self_attn, hidden_states)
+        hidden_states = residual + hidden_states
+        residual = hidden_states
+        hidden_states = encoder_layer.layer_norm2(hidden_states)
+        hidden_states = encoder_layer.mlp(hidden_states)
+        hidden_states = residual + hidden_states
+
+        if layer_index == insert_layer_id:
+            vit_merger = vision_tower.vit_merger
+            residual = hidden_states
+            merged = vit_merger.layer_norm1(hidden_states)
+            merged = merged.index_select(1, window_index)
+            batch, seq_len, embed_dim = merged.shape
+            merged = merged.reshape(-1, window_size, embed_dim)
+            merged, _ = _minicpmv4_7_vision_attention_forward(vit_merger.self_attn, merged)
+            merged = merged.reshape(batch, seq_len, embed_dim)
+            merged = merged.index_select(1, torch.argsort(window_index))
+            hidden_states = residual + merged
+            # channel-wise 2x2 window merge expressed as index_select + reshape
+            regrouped = hidden_states[0].index_select(0, window_index)
+            embed_dim = regrouped.shape[-1]
+            merged_tokens = regrouped.reshape(-1, window_size * embed_dim)
+            merge_residual = regrouped.reshape(-1, window_size, embed_dim).mean(dim=1)
+            merged_tokens = vit_merger.pre_norm(merged_tokens)
+            merged_tokens = vit_merger.linear_1(merged_tokens)
+            merged_tokens = vit_merger.act(merged_tokens)
+            merged_tokens = vit_merger.linear_2(merged_tokens)
+            hidden_states = (merged_tokens + merge_residual).unsqueeze(0)
+
+    hidden_states = vision_tower.post_layernorm(hidden_states)
+
+    # final downsample merger (16x mode) expressed as index_select + reshape
+    downsample_mlp = merger.mlp[0]
+    regrouped = hidden_states[0].index_select(0, merge_index)
+    embed_dim = regrouped.shape[-1]
+    merged_tokens = regrouped.reshape(-1, merge_h * merge_w * embed_dim)
+    merged_tokens = downsample_mlp.pre_norm(merged_tokens).view(-1, downsample_mlp.linear_1.in_features)
+    merged_tokens = downsample_mlp.linear_1(merged_tokens)
+    merged_tokens = downsample_mlp.act(merged_tokens)
+    merged_tokens = downsample_mlp.linear_2(merged_tokens)
+    return merged_tokens
+
+
+class MiniCPMV4_6VisionEmbeddingsModelPatcher(ModelPatcher):
+    def __init__(
+        self,
+        config: "OpenVINOConfig",
+        model: "PreTrainedModel",
+        model_kwargs: Dict[str, Any],
+    ):
+        self._original_forward = model.forward
+        model.forward = types.MethodType(_minicpmv4_6_vision_embeddings_forward, model)
+        super().__init__(config, model, model_kwargs)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        self._model.forward = self._original_forward
+
+
 class LlavaQwen2ImageEmbeddingsModelPatcher(ModelPatcher):
     def __init__(
         self,
@@ -11827,6 +11917,12 @@ def qwen3_5_gated_delta_net_forward(
     attention_mask: Optional[torch.Tensor] = None,
     **kwargs,
 ):
+    """Replace recurrent attention and convolution with OpenVINO tracing operations.
+
+    Original Qwen3_5GatedDeltaNet.forward:
+    https://github.com/huggingface/transformers/blob/v5.22.1/src/transformers/models/qwen3_5/modeling_qwen3_5.py#L536
+    """
+
     def apply_mask_to_padding_states(hidden_states, attention_mask):
         """
         Tunes out the hidden states for padding tokens, see https://github.com/state-spaces/mamba/issues/66
@@ -11921,7 +12017,10 @@ def qwen3_5_gated_delta_net_forward(
     return output
 
 
+# Original code: https://github.com/huggingface/transformers/blob/v5.22.1/src/transformers/models/qwen3_5/modeling_qwen3_5.py#L1681
 class Qwen3_5ModelPatcher(OVDecoderModelPatcher):
+    """Expose grouped cache tensors around the original language-model forwards."""
+
     def __init__(
         self,
         config: "OpenVINOConfig",
@@ -14455,7 +14554,7 @@ class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
         model: "PreTrainedModel",
         model_kwargs: Optional[Dict[str, Any]] = None,
     ):
-        from transformers.cache_utils import LinearAttentionCacheLayerMixin
+        from transformers.cache_utils import DynamicLayer, LinearAttentionCacheLayerMixin
 
         from openvino.frontend.pytorch import ConversionExtension, ModuleExtension
 
@@ -14465,6 +14564,9 @@ class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
         text_config = model.config.text_config
         layer_types = text_config.layer_types
         num_linear_attn_layers = layer_types.count("linear_attention")
+
+        def update_full_attention_cache(layer, key_states, value_states, *args, **kwargs):
+            return DynamicLayer.update(layer, key_states, value_states)
 
         # Packs the flat model inputs into a transformers `DynamicCache` and unpacks it into the outputs, so that the
         # KV-cache, conv and recurrent states are graph inputs / outputs. `cache_params` is grouped by layer type:
@@ -14482,6 +14584,8 @@ class MiniCPMV4_7LanguageModelPatcher(OVDecoderModelPatcher):
                 else:
                     layer.keys, layer.values = next(key_states), next(value_states)
                     layer.is_initialized = True
+                    if type(layer) is DynamicLayer:
+                        layer.update = types.MethodType(update_full_attention_cache, layer)
 
             # (3, batch, seq) M-RoPE positions [T, H, W]
             outputs = text_model(

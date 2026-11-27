@@ -362,6 +362,10 @@ _GENAI_VLM_UNSUPPORTED_ARCHITECTURES = (
     "muse_glimmer",
 )
 
+if is_openvino_version("<", "2026.5"):
+    # MinicPM v4.6 is supported starting from OpenVINO 2026.5
+    _GENAI_VLM_UNSUPPORTED_ARCHITECTURES += ("minicpmv4_6",)
+
 # Gemma 4 version requirements for OpenVINO GenaAI are documented at:
 # https://openvinotoolkit.github.io/openvino.genai/docs/supported-models/#vision-language-models-vlms
 if not (is_transformers_version(">=", "5.5") and is_transformers_version("<", "5.6")):
