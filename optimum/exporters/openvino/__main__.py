@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
 from requests.exceptions import ConnectionError as RequestsConnectionError
 from transformers import AutoConfig, AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
+from transformers.dynamic_module_utils import get_class_from_dynamic_module
 from transformers.utils import is_torch_available
 
 from openvino import Core, Model, Type, save_model
@@ -253,13 +254,19 @@ _NATIVE_DRAFT_MODEL_CLASSES = {
 }
 
 
-def load_native_draft_model(architecture: str, model_name_or_path: str, **kwargs):
+def load_native_draft_model(architecture: str, model_name_or_path: str, config=None, **kwargs):
     from optimum.exporters.openvino import model_patcher
 
     model_class = getattr(model_patcher, _NATIVE_DRAFT_MODEL_CLASSES[architecture])
     # The MuseGlimmer drafter class is built lazily because it needs transformers >= 5.15.
     if not isinstance(model_class, type):
         model_class = model_class()
+    # Drafts saved by transformers >= 5 keep rope_theta only in rope_parameters, which transformers < 5
+    # ignores, so their rotary embedding would silently fall back to the default theta.
+    rope_parameters = getattr(config, "rope_parameters", None)
+    if is_transformers_version("<", "5") and isinstance(rope_parameters, dict) and "rope_theta" in rope_parameters:
+        config.rope_theta = rope_parameters["rope_theta"]
+        kwargs["config"] = config
     return model_class.from_pretrained(model_name_or_path, **kwargs)
 
 
@@ -575,6 +582,14 @@ def main_export(
             if dtype in [torch.float16, torch.bfloat16]:
                 patch_16bit = True
             loading_kwargs["torch_dtype"] = dtype
+            if getattr(config, "model_type", "") == "minicpm5_moe" and trust_remote_code:
+                # The f32 `e_score_correction_bias` of the router has a large per-layer offset (about 170 to 280) and
+                # differs within a layer by less than 0.5: bf16 rounds it to one or a few values, which changes the
+                # experts selected for a token
+                model_class = get_class_from_dynamic_module(
+                    config.auto_map["AutoModelForCausalLM"], model_name_or_path
+                )
+                model_class._keep_in_fp32_modules_strict = ["gate"]
         # Patch the modules to export of GPTQ models w/o GPU
         if do_quant_patching:
             orig_cuda_check = torch.cuda.is_available
@@ -695,6 +710,7 @@ def main_export(
             model = load_native_draft_model(
                 architecture,
                 model_name_or_path,
+                config=config,
                 subfolder=subfolder,
                 revision=revision,
                 cache_dir=cache_dir,

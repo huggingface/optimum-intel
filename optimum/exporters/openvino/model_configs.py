@@ -201,6 +201,7 @@ from optimum.exporters.openvino.model_patcher import (
     MairaImageEmbeddingModelPatcher,
     MambaPatcher,
     MiniCPM3Patcher,
+    MiniCPM5MoeModelPatcher,
     MiniCPMModelPatcher,
     MiniCPMV4_7LanguageModelPatcher,
     MiniCPMV4_7VisionEmbeddingsModule,
@@ -744,6 +745,19 @@ class MiniCPMOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
     DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
     NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
     _MODEL_PATCHER = MiniCPMModelPatcher
+
+
+@register_in_tasks_manager(
+    "minicpm5_moe", *["text-generation", "text-generation-with-past"], library_name="transformers"
+)
+class MiniCPM5MoeOpenVINOConfig(TextDecoderWithPositionIdsOpenVINOConfig):
+    # no native transformers implementation yet, the checkpoint code (`trust_remote_code`) uses the transformers 4.x API
+    MIN_TRANSFORMERS_VERSION = "4.57.6"
+    MAX_TRANSFORMERS_VERSION = "4.57.6"
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyTextInputGenerator, MistralDummyPastKeyValuesGenerator)
+    DUMMY_PKV_GENERATOR_CLASS = MistralDummyPastKeyValuesGenerator
+    NORMALIZED_CONFIG_CLASS = NormalizedTextConfig
+    _MODEL_PATCHER = MiniCPM5MoeModelPatcher
 
 
 @register_in_tasks_manager("minicpm3", *["text-generation", "text-generation-with-past"], library_name="transformers")

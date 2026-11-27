@@ -11762,6 +11762,86 @@ def restore_minicpmv4_7_moe_weights(experts: nn.Module):
             delattr(experts, name)
 
 
+# Patched version of MiniCPM5MoETopkRouter.forward from the checkpoint code (`modeling_minicpm.py`).
+# With a single group of experts the group mask of the original `get_topk_indices` keeps all experts, it is dropped so
+# that the router matches the sigmoid + bias routing pattern of the OpenVINO GPU plugin.
+def minicpm5_moe_router_forward(self, hidden_states: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    hidden_states = hidden_states.view(-1, self.config.hidden_size)
+    router_logits = F.linear(hidden_states.type(torch.float32), self.weight.type(torch.float32))
+    scores = router_logits.sigmoid()
+    # The selection depends only on the differences of the bias values. Their common offset (170 to 280) is removed,
+    # because adding the [0, 1] scores to it loses them in f16, the default inference precision on GPU
+    bias = self.e_score_correction_bias - self.e_score_correction_bias.max()
+    topk_indices = torch.topk(scores + bias, k=self.top_k, dim=-1, sorted=False)[1]
+    topk_weights = scores.gather(1, topk_indices)
+    if self.norm_topk_prob:
+        topk_weights = topk_weights / (topk_weights.sum(dim=-1, keepdim=True) + 1e-20)
+    return topk_indices, topk_weights * self.routed_scaling_factor
+
+
+def minicpm5_moe_forward(self, hidden_states: torch.Tensor, topk_indices: torch.Tensor, topk_weights: torch.Tensor):
+    return self.experts(hidden_states, topk_indices, topk_weights)
+
+
+class MiniCPM5MoeExperts(nn.Module):
+    """
+    Packed experts of a MiniCPM5MoEMoE block, replaces its `nn.ModuleList` of per-expert MLPs during export. The
+    weights are stacked into separate `(num_experts, moe_dim, hidden)` `ov_gate_proj` / `ov_up_proj` and
+    `(num_experts, hidden, moe_dim)` `down_proj` parameters for the tiled 3-GEMM form of `lfm2_moe_experts_forward`,
+    fused into the MoE kernels by OpenVINO. The original per-expert weights become views of them, so the packing takes
+    no additional memory after the export and `original_experts` can be restored without copying.
+    """
+
+    forward = lfm2_moe_experts_forward
+
+    def __init__(self, experts: nn.ModuleList):
+        super().__init__()
+        self.num_experts = len(experts)
+        self.act_fn = experts[0].act_fn
+        object.__setattr__(self, "original_experts", experts)
+
+        with torch.no_grad():
+            gate_proj = torch.stack([expert.gate_proj.weight for expert in experts])
+            up_proj = torch.stack([expert.up_proj.weight for expert in experts])
+            down_proj = torch.stack([expert.down_proj.weight for expert in experts])
+        self.ov_gate_proj = nn.Parameter(gate_proj, requires_grad=False)
+        self.ov_up_proj = nn.Parameter(up_proj, requires_grad=False)
+        self.down_proj = nn.Parameter(down_proj, requires_grad=False)
+        for idx, expert in enumerate(experts):
+            expert.gate_proj.weight = nn.Parameter(gate_proj[idx], requires_grad=False)
+            expert.up_proj.weight = nn.Parameter(up_proj[idx], requires_grad=False)
+            expert.down_proj.weight = nn.Parameter(down_proj[idx], requires_grad=False)
+
+        if down_proj.dtype in (torch.float16, torch.bfloat16):
+            # OpenVINO's 16-bit tracing helper skips the modules carrying this attribute (see
+            # `prepare_minicpmv4_7_moe_weights`), otherwise it swaps the packed weights for placeholders
+            setattr(self, "_openvino_module_extension_patch_orig_forward", self.forward)
+
+
+class MiniCPM5MoeModelPatcher(OVDecoderModelPatcher):
+    def __enter__(self):
+        super().__enter__()
+        for layer in self._model.model.layers:
+            # MiniCPM5MoEMoE: the first `first_k_dense_replace` layers have a dense MLP instead
+            if not hasattr(layer.mlp, "experts"):
+                continue
+            moe_block = layer.mlp
+            moe_block.experts = MiniCPM5MoeExperts(moe_block.experts)
+            moe_block.moe = types.MethodType(minicpm5_moe_forward, moe_block)
+            if moe_block.gate.n_group == 1:
+                moe_block.gate.forward = types.MethodType(minicpm5_moe_router_forward, moe_block.gate)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for layer in self._model.model.layers:
+            if not hasattr(layer.mlp, "experts"):
+                continue
+            moe_block = layer.mlp
+            moe_block.experts = moe_block.experts.original_experts
+            del moe_block.moe
+            moe_block.gate.__dict__.pop("forward", None)
+
+
 class Lfm2MoeModelPatcher(Lfm2ModelPatcher):
     def __enter__(self):
         super().__enter__()
