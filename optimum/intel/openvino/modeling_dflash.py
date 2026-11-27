@@ -288,7 +288,7 @@ class OVAssistantForCausalLM(OVBaseModel):
         noise_embeds: torch.Tensor,
         context_hidden_states: torch.Tensor,
         position_ids: torch.Tensor,
-        attention_mask: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
         past_key_values=None,
         **kwargs,
     ) -> BaseModelOutputWithPast:
@@ -297,6 +297,9 @@ class OVAssistantForCausalLM(OVBaseModel):
         self.compile()
         batch_size, context_len = context_hidden_states.shape[:2]
         block_len = noise_embeds.shape[1]
+        if attention_mask is None:
+            # `generate` drops an all-ones attention mask, so the drafter attends to every position up to the last one
+            attention_mask = torch.ones(batch_size, int(position_ids[:, -1].max()) + 1, dtype=torch.long)
         # Each row reads one of the two inputs; the other is zero there.
         inputs_embeds = torch.cat(
             [noise_embeds.new_zeros(batch_size, context_len, noise_embeds.shape[-1]), noise_embeds], 1

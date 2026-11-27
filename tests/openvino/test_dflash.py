@@ -165,10 +165,6 @@ class DFlashExportTest(unittest.TestCase):
 
     @parameterized.expand(("qwen3_5", "qwen3_5_moe", "gemma4", "minicpmv4_7"))
     def test_export_hidden_state_locators_for_representative_multi_modal_models(self, model_type):
-        if model_type in {"qwen3_5", "qwen3_5_moe"} and not (
-            is_transformers_version(">=", "5.2.0") and is_transformers_version("<=", "5.2.99")
-        ):
-            self.skipTest("Qwen3.5 hidden-state locator coverage requires Transformers >= 5.2.0 and <= 5.2.99")
         if model_type == "gemma4" and not is_transformers_version(">=", "5.5.0"):
             self.skipTest("Gemma 4 hidden-state locator coverage requires Transformers >= 5.5.0")
         if model_type == "minicpmv4_7" and not is_transformers_version(">=", "5.18.0"):
@@ -892,7 +888,7 @@ class DFlashPagedAttentionTest(unittest.TestCase):
                 output = model(**inputs, past_key_values=cache, use_cache=True)
                 outputs.append(output.last_hidden_state)
                 cache = output.past_key_values
-                cache.crop(cache.get_seq_length() - int(inputs["token_type_ids"].sum()))
+                cache.crop(-int(inputs["token_type_ids"].sum()))
         return outputs
 
     @staticmethod
