@@ -88,21 +88,22 @@ jobs:
           uv pip install "transformers>=5.21"
           pytest tests/openvino/${{ matrix.test-pattern }} -k "minicpm_ocr" --durations=0
 
-      - name: MiniCPM-OCR Quantization and Continuous Batching Validation
+      - name: MiniCPM-OCR Quantization, Continuous Batching and DFlash Validation
         if: ${{ matrix.test-pattern == '*export*' }}
         run: |
           uv pip install "transformers>=5.21"
-          pytest tests/openvino/test_quantization.py tests/openvino/test_cb_compatible.py -k "minicpm_ocr" --durations=0
+          pytest tests/openvino/test_quantization.py tests/openvino/test_cb_compatible.py tests/openvino/test_dflash.py -k "minicpm_ocr" --durations=0
 
       - name: Scoped Config Validation with NNCF develop
         run: |
           uv pip install "nncf @ git+https://github.com/openvinotoolkit/nncf.git@develop"
           pytest tests/openvino/test_quantization.py -k "scoped_config" --durations=0
 
-      # The DSpark tests use the tiny MiniCPM-V 4.7 DSpark draft. test_genai runs single-request speculative decoding
-      # with it and the tiny MiniCPM-V 4.7 target against the nightly GenAI installed above.
+      # The DSpark tests use the tiny MiniCPM-V 4.7 and MiniCPM-OCR DSpark drafts (MiniCPM-OCR needs transformers 5.21).
+      # test_genai runs single-request speculative decoding with each draft and its tiny target against the nightly
+      # GenAI installed above.
       - name: DSpark Export and GenAI Speculative Decoding Validation
         if: ${{ matrix.test-pattern == '*export*' }}
         run: |
-          uv pip install "transformers>=5.18"
+          uv pip install "transformers>=5.21"
           pytest tests/openvino/test_exporters_cli.py tests/openvino/test_dflash.py tests/openvino/test_genai.py -k dspark --durations=0

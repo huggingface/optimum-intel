@@ -785,6 +785,10 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
         logger.info("Testing %s VLM %s on device=%s", speculative_decoding_type, model_arch, OPENVINO_DEVICE)
         if is_openvino_version("<", min_openvino_version):
             self.skipTest(f"{speculative_decoding_type} VLM requires openvino-genai >= {min_openvino_version}")
+        # TODO: enable once openvinotoolkit/openvino.genai#4848 is merged. Until then GenAI expects the Markov bias over
+        # the width of the draft logits, which a draft with a pruned vocabulary narrows to its own vocabulary.
+        if model_arch == "minicpm_ocr_dspark":
+            self.skipTest("DSpark drafts with a pruned vocabulary require openvinotoolkit/openvino.genai#4848")
 
         draft_model_name, target_model_name = model_pair
         draft_model_id, target_model_id = MODEL_NAMES[draft_model_name], MODEL_NAMES[target_model_name]
@@ -812,8 +816,13 @@ class LLMPipelineWithSpeculativeDecodingTestCase(unittest.TestCase):
         )
 
         rng = np.random.default_rng(42)
-        inputs = {"videos": [ov.Tensor(rng.integers(0, 256, size=(5, 32, 32, 3), dtype=np.uint8))]}
-        question = "Why is this video funny?"
+        if target_model_name == "minicpm_ocr":
+            # GenAI has no video preprocessing for MiniCPM-OCR.
+            inputs = {"images": [ov.Tensor(rng.integers(0, 256, size=(32, 32, 3), dtype=np.uint8))]}
+            question = "What is written in this image?"
+        else:
+            inputs = {"videos": [ov.Tensor(rng.integers(0, 256, size=(5, 32, 32, 3), dtype=np.uint8))]}
+            question = "Why is this video funny?"
 
         # Before 2026.5, MTP verifier speculative decoding on linear-attention models
         # requires prefix caching to be disabled.

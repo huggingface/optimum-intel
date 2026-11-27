@@ -101,6 +101,8 @@ ARCH_TO_CB_COMPATIBLE_SUBMODELS = {
 _DFLASH_DRAFT_SUBMODELS = {"task": "text-generation-with-past", "submodels": ("model",)}
 ARCH_TO_CB_COMPATIBLE_SUBMODELS["qwen3_dflash"] = _DFLASH_DRAFT_SUBMODELS
 ARCH_TO_CB_COMPATIBLE_SUBMODELS["qwen3_dflash2"] = _DFLASH_DRAFT_SUBMODELS
+# a DSpark draft with a pruned vocabulary, whose backbone emits its own logits
+ARCH_TO_CB_COMPATIBLE_SUBMODELS["minicpm_ocr_dspark"] = _DFLASH_DRAFT_SUBMODELS
 # DSpark drafts describe their RoPE in the rope_parameters of transformers 5, which earlier versions misread.
 if is_transformers_version(">=", "5"):
     ARCH_TO_CB_COMPATIBLE_SUBMODELS["minicpmv4_7_dspark"] = _DFLASH_DRAFT_SUBMODELS
