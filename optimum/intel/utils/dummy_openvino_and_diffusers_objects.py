@@ -147,6 +147,17 @@ class OVLTX2ImageToVideoPipeline(metaclass=DummyObject):
         requires_backends(cls, ["openvino", "diffusers"])
 
 
+class OVLTX2ConditionPipeline(metaclass=DummyObject):
+    _backends = ["openvino", "diffusers"]
+
+    def __init__(self, *args, **kwargs):
+        requires_backends(self, ["openvino", "diffusers"])
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        requires_backends(cls, ["openvino", "diffusers"])
+
+
 class OVDiffusionPipeline(metaclass=DummyObject):
     _backends = ["openvino", "diffusers"]
 
@@ -313,6 +324,28 @@ class OVSanaPipeline(metaclass=DummyObject):
 
 
 class OVQwenImagePipeline(metaclass=DummyObject):
+    _backends = ["openvino", "diffusers"]
+
+    def __init__(self, *args, **kwargs):
+        requires_backends(self, ["openvino", "diffusers"])
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        requires_backends(cls, ["openvino", "diffusers"])
+
+
+class OVQwenImage21Pipeline(metaclass=DummyObject):
+    _backends = ["openvino", "diffusers"]
+
+    def __init__(self, *args, **kwargs):
+        requires_backends(self, ["openvino", "diffusers"])
+
+    @classmethod
+    def from_pretrained(cls, *args, **kwargs):
+        requires_backends(cls, ["openvino", "diffusers"])
+
+
+class OVQwenImage21Img2ImgPipeline(metaclass=DummyObject):
     _backends = ["openvino", "diffusers"]
 
     def __init__(self, *args, **kwargs):

@@ -29,7 +29,7 @@ except Exception as error:
 INSTALL_REQUIRE = [
     "torch>=2.1",
     "optimum~=2.3.0",
-    "transformers>=4.51,<5.11",
+    "transformers>=4.51,<5.16",
     "setuptools",
     "huggingface-hub>=0.23.2,<2.0",
     "nncf@git+https://github.com/openvinotoolkit/nncf.git@release_v340",
@@ -75,13 +75,13 @@ TESTS_REQUIRE = [
 QUALITY_REQUIRE = ["black~=23.1", "ruff==0.4.4"]
 
 EXTRAS_REQUIRE = {
-    "nncf": ["nncf@git+https://github.com/openvinotoolkit/nncf.git@release_v340"],
+    "nncf": ["nncf@git+https://github.com/openvinotoolkit/nncf.git@release_v350"],
     "openvino": [
-        "nncf@git+https://github.com/openvinotoolkit/nncf.git@release_v340",
+        "nncf@git+https://github.com/openvinotoolkit/nncf.git@release_v350",
         "openvino>=2026.0",
         "openvino-tokenizers>=2026.0",
     ],
-    "diffusers": ["diffusers>=0.32,<0.41"],
+    "diffusers": ["diffusers>=0.32,<0.42"],
     "quality": QUALITY_REQUIRE,
     "tests": TESTS_REQUIRE,
 }
@@ -101,9 +101,10 @@ setup(
         "Intended Audience :: Education",
         "Intended Audience :: Science/Research",
         "Operating System :: OS Independent",
-        "Programming Language :: Python :: 3.9",
-        "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
+        "Programming Language :: Python :: 3.14",
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
     ],
     keywords="transformers, quantization, pruning, knowledge distillation, optimization, training",
@@ -114,6 +115,7 @@ setup(
     packages=find_namespace_packages(include=["optimum*"]),
     install_requires=INSTALL_REQUIRE,
     extras_require=EXTRAS_REQUIRE,
+    python_requires=">=3.11",
     include_package_data=True,
     zip_safe=False,
     entry_points={"console_scripts": ["optimum-cli=optimum.commands.optimum_cli:main"]},
