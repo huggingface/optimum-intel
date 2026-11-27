@@ -3015,6 +3015,38 @@ class IBertModelPatcher(ModelPatcher):
             self._model(torch.ones([1, 1], dtype=torch.long))
 
 
+class LasrCtcModelPatcher(ModelPatcher):
+    """Exports the even-kernel depthwise conv with explicit padding instead of `same_upper`, which the GPU plugin miscomputes."""
+
+    def __enter__(self):
+        super().__enter__()
+        self._patched_convs = []
+        for module in self._model.modules():
+            if type(module).__name__ != "LasrEncoderConvolutionModule":
+                continue
+            conv = module.depthwise_conv
+            if conv.padding != "same":
+                continue
+            total = conv.dilation[0] * (conv.kernel_size[0] - 1)
+            pads = (total // 2, total - total // 2)
+
+            def padded_forward(hidden_states, conv=conv, pads=pads):
+                hidden_states = torch.nn.functional.pad(hidden_states, pads)
+                return torch.nn.functional.conv1d(
+                    hidden_states, conv.weight, conv.bias, conv.stride, 0, conv.dilation, conv.groups
+                )
+
+            conv._orig_forward = conv.forward
+            conv.forward = padded_forward
+            self._patched_convs.append(conv)
+
+    def __exit__(self, exc_type, exc_value, traceback):
+        super().__exit__(exc_type, exc_value, traceback)
+        for conv in self._patched_convs:
+            conv.forward = conv._orig_forward
+            del conv._orig_forward
+
+
 class InternVLChatImageEmbeddingModelPatcher(ModelPatcher):
     def __init__(
         self,

@@ -177,6 +177,7 @@ from optimum.exporters.openvino.model_patcher import (
     InternVLChatImageEmbeddingModelPatcher,
     JaisModelPatcher,
     KokoroModelPatcher,
+    LasrCtcModelPatcher,
     Lfm2ModelPatcher,
     Lfm2MoeModelPatcher,
     Lfm3ModelPatcher,
@@ -290,6 +291,7 @@ from optimum.utils.input_generators import (
     ASTDummyAudioInputGenerator,
     BartDummyTextInputGenerator,
     BloomDummyPastKeyValuesGenerator,
+    DummyAudioInputGenerator,
     DummyDecoderTextInputGenerator,
     DummyInputGenerator,
     DummyPastKeyValuesGenerator,
@@ -392,6 +394,11 @@ def init_model_configs():
     TasksManager._CUSTOM_CLASSES[("pt", "phi4_multimodal", "automatic-speech-recognition")] = (
         "transformers",
         "AutoModelForCausalLM",
+    )
+
+    TasksManager._CUSTOM_CLASSES[("pt", "lasr_ctc", "automatic-speech-recognition")] = (
+        "transformers",
+        "AutoModelForCTC",
     )
 
     # since transformers v4.52, model can be loaded using default AutoModelForImageTextToText
@@ -7455,6 +7462,52 @@ class Wav2Vec2OpenVINOConfig(HubertOpenVINOConfig):
 )
 class Wav2Vec2ConformerOpenVINOConfig(HubertOpenVINOConfig):
     pass
+
+
+class DummyLasrCtcAudioInputGenerator(DummyAudioInputGenerator):
+    SUPPORTED_INPUT_NAMES = ("input_features", "attention_mask")
+
+    def generate(self, input_name: str, framework: str = "pt", int_dtype: str = "int64", float_dtype: str = "fp32"):
+        if input_name == "attention_mask":
+            return self.random_mask_tensor(
+                shape=[self.batch_size, self.nb_max_frames],
+                framework=framework,
+                dtype=int_dtype,
+            )
+        # MedASR expects input_features shape [batch, time, features] unlike most audio models
+        return self.random_float_tensor(
+            shape=[self.batch_size, self.nb_max_frames, self.feature_size],
+            min_value=-1,
+            max_value=1,
+            framework=framework,
+            dtype=float_dtype,
+        )
+
+
+@register_in_tasks_manager("lasr_ctc", *["feature-extraction", "automatic-speech-recognition", "audio-classification"])
+class LasrCtcOpenVINOConfig(OpenVINOConfig):
+    NORMALIZED_CONFIG_CLASS = NormalizedConfig.with_args(
+        hidden_size="encoder_config.hidden_size",
+        num_attention_heads="encoder_config.num_attention_heads",
+        num_hidden_layers="encoder_config.num_hidden_layers",
+        allow_new=True,
+        feature_size="encoder_config.num_mel_bins",
+    )
+    DUMMY_INPUT_GENERATOR_CLASSES = (DummyLasrCtcAudioInputGenerator,)
+
+    @property
+    def inputs(self):
+        return {
+            "input_features": {0: "batch_size", 1: "sequence_length", 2: "feature_size"},
+            "attention_mask": {0: "batch_size", 1: "sequence_length"},
+        }
+
+    @property
+    def outputs(self):
+        return {"logits": {0: "batch_size", 1: "sequence_length"}}
+
+    def patch_model_for_export(self, model: PreTrainedModel, model_kwargs: Optional[Dict[str, Any]] = None):
+        return LasrCtcModelPatcher(self, model, model_kwargs=model_kwargs)
 
 
 @register_in_tasks_manager("sew", *["feature-extraction", "automatic-speech-recognition", "audio-classification"])

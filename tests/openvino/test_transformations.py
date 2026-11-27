@@ -17,7 +17,9 @@ import subprocess
 import sys
 import textwrap
 import unittest
+from pathlib import Path
 
+import openvino as ov
 from parameterized import parameterized
 from utils_tests import (
     ARCH_TO_MODEL_CLASS,
@@ -27,6 +29,8 @@ from utils_tests import (
     get_supported_model_for_library,
 )
 
+from optimum.exporters.openvino import main_export
+from optimum.intel.openvino.utils import TemporaryDirectory
 from optimum.intel.utils.import_utils import (
     is_diffusers_version,
     is_qwen_tts_available,
@@ -835,6 +839,24 @@ def check_failed_transformations(log: str, words: list[str]) -> dict:
 
 
 class OVTransformationTest(unittest.TestCase):
+    @unittest.skipUnless(is_transformers_version(">=", "5.0"), "LASR-CTC requires transformers>=5.0")
+    def test_lasr_ctc_dynamic_axes_survive_export_transforms(self):
+        with TemporaryDirectory() as output_dir:
+            main_export(
+                model_name_or_path=MODEL_NAMES["lasr_ctc"],
+                output=output_dir,
+                task="automatic-speech-recognition",
+            )
+            model = ov.Core().read_model(str(Path(output_dir) / "openvino_model.xml"))
+            inputs = {name: port for port in model.inputs for name in port.get_names()}
+            for input_name in ("input_features", "attention_mask"):
+                self.assertTrue(inputs[input_name].get_partial_shape()[1].is_dynamic, input_name)
+            # GPU plugin miscomputes auto_pad="same_upper" for MedASR's even-kernel depthwise conv
+            group_convs = [op for op in model.get_ordered_ops() if op.get_type_name() == "GroupConvolution"]
+            self.assertTrue(group_convs)
+            for op in group_convs:
+                self.assertEqual(op.get_attributes()["auto_pad"], "explicit", op.get_friendly_name())
+
     @parameterized.expand(list(ARCH_TO_EXPECTED_TRANSFORMATIONS.keys()), skip_on_empty=True)
     def test_transformations_applied(self, model_arch):
         expected_transforms = _get_flat_transforms(model_arch)
